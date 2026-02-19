@@ -137,7 +137,7 @@ The Flutter-based mobile app provides:
 
 ## 🔬 Research
 
-This project is part of a Master's thesis on efficient deep learning for agricultural applications. Key research contributions:
+This project is part of a Bachelor's thesis on efficient deep learning for agricultural applications. Key research contributions:
 
 1. Multi-crop disease detection with unified architecture
 2. Aggressive quantization with minimal accuracy loss
@@ -224,7 +224,6 @@ Dhaka, Bangladesh
 
 **Project Type**: Undergraduate Thesis  
 **Academic Year**: 2025-2026  
-**Submission Date**: February 2026
 
 ## 🙏 Acknowledgments
 
