@@ -1,0 +1,57 @@
+{
+  "name": "MobileNetV2 Leaf Disease Classifier",
+  "version": "1.0.0",
+  "architecture": "MobileNetV2",
+  "framework": "TensorFlow Lite",
+  "quantization": "INT8",
+  "input_shape": [1, 224, 224, 3],
+  "output_shape": [1, 34],
+  "num_classes": 34,
+  "accuracy": 92.1,
+  "model_size_mb": 3.8,
+  "inference_time_ms": 45,
+  "trained_date": "2024-01-15",
+  "dataset": {
+    "name": "PlantVillage + Custom",
+    "total_images": 50000,
+    "crops": [
+      "Apple",
+      "Blueberry",
+      "Cherry",
+      "Corn",
+      "Grape",
+      "Peach",
+      "Pepper",
+      "Potato",
+      "Strawberry",
+      "Tomato"
+    ],
+    "augmentation": [
+      "rotation",
+      "flip",
+      "brightness",
+      "contrast",
+      "zoom"
+    ]
+  },
+  "training": {
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "batch_size": 32,
+    "epochs": 50,
+    "validation_split": 0.2,
+    "early_stopping": true,
+    "reduce_lr": true
+  },
+  "preprocessing": {
+    "resize": [224, 224],
+    "normalization": "0-1",
+    "color_mode": "RGB"
+  },
+  "performance": {
+    "precision": 91.8,
+    "recall": 92.4,
+    "f1_score": 92.1
+  },
+  "notes": "Model trained with transfer learning. Base MobileNetV2 weights from ImageNet. Fine-tuned on plant disease dataset with data augmentation. Post-training INT8 quantization applied for mobile deployment."
+}

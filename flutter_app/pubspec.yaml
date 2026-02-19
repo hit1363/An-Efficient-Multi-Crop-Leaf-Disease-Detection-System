@@ -1,0 +1,52 @@
+name: leaf_disease_detector
+description: A mobile app for multi-crop leaf disease detection using deep learning
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ML & TensorFlow Lite
+  tflite_flutter: ^0.10.3
+  tflite_flutter_helper: ^0.3.1
+  
+  # Image Processing
+  image: ^4.0.17
+  camera: ^0.10.5
+  image_picker: ^1.0.4
+  
+  # UI Components
+  cupertino_icons: ^1.0.6
+  flutter_svg: ^2.0.7
+  
+  # State Management
+  provider: ^6.0.5
+  
+  # Database & Storage
+  sqflite: ^2.3.0
+  path_provider: ^2.1.0
+  shared_preferences: ^2.2.0
+  
+  # Charts & Visualization
+  fl_chart: ^0.63.0
+  
+  # Utilities
+  intl: ^0.18.1
+  path: ^1.8.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.3
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/models/
+    - assets/labels/
+    - assets/images/
+    - assets/database/

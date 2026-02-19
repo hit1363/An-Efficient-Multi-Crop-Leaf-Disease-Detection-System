@@ -1,0 +1,176 @@
+[
+  {
+    "disease_id": "tomato_early_blight",
+    "cultural_control": [
+      "Remove and destroy infected plant debris",
+      "Rotate crops with non-host plants for 2-3 years",
+      "Space plants properly for good air circulation",
+      "Avoid overhead irrigation; use drip irrigation",
+      "Apply mulch to prevent soil splash",
+      "Remove lower leaves that touch the ground",
+      "Maintain proper plant nutrition especially nitrogen"
+    ],
+    "chemical_control": [
+      "Apply chlorothalonil fungicide every 7-10 days",
+      "Use mancozeb at first sign of disease",
+      "Alternate fungicides to prevent resistance",
+      "Apply copper-based fungicides (organic option)",
+      "Spray azoxystrobin for systemic protection",
+      "Begin applications before disease appears"
+    ],
+    "biological_control": [
+      "Apply Bacillus subtilis biofungicide",
+      "Use Trichoderma harzianum as soil amendment",
+      "Spray neem oil as preventive measure",
+      "Apply compost tea to boost plant immunity"
+    ],
+    "prevention_tips": [
+      "Use disease-resistant varieties",
+      "Start with certified disease-free seeds",
+      "Sanitize tools between plants",
+      "Stake plants to improve air flow",
+      "Water in morning to allow leaves to dry",
+      "Monitor plants weekly for early detection"
+    ]
+  },
+  {
+    "disease_id": "potato_late_blight",
+    "cultural_control": [
+      "Plant certified disease-free seed potatoes",
+      "Remove volunteer potato plants",
+      "Destroy cull piles away from fields",
+      "Hill potatoes to protect tubers",
+      "Harvest in dry weather when vines are dead",
+      "Cure tubers properly before storage"
+    ],
+    "chemical_control": [
+      "Apply chlorothalonil every 5-7 days",
+      "Use mefenoxam for systemic control",
+      "Spray cymoxanil for curative action",
+      "Apply copper fungicides (organic)",
+      "Start applications before disease appears",
+      "Increase application frequency in wet weather"
+    ],
+    "biological_control": [
+      "Use Bacillus subtilis strain QST 713",
+      "Apply phosphorous acid as plant activator"
+    ],
+    "prevention_tips": [
+      "Use resistant varieties like Defender or Sarpo Mira",
+      "Ensure good drainage in fields",
+      "Monitor local disease forecasts",
+      "Remove infected plants immediately",
+      "Separate new and old plantings",
+      "Inspect tubers before storage"
+    ]
+  },
+  {
+    "disease_id": "corn_northern_leaf_blight",
+    "cultural_control": [
+      "Rotate with non-host crops for 2 years",
+      "Till under crop residue after harvest",
+      "Plant early to avoid late-season infection",
+      "Maintain balanced soil fertility",
+      "Avoid excessive nitrogen application"
+    ],
+    "chemical_control": [
+      "Apply propiconazole at first symptoms",
+      "Use azoxystrobin for preventive control",
+      "Spray pyraclostrobin for systemic action",
+      "Make 1-2 applications if disease is severe",
+      "Apply before tasseling for best results"
+    ],
+    "biological_control": [
+      "Use resistant hybrids as primary control",
+      "Apply Bacillus-based biofungicides"
+    ],
+    "prevention_tips": [
+      "Plant resistant hybrids",
+      "Scout fields regularly during growing season",
+      "Start treatment when 50% of plants show lesions",
+      "Avoid late planting dates",
+      "Manage volunteer corn plants"
+    ]
+  },
+  {
+    "disease_id": "apple_scab",
+    "cultural_control": [
+      "Rake and destroy fallen leaves in autumn",
+      "Prune trees to improve air circulation",
+      "Remove wild apple and crabapple trees nearby",
+      "Mow fallen leaves to speed decomposition",
+      "Avoid overhead irrigation"
+    ],
+    "chemical_control": [
+      "Apply captan at green tip stage",
+      "Use myclobutanil during infection periods",
+      "Spray sulfur (organic option)",
+      "Apply lime sulfur during dormancy",
+      "Continue sprays through petal fall",
+      "Resume if wet weather occurs in summer"
+    ],
+    "biological_control": [
+      "Apply Bacillus subtilis",
+      "Use potassium bicarbonate sprays"
+    ],
+    "prevention_tips": [
+      "Plant scab-resistant varieties (Liberty, Enterprise, Freedom)",
+      "Space trees adequately (15-20 feet)",
+      "Begin fungicide program at bud break",
+      "Monitor infection periods using weather data",
+      "Maintain tree health through proper care"
+    ]
+  },
+  {
+    "disease_id": "grape_black_rot",
+    "cultural_control": [
+      "Remove mummified berries from vines and ground",
+      "Prune out infected canes during dormancy",
+      "Improve air circulation through canopy management",
+      "Remove wild grapes within 300 feet",
+      "Keep vineyard floor clean of debris"
+    ],
+    "chemical_control": [
+      "Apply mancozeb from bloom to harvest",
+      "Use myclobutanil for systemic control",
+      "Spray captan every 10-14 days",
+      "Apply copper fungicide (organic)",
+      "Critical periods: bloom, post-bloom, pre-close"
+    ],
+    "biological_control": [
+      "Use Bacillus amyloliquefaciens",
+      "Apply potassium bicarbonate"
+    ],
+    "prevention_tips": [
+      "Plant resistant varieties where available",
+      "Begin sprays at bud break",
+      "Maintain spray schedule through fruit set",
+      "Train vines on trellis for air flow",
+      "Scout vineyards weekly during growing season"
+    ]
+  },
+  {
+    "disease_id": "healthy",
+    "cultural_control": [
+      "Maintain current good cultural practices",
+      "Continue proper spacing and air circulation",
+      "Keep plants well-watered but not overwatered",
+      "Monitor for early signs of stress or disease"
+    ],
+    "chemical_control": [
+      "No chemical control needed for healthy plants",
+      "Consider preventive fungicides if disease pressure is high in area"
+    ],
+    "biological_control": [
+      "Use compost to improve soil health",
+      "Encourage beneficial insects"
+    ],
+    "prevention_tips": [
+      "Continue regular monitoring",
+      "Maintain plant health through proper fertilization",
+      "Practice good sanitation",
+      "Rotate crops each season",
+      "Keep detailed records of plant health"
+    ]
+  }
+]

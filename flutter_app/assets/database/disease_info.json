@@ -1,0 +1,113 @@
+[
+  {
+    "id": "tomato_early_blight",
+    "crop": "Tomato",
+    "name": "Early Blight",
+    "scientific_name": "Alternaria solani",
+    "severity": "moderate",
+    "description": "Early blight is a common fungal disease affecting tomatoes. It appears as dark brown spots with concentric rings on older leaves, eventually causing leaf yellowing and drop.",
+    "symptoms": [
+      "Dark brown spots with concentric rings (target-like)",
+      "Yellowing of older leaves",
+      "Leaf drop starting from bottom of plant",
+      "Stem lesions near soil line",
+      "Fruit rot near calyx"
+    ],
+    "favorable_conditions": [
+      "Warm temperatures (24-29°C)",
+      "High humidity",
+      "Long periods of leaf wetness",
+      "Poor air circulation",
+      "Nitrogen deficiency"
+    ],
+    "spread": "Spreads by wind-blown spores, water splash, and contaminated tools"
+  },
+  {
+    "id": "potato_late_blight",
+    "crop": "Potato",
+    "name": "Late Blight",
+    "scientific_name": "Phytophthora infestans",
+    "severity": "severe",
+    "description": "Late blight is a devastating disease that can destroy entire potato crops within days. It's the same disease that caused the Irish Potato Famine.",
+    "symptoms": [
+      "Water-soaked spots on leaves",
+      "White fungal growth on leaf undersides",
+      "Rapid browning and death of foliage",
+      "Dark brown lesions on stems",
+      "Brown rot of tubers"
+    ],
+    "favorable_conditions": [
+      "Cool temperatures (15-20°C)",
+      "High humidity (>90%)",
+      "Frequent rain or heavy dew",
+      "Cloudy weather"
+    ],
+    "spread": "Spreads rapidly by airborne spores, especially in wet weather"
+  },
+  {
+    "id": "corn_northern_leaf_blight",
+    "crop": "Corn",
+    "name": "Northern Leaf Blight",
+    "scientific_name": "Exserohilum turcicum",
+    "severity": "moderate",
+    "description": "Northern leaf blight is a fungal disease causing long, cigar-shaped lesions on corn leaves, reducing photosynthetic area and yield.",
+    "symptoms": [
+      "Long, elliptical gray-green lesions",
+      "Lesions become tan and papery",
+      "Start on lower leaves, progress upward",
+      "Can cover entire leaf blade",
+      "Reduced yield due to premature leaf death"
+    ],
+    "favorable_conditions": [
+      "Moderate temperatures (18-27°C)",
+      "High humidity",
+      "Extended dew periods",
+      "Susceptible corn varieties"
+    ],
+    "spread": "Wind-blown spores from infected crop debris"
+  },
+  {
+    "id": "apple_scab",
+    "crop": "Apple",
+    "name": "Apple Scab",
+    "scientific_name": "Venturia inaequalis",
+    "severity": "moderate",
+    "description": "Apple scab is the most serious disease of apple trees, causing dark, scabby lesions on leaves and fruit.",
+    "symptoms": [
+      "Olive-green to brown spots on leaves",
+      "Velvety texture on lesions",
+      "Scabby lesions on fruit",
+      "Premature leaf drop",
+      "Deformed fruit"
+    ],
+    "favorable_conditions": [
+      "Cool, wet spring weather",
+      "Temperatures 15-24°C",
+      "Frequent rain during bloom",
+      "Poor air circulation"
+    ],
+    "spread": "Spores released from fallen leaves, spread by rain splash"
+  },
+  {
+    "id": "grape_black_rot",
+    "crop": "Grape",
+    "name": "Black Rot",
+    "scientific_name": "Guignardia bidwellii",
+    "severity": "severe",
+    "description": "Black rot is a serious fungal disease of grapes causing complete fruit loss if not controlled.",
+    "symptoms": [
+      "Circular tan spots with dark border on leaves",
+      "Dark lesions on shoots and tendrils",
+      "Brown spots on young berries",
+      "Berries shrivel and turn into mummies",
+      "Complete cluster infection possible"
+    ],
+    "favorable_conditions": [
+      "Warm temperatures (25-30°C)",
+      "High humidity",
+      "Frequent rainfall",
+      "Poor sanitation"
+    ],
+    "spread": "Rain splash from mummified berries and infected plant debris"
+  }
+]
