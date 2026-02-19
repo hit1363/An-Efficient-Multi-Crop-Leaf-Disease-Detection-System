@@ -125,22 +125,6 @@ The project uses a curated dataset of leaf images across multiple crops:
 
 See `dataset/dataset_description.md` for detailed information.
 
-## 🧪 Experiments & Results
-
-### Model Performance
-
-| Model | Accuracy | Size | Inference Time | Memory Usage |
-|-------|----------|------|----------------|--------------|
-| MobileNetV2 | 92.5% | 3.8 MB | 145 ms | 85 MB |
-| EfficientNet-Lite0 | 93.8% | 4.2 MB | 178 ms | 92 MB |
-
-### Quantization Results
-
-- **Size Reduction**: ~75% (15MB → 4MB)
-- **Accuracy Drop**: <1%
-- **Speed Improvement**: 2.5x faster inference
-
-See `results/performance_analysis.md` for detailed metrics.
 
 ## 📱 Mobile Application
 
@@ -176,11 +160,7 @@ Master's Student, Computer Science
 - TensorFlow Team
 - Flutter Community
 
-## 📧 Contact
 
-For questions or collaborations:
-- Email: your.email@university.edu
-- GitHub: [@yourusername](https://github.com/yourusername)
 
 ## 📚 Citations
 
