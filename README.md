@@ -148,11 +148,83 @@ This project is part of a Master's thesis on efficient deep learning for agricul
 
 [MIT License](LICENSE)
 
-## 👥 Authors
+## 👥 Team
 
-**Your Name**  
-Master's Student, Computer Science  
-[Your University]
+### 🎓 Research Team
+
+This thesis project is submitted in partial fulfillment of the requirements for the **Bachelor of Science** degree in **Computer Science & Engineering** at Uttara University.
+
+#### Development Team
+
+<table>
+<tr>
+<td align="center" width="33%">
+<img src="https://via.placeholder.com/150/0066cc/ffffff?text=HIT" width="100" style="border-radius: 50%;" alt="Md Hasibul Islam Tamim"/>
+<br />
+<b>Md Hasibul Islam Tamim</b>
+<br />
+<sub>Student ID: 2231081023</sub>
+<br />
+<sub>Batch 59, Section A (Day)</sub>
+<br />
+<a href="mailto:2231081023@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801320838651">📱 +880 1320838651</a>
+</td>
+<td align="center" width="33%">
+<img src="https://via.placeholder.com/150/00cc66/ffffff?text=SR" width="100" style="border-radius: 50%;" alt="Saidur Rahman"/>
+<br />
+<b>Saidur Rahman</b>
+<br />
+<sub>Student ID: 2231081021</sub>
+<br />
+<sub>Batch 59, Section A (Day)</sub>
+<br />
+<a href="mailto:2231081021@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801848342886">📱 +880 1848342886</a>
+</td>
+<td align="center" width="33%">
+<img src="https://via.placeholder.com/150/cc6600/ffffff?text=MM" width="100" style="border-radius: 50%;" alt="Md. Musha Mia"/>
+<br />
+<b>Md. Musha Mia</b>
+<br />
+<sub>Student ID: 2231081009</sub>
+<br />
+<sub>Batch 59, Section A (Day)</sub>
+<br />
+<a href="mailto:2231081009@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801922759369">📱 +880 1922759369</a>
+</td>
+</tr>
+</table>
+
+#### Academic Supervision
+
+<table>
+<tr>
+<td align="center">
+<img src="https://via.placeholder.com/120/003366/ffffff?text=SAC" width="120" style="border-radius: 50%;" alt="Md. Shafiul Alam Chowdhury"/>
+<br />
+<b>Md. Shafiul Alam Chowdhury</b>
+<br />
+<sub>Associate Professor</sub>
+<br />
+<sub>Department of Computer Science & Engineering</sub>
+<br />
+<sub>Uttara University</sub>
+<br />
+<i>Thesis Supervisor</i>
+</td>
+</tr>
+</table>
+
+---
+
+### 🏛️ Institution
+
+**Uttara University**  
+Department of Computer Science & Engineering  
+Dhaka, Bangladesh
+
+**Project Type**: Undergraduate Thesis  
+**Academic Year**: 2025-2026  
+**Submission Date**: February 2026
 
 ## 🙏 Acknowledgments
 
@@ -167,11 +239,13 @@ Master's Student, Computer Science
 If you use this work, please cite:
 
 ```bibtex
-@mastersthesis{yourname2026multicrop,
+@bachelorsthesis{name2026multicrop,
   title={An Efficient Multi-Crop Leaf Disease Detection System for Mobile Deployment},
-  author={Your Name},
+  author={Md Hasibul Islam Tamim,
+Saidur Rahman, &
+Md. Musha Mia },
   year={2026},
-  school={Your University}
+  school={Uttara University}
 }
 ```
 
