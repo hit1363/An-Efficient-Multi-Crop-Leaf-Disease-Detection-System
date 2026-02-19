@@ -167,7 +167,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <br />
 <sub>Batch 59, Section A (Day)</sub>
 <br />
-<a href="mailto:2231081023@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801320838651">📱 +880 1320838651</a>
+<a href="mailto:2231081023@uttarauniversity.edu">📧 Email</a> • 
 </td>
 <td align="center" width="33%">
 <img src="https://via.placeholder.com/150/00cc66/ffffff?text=SR" width="100" style="border-radius: 50%;" alt="Saidur Rahman"/>
@@ -178,7 +178,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <br />
 <sub>Batch 59, Section A (Day)</sub>
 <br />
-<a href="mailto:2231081021@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801848342886">📱 +880 1848342886</a>
+<a href="mailto:2231081021@uttarauniversity.edu">📧 Email</a> • 
 </td>
 <td align="center" width="33%">
 <img src="https://via.placeholder.com/150/cc6600/ffffff?text=MM" width="100" style="border-radius: 50%;" alt="Md. Musha Mia"/>
@@ -189,7 +189,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <br />
 <sub>Batch 59, Section A (Day)</sub>
 <br />
-<a href="mailto:2231081009@uttarauniversity.edu">📧 Email</a> • <a href="tel:+8801922759369">📱 +880 1922759369</a>
+<a href="mailto:2231081009@uttarauniversity.edu">📧 Email</a> • 
 </td>
 </tr>
 </table>
@@ -240,9 +240,7 @@ If you use this work, please cite:
 ```bibtex
 @bachelorsthesis{name2026multicrop,
   title={An Efficient Multi-Crop Leaf Disease Detection System for Mobile Deployment},
-  author={Md Hasibul Islam Tamim,
-Saidur Rahman, &
-Md. Musha Mia },
+  author={Md Hasibul Islam Tamim, Saidur Rahman, & Md. Musha Mia },
   year={2026},
   school={Uttara University}
 }
