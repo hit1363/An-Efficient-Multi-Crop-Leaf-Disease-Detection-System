@@ -2,19 +2,30 @@
 
 An efficient deep learning-based system for detecting diseases in multiple crop types, optimized for mobile deployment.
 
-## 🎯 Project Overview
+## 📌 Abstract
 
-This project implements a mobile-ready plant disease detection system using transfer learning with MobileNetV2 and EfficientNet-Lite0 architectures. The system is optimized for real-time inference on mobile devices through TensorFlow Lite quantization.
+Early detection of crop diseases is critical for preventing yield loss in agricultural systems. However, most state-of-the-art deep learning models are computationally heavy and unsuitable for low-end smartphones commonly used in developing regions.
 
-### Key Features
+This project proposes a lightweight, offline-capable multi-crop disease detection system using transfer learning with **MobileNetV2** and **EfficientNet-Lite0**, optimized through post-training quantization for deployment on resource-constrained mobile devices.
 
-- **Multi-Crop Support**: Detects diseases across multiple crop types (Tomato, Potato, Corn, Rice, Wheat, etc.)
-- **Mobile-Optimized**: Lightweight models (<10MB) with inference time <200ms
-- **High Accuracy**: >90% classification accuracy on test datasets
-- **Offline Capability**: On-device inference without internet connectivity
-- **Cross-Platform**: Flutter-based mobile application for Android/iOS
+### Key Achievements
 
-## 🏗️ Project Structure
+- >90% classification accuracy  
+- <200ms mobile inference time  
+- <10MB quantized model size  
+- Fully offline on-device prediction  
+
+---
+
+# 🎯 Research Objectives
+
+1. Develop a unified deep learning model for multi-crop disease detection.
+2. Compare MobileNetV2 and EfficientNet-Lite0 under identical experimental settings.
+3. Apply model compression and quantization techniques.
+4. Evaluate real-world mobile inference performance.
+5. Deploy the optimized model using Flutter and TensorFlow Lite.
+
+## 🗂️ Project Structure
 
 ```
 multi-crop-leaf-disease-detection/
@@ -148,18 +159,15 @@ This project is part of a Bachelor's thesis on efficient deep learning for agric
 
 [MIT License](LICENSE)
 
-## 👥 Team
-
-### 🎓 Research Team
+## 🎓 Research Team
 
 This thesis project is submitted in partial fulfillment of the requirements for the **Bachelor of Science** degree in **Computer Science & Engineering** at Uttara University.
 
-#### Development Team
 
 <table>
 <tr>
 <td align="center" width="33%">
-<img src="docs/team/hasibul.jpg" width="100" style="border-radius: 50%;" alt="Md Hasibul Islam Tamim"/>
+<img src="./docs/team/tamim.jpg" width="100" style="border-radius: 50%;" alt="Md Hasibul Islam Tamim"/>
 <br />
 <b>Md Hasibul Islam Tamim</b>
 <br />
@@ -170,7 +178,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <a href="mailto:2231081023@uttarauniversity.edu.bd">📧 Email</a>
 </td>
 <td align="center" width="33%">
-<img src="docs/team/saidur.jpg" width="100" style="border-radius: 50%;" alt="Saidur Rahman"/>
+<img src="./docs/team/saidur.jpg" width="100" style="border-radius: 50%;" alt="Saidur Rahman"/>
 <br />
 <b>Saidur Rahman</b>
 <br />
@@ -181,7 +189,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <a href="mailto:2231081021@uttarauniversity.edu.bd">📧 Email</a>
 </td>
 <td align="center" width="33%">
-<img src="docs/team/musha.jpg" width="100" style="border-radius: 50%;" alt="Md. Musha Mia"/>
+<img src="./docs/team/musha.jpg" width="100" style="border-radius: 50%;" alt="Md. Musha Mia"/>
 <br />
 <b>Md. Musha Mia</b>
 <br />
@@ -199,7 +207,7 @@ This thesis project is submitted in partial fulfillment of the requirements for 
 <table>
 <tr>
 <td align="center">
-<img src="https://via.placeholder.com/120/003366/ffffff?text=SAC" width="120" style="border-radius: 50%;" alt="Md. Shafiul Alam Chowdhury"/>
+<img src="" width="120" style="border-radius: 50%;" alt="Md. Shafiul Alam Chowdhury"/>
 <br />
 <b>Md. Shafiul Alam Chowdhury</b>
 <br />
