@@ -240,9 +240,7 @@ If you use this work, please cite:
 ```bibtex
 @bachelorsthesis{name2026multicrop,
   title={An Efficient Multi-Crop Leaf Disease Detection System for Mobile Deployment},
-  author={Md Hasibul Islam Tamim,
-Saidur Rahman, &
-Md. Musha Mia },
+  author={Md Hasibul Islam Tamim, Saidur Rahman, & Md. Musha Mia },
   year={2026},
   school={Uttara University}
 }
