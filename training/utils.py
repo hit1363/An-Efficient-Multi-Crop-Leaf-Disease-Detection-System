@@ -6,9 +6,7 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from pathlib import Path
-from sklearn.utils.class_weight import compute_class_weight
+import keras
 
 
 def setup_logging(config):
