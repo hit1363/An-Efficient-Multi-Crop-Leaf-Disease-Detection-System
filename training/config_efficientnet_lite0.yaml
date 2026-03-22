@@ -1,8 +1,8 @@
-# Training Configuration File
+# Training Configuration File (EfficientNet-Lite0)
 
 # Model Settings
 model:
-  architecture: "mobilenetv2"  # Options: mobilenetv2, efficientnet_lite0
+  architecture: "efficientnet_lite0"  # Options: mobilenetv2, efficientnet_lite0
   input_shape: [224, 224, 3]
   num_classes: 45
   weights: "imagenet"  # Use ImageNet pre-trained weights
@@ -37,12 +37,12 @@ training:
   initial_learning_rate: 0.001
   batch_size: 32
   validation_split: 0.15
-  
+
   # Transfer Learning Strategy
   freeze_base: true
   freeze_until_layer: 100  # Freeze first 100 layers
   unfreeze_epoch: 10  # Unfreeze after this epoch
-  
+
   # Fine-tuning Learning Rate
   fine_tune_learning_rate: 0.0001
 
@@ -66,7 +66,7 @@ lr_schedule:
 # Loss Function
 loss:
   name: "categorical_crossentropy"  # Options: categorical_crossentropy, focal_loss
-  
+
 # Class Weights (for imbalanced dataset)
 class_weights:
   enabled: true
@@ -82,7 +82,7 @@ callbacks:
     save_weights_only: false
     mode: "max"
     save_freq: "epoch"
-  
+
   # Early Stopping
   early_stopping:
     enabled: true
@@ -90,7 +90,7 @@ callbacks:
     patience: 10
     restore_best_weights: true
     mode: "min"
-  
+
   # TensorBoard
   tensorboard:
     enabled: true
@@ -99,18 +99,18 @@ callbacks:
     write_graph: true
     write_images: false
     update_freq: "epoch"
-  
+
   # CSV Logger
   csv_logger:
     enabled: true
-    filename: "../results/training_log.csv"
+    filename: "../results/training_log_efficientnet_lite0.csv"
     append: false
 
 # Model Export
 export:
   save_dir: "../models"
   formats: ["h5", "saved_model", "tflite"]
-  
+
 # Evaluation Metrics
 metrics:
   - "accuracy"
@@ -133,7 +133,7 @@ logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   save_to_file: true
-  log_file: "../logs/training.log"
+  log_file: "../logs/training_efficientnet_lite0.log"
 
 # Experiment Tracking
 mlflow:
