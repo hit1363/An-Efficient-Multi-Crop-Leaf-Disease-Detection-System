@@ -79,7 +79,7 @@ callbacks:
     enabled: true
     monitor: "val_accuracy"
     save_best_only: true
-    save_weights_only: false
+    save_weights_only: true
     mode: "max"
     save_freq: "epoch"
 
@@ -109,7 +109,7 @@ callbacks:
 # Model Export
 export:
   save_dir: "../models"
-  formats: ["h5", "saved_model", "tflite"]
+  formats: ["saved_model", "tflite"]
 
 # Evaluation Metrics
 metrics:

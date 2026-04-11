@@ -32,6 +32,11 @@ class DatabaseService {
       onUpgrade: _onUpgrade,
     );
   }
+
+  /// Backward-compatible explicit initializer.
+  Future<void> initialize() async {
+    await database;
+  }
   
   /// Create database tables
   Future<void> _onCreate(Database db, int version) async {
@@ -91,6 +96,25 @@ class DatabaseService {
     final db = await database;
     return await db.insert('scan_history', result.toMap());
   }
+
+  /// Backward-compatible save API used by existing screens.
+  Future<int> saveScanResult(ScanResult result, String imagePath) async {
+    if (result.imagePath == imagePath || imagePath.isEmpty) {
+      return insertScanResult(result);
+    }
+
+    final patchedResult = ScanResult(
+      id: result.id,
+      diseaseName: result.diseaseName,
+      confidence: result.confidence,
+      imagePath: imagePath,
+      timestamp: result.timestamp,
+      crop: result.crop,
+      topPredictions: result.topPredictions,
+    );
+
+    return insertScanResult(patchedResult);
+  }
   
   /// Get all scan results
   Future<List<ScanResult>> getAllScanResults() async {
@@ -101,6 +125,11 @@ class DatabaseService {
     );
     
     return maps.map((map) => ScanResult.fromMap(map)).toList();
+  }
+
+  /// Backward-compatible method name used by existing screens.
+  Future<List<ScanResult>> getAllScans() async {
+    return getAllScanResults();
   }
   
   /// Get recent scan results (limit)
@@ -143,6 +172,11 @@ class DatabaseService {
     final db = await database;
     return await db.delete('scan_history');
   }
+
+  /// Backward-compatible method name used by existing screens.
+  Future<int> deleteAllScans() async {
+    return clearAllHistory();
+  }
   
   /// Get scan count
   Future<int> getScanCount() async {
@@ -171,11 +205,43 @@ class DatabaseService {
       ORDER BY count DESC
       LIMIT 5
     ''');
+
+    final healthyResult = await db.rawQuery('''
+      SELECT COUNT(*) as count
+      FROM scan_history
+      WHERE LOWER(disease_name) LIKE '%healthy%'
+    ''');
+
+    final healthyScans =
+        ((healthyResult.first['count'] as num?) ?? 0).toInt();
+    final diseaseScans = totalScans - healthyScans;
+
+    final scansByCrop = <String, int>{};
+    for (final row in cropStats) {
+      final crop = row['crop']?.toString() ?? 'Unknown';
+      final count = ((row['count'] as num?) ?? 0).toInt();
+      scansByCrop[crop] = count;
+    }
+
+    final topDiseases = diseaseStats
+        .map(
+          (row) => {
+            'name': row['disease_name']?.toString() ?? 'Unknown',
+            'count': ((row['count'] as num?) ?? 0).toInt(),
+          },
+        )
+        .toList();
     
     return {
       'total_scans': totalScans,
       'by_crop': cropStats,
       'top_diseases': diseaseStats,
+      // Backward-compatible camelCase keys for existing UI.
+      'totalScans': totalScans,
+      'diseaseScans': diseaseScans,
+      'healthyScans': healthyScans,
+      'topDiseases': topDiseases,
+      'scansByCrop': scansByCrop,
     };
   }
   

@@ -1,6 +1,9 @@
 /// Scan Result Model
 /// Represents the result of a disease detection scan
 
+import 'disease.dart';
+import '../utils/label_mapper.dart';
+
 class ScanResult {
   final int? id;
   final String diseaseName;
@@ -44,7 +47,7 @@ class ScanResult {
     return ScanResult(
       id: map['id'] as int?,
       diseaseName: map['disease_name'] as String,
-      confidence: map['confidence'] as double,
+      confidence: ((map['confidence'] as num?) ?? 0).toDouble(),
       imagePath: map['image_path'] as String,
       timestamp: DateTime.parse(map['timestamp'] as String),
       crop: map['crop'] as String,
@@ -72,6 +75,20 @@ class ScanResult {
   
   /// Check if confidence is above threshold
   bool get isConfident => confidence >= 0.75;
+
+  /// Backward-compatible alias used by existing screens.
+  List<Prediction> get predictions {
+    if (topPredictions.isNotEmpty) {
+      return topPredictions;
+    }
+
+    return [
+      Prediction(
+        label: diseaseName,
+        confidence: confidence,
+      ),
+    ];
+  }
   
   /// Get confidence as percentage string
   String get confidencePercentage => '${(confidence * 100).toStringAsFixed(1)}%';
@@ -111,6 +128,20 @@ class Prediction {
     required this.label,
     required this.confidence,
   });
+
+  /// Compatibility adapter for UI built around Disease objects.
+  Disease get disease {
+    final mapped = LabelMapper.fromLabel(label);
+
+    return Disease(
+      id: mapped.id,
+      name: mapped.diseaseName,
+      crop: mapped.crop,
+      description: 'No detailed description available for this class yet.',
+      symptoms: const [],
+      causes: const [],
+    );
+  }
   
   String get confidencePercentage => '${(confidence * 100).toStringAsFixed(1)}%';
   

@@ -49,7 +49,7 @@ class ConfidenceBar extends StatelessWidget {
             ],
           ),
         
-        const SizedBox(height: confidence),
+        const SizedBox(height: 8),
         
         // Progress bar
         ClipRRect(

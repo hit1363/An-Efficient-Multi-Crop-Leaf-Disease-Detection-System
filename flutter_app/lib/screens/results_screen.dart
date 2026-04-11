@@ -72,12 +72,13 @@ class _ResultsScreenState extends State<ResultsScreen> {
       
       // Save to database
       await _databaseService.saveScanResult(result, widget.imagePath!);
+
+      _result = result;
       
       // Load treatment info
       await _loadTreatment();
       
       setState(() {
-        _result = result;
         _isProcessing = false;
       });
     } catch (e) {

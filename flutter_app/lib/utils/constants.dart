@@ -9,7 +9,7 @@ class AppConstants {
   static const String appVersion = '1.0.0';
   
   // Model Configuration
-  static const String modelPath = 'assets/models/mobilenetv2_quantized.tflite';
+  static const String modelPath = 'assets/models/model.tflite';
   static const String labelsPath = 'assets/labels/labels.txt';
   static const int imageSize = 224;
   static const int numChannels = 3;

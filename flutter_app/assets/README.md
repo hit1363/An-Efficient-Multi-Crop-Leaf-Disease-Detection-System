@@ -15,14 +15,14 @@ Contains the trained TensorFlow Lite models for disease detection.
 ```bash
 # Train the model using the training scripts
 cd ../training
-python train.py
+python train.py --config config_mobilenetv2.yaml
 
 # Quantize the model
 cd ../quantization
-python post_training_quant.py
+python post_training_quant.py --model_path ../models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --output_path ../models/exported_tflite/model_quantized.tflite --representative_data ../dataset/processed/train
 
 # Copy the generated .tflite file to this directory
-cp model_quantized.tflite ../flutter_app/assets/models/model.tflite
+cp ../models/exported_tflite/model_quantized.tflite ../flutter_app/assets/models/model.tflite
 ```
 
 ### labels/
@@ -37,17 +37,10 @@ Crop___Disease_Name
 Crop___healthy
 ```
 
-The labels file contains 34 classes covering 5 crops:
-- Apple (4 classes)
-- Blueberry (1 class)
-- Cherry (2 classes)
-- Corn/Maize (4 classes)
-- Grape (4 classes)
-- Peach (2 classes)
-- Pepper (2 classes)
-- Potato (3 classes)
-- Strawberry (2 classes)
-- Tomato (10 classes)
+The labels file must match the trained model exactly:
+- One label per line
+- Same order as training class indices
+- Current project setup uses **45 classes**
 
 ### images/
 Contains app images, icons, and placeholders.
@@ -109,6 +102,7 @@ Ensure assets are optimized:
 
 - [ ] Trained model file (`model.tflite`)
 - [ ] Labels file (`labels.txt`)
+- [ ] Label count matches model output dimension
 - [ ] App logo and icons
 - [ ] Disease information database
 - [ ] Treatment recommendations

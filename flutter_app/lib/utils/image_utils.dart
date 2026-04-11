@@ -8,8 +8,17 @@ import 'constants.dart';
 
 class ImageUtils {
   /// Preprocess image for model inference
-  /// Resizes to 224x224 and normalizes pixel values to [0, 1]
-  static Float32List preprocessImage(File imageFile) {
+  /// Resizes to 224x224 and keeps pixel values in [0, 255]
+  static Float32List preprocessImage(dynamic imageInput) {
+    final File imageFile;
+    if (imageInput is File) {
+      imageFile = imageInput;
+    } else if (imageInput is String) {
+      imageFile = File(imageInput);
+    } else {
+      throw Exception('Unsupported image input type: ${imageInput.runtimeType}');
+    }
+
     // Read image file
     final imageBytes = imageFile.readAsBytesSync();
     final image = img.decodeImage(imageBytes);
@@ -25,7 +34,7 @@ class ImageUtils {
       height: AppConstants.imageSize,
     );
     
-    // Convert to Float32List and normalize [0, 255] -> [0, 1]
+    // Convert to Float32List while preserving [0, 255] scale.
     final convertedBytes = Float32List(
       AppConstants.imageSize * 
       AppConstants.imageSize * 
@@ -37,14 +46,49 @@ class ImageUtils {
       for (int x = 0; x < resizedImage.width; x++) {
         final pixel = resizedImage.getPixel(x, y);
         
-        // Extract RGB values and normalize
-        convertedBytes[pixelIndex++] = img.getRed(pixel) / 255.0;
-        convertedBytes[pixelIndex++] = img.getGreen(pixel) / 255.0;
-        convertedBytes[pixelIndex++] = img.getBlue(pixel) / 255.0;
+        // Extract RGB values
+        convertedBytes[pixelIndex++] = img.getRed(pixel).toDouble();
+        convertedBytes[pixelIndex++] = img.getGreen(pixel).toDouble();
+        convertedBytes[pixelIndex++] = img.getBlue(pixel).toDouble();
       }
     }
     
     return convertedBytes;
+  }
+
+  /// Validate image file path and quality for inference.
+  static Future<Map<String, dynamic>> validateImage(String imagePath) async {
+    final file = File(imagePath);
+
+    if (!await file.exists()) {
+      return {
+        'isValid': false,
+        'error': 'Image file not found',
+      };
+    }
+
+    try {
+      final dimensions = getImageDimensions(file);
+      final isQualityAcceptable = isImageQualityAcceptable(file);
+
+      if (!isQualityAcceptable) {
+        return {
+          'isValid': false,
+          'error': 'Image quality is too low. Please retake in better lighting.',
+        };
+      }
+
+      return {
+        'isValid': true,
+        'width': dimensions['width'],
+        'height': dimensions['height'],
+      };
+    } catch (_) {
+      return {
+        'isValid': false,
+        'error': 'Failed to decode selected image',
+      };
+    }
   }
   
   /// Create thumbnail from image file

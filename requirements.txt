@@ -1,5 +1,6 @@
 # Core Deep Learning (Python 3.12 compatible)
 tensorflow>=2.16,<2.20
+tensorflow-hub>=0.16,<1.0
 keras>=3.0,<4.0
 
 # Data Processing

@@ -48,6 +48,13 @@ class CameraService {
     
     return _controller!;
   }
+
+  /// Backward-compatible initializer used by screens.
+  Future<CameraController> initialize({
+    CameraLensDirection direction = CameraLensDirection.back,
+  }) async {
+    return initializeCamera(direction: direction);
+  }
   
   /// Take picture with camera
   Future<File?> takePicture() async {
@@ -133,16 +140,32 @@ class CameraService {
       print('Error setting flash mode: $e');
     }
   }
+
+  /// Toggle flash between off and torch for camera UI control.
+  Future<void> toggleFlash() async {
+    final currentMode = _controller?.value.flashMode ?? FlashMode.off;
+    final nextMode =
+        currentMode == FlashMode.off ? FlashMode.torch : FlashMode.off;
+    await setFlashMode(nextMode);
+  }
   
   /// Get current flash mode
   FlashMode? getFlashMode() {
     return _controller?.value.flashMode;
   }
+
+  /// Backward-compatible flash mode getter used by camera screen.
+  FlashMode get flashMode => _controller?.value.flashMode ?? FlashMode.off;
   
   /// Dispose camera controller
   Future<void> disposeCamera() async {
     await _controller?.dispose();
     _controller = null;
+  }
+
+  /// Backward-compatible dispose alias.
+  Future<void> dispose() async {
+    await disposeCamera();
   }
   
   /// Check if camera is initialized

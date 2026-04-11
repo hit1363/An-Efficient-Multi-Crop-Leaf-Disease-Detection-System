@@ -1,181 +1,281 @@
 /// Disease Info Service
 /// Manages disease information and treatment data
 
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import '../models/disease.dart';
 import '../models/treatment.dart';
+import '../utils/label_mapper.dart';
 
 class DiseaseInfoService {
   static final DiseaseInfoService _instance = DiseaseInfoService._internal();
   factory DiseaseInfoService() => _instance;
   DiseaseInfoService._internal();
+
+  static const String _diseaseAssetPath = 'assets/database/disease_info.json';
+  static const String _treatmentAssetPath = 'assets/database/treatment_info.json';
+  static const String _labelsAssetPath = 'assets/labels/labels.txt';
   
   // In-memory cache for disease information
   final Map<String, Disease> _diseaseCache = {};
   final Map<String, Treatment> _treatmentCache = {};
+  bool _initialized = false;
   
-  /// Initialize with sample data
-  /// In production, load from database or API
+  /// Initialize by loading metadata from app assets and ensuring label coverage.
   Future<void> initialize() async {
-    _loadSampleData();
+    if (_initialized) return;
+
+    _diseaseCache.clear();
+    _treatmentCache.clear();
+
+    await _loadDiseaseDataFromJson();
+    await _loadTreatmentDataFromJson();
+    await _ensureCoverageForAllLabels();
+
+    _initialized = true;
   }
-  
-  /// Load sample disease and treatment data
-  void _loadSampleData() {
-    // Tomato diseases
-    _diseaseCache['tomato_early_blight'] = Disease(
-      id: 'tomato_early_blight',
-      name: 'Early Blight',
-      crop: 'Tomato',
-      description: 'Early blight is a common tomato disease caused by the fungus Alternaria solani.',
-      symptoms: [
-        'Dark brown spots with concentric rings on older leaves',
-        'Yellowing around the spots',
-        'Premature leaf drop',
-        'Stem lesions near soil line',
-      ],
-      causes: [
-        'Fungal infection (Alternaria solani)',
-        'Warm, humid conditions',
-        'Poor air circulation',
-        'Infected plant debris',
-      ],
+
+  Future<void> _loadDiseaseDataFromJson() async {
+    final content = await rootBundle.loadString(_diseaseAssetPath);
+    final decoded = jsonDecode(content);
+    if (decoded is! List) return;
+
+    for (final entry in decoded) {
+      if (entry is! Map<String, dynamic>) continue;
+
+      final id = (entry['id'] as String?)?.trim();
+      if (id == null || id.isEmpty) continue;
+
+      final favorableConditions = entry['favorable_conditions'] is List
+          ? List<String>.from(entry['favorable_conditions'])
+          : <String>[];
+      final spread = (entry['spread'] as String?)?.trim();
+      final causes = entry['causes'] is List
+          ? List<String>.from(entry['causes'])
+          : <String>[
+              ...favorableConditions,
+              if (spread != null && spread.isNotEmpty) spread,
+            ];
+
+      _diseaseCache[id] = Disease(
+        id: id,
+        name: (entry['name'] as String?)?.trim() ?? 'Unknown Disease',
+        crop: (entry['crop'] as String?)?.trim() ?? 'Unknown Crop',
+        description: (entry['description'] as String?)?.trim() ??
+            'No detailed description available.',
+        symptoms: entry['symptoms'] is List
+            ? List<String>.from(entry['symptoms'])
+            : const <String>[],
+        causes: causes,
+        imageUrl: (entry['image_url'] as String?)?.trim(),
+      );
+    }
+  }
+
+  Future<void> _loadTreatmentDataFromJson() async {
+    final content = await rootBundle.loadString(_treatmentAssetPath);
+    final decoded = jsonDecode(content);
+    if (decoded is! List) return;
+
+    for (final entry in decoded) {
+      if (entry is! Map<String, dynamic>) continue;
+
+      final diseaseId = (entry['disease_id'] as String?)?.trim();
+      if (diseaseId == null || diseaseId.isEmpty) continue;
+
+      final linkedDisease = _diseaseCache[diseaseId];
+      final diseaseName = (entry['disease_name'] as String?)?.trim() ??
+          linkedDisease?.displayName ??
+          diseaseId.replaceAll('_', ' ');
+
+      _treatmentCache[diseaseId] = Treatment(
+        diseaseId: diseaseId,
+        diseaseName: diseaseName,
+        culturalControl: entry['cultural_control'] is List
+            ? List<String>.from(entry['cultural_control'])
+            : const <String>[],
+        chemicalControl: entry['chemical_control'] is List
+            ? List<String>.from(entry['chemical_control'])
+            : const <String>[],
+        biologicalControl: entry['biological_control'] is List
+            ? List<String>.from(entry['biological_control'])
+            : const <String>[],
+        preventionTips: entry['prevention_tips'] is List
+            ? List<String>.from(entry['prevention_tips'])
+            : const <String>[],
+        severity: (entry['severity'] as String?)?.trim() ??
+            _defaultSeverityForDiseaseId(diseaseId),
+      );
+    }
+  }
+
+  Future<void> _ensureCoverageForAllLabels() async {
+    final labelsText = await rootBundle.loadString(_labelsAssetPath);
+    final labels = labelsText
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+
+    for (final label in labels) {
+      final mapped = LabelMapper.fromLabel(label);
+
+      _diseaseCache.putIfAbsent(
+        mapped.id,
+        () => _buildFallbackDisease(mapped),
+      );
+
+      _treatmentCache.putIfAbsent(
+        mapped.id,
+        () => _buildFallbackTreatment(
+          mapped,
+          _diseaseCache[mapped.id],
+        ),
+      );
+    }
+
+    _diseaseCache.putIfAbsent(
+      'healthy',
+      () => _buildFallbackDisease(
+        const LabelMapping(
+          id: 'healthy',
+          crop: 'General',
+          diseaseName: 'Healthy',
+        ),
+      ),
     );
-    
-    _treatmentCache['tomato_early_blight'] = Treatment(
-      diseaseId: 'tomato_early_blight',
-      diseaseName: 'Tomato Early Blight',
-      culturalControl: [
-        'Remove and destroy infected leaves',
-        'Improve air circulation by proper spacing',
-        'Mulch around plants to prevent soil splash',
-        'Rotate crops (3-year rotation)',
-        'Water at base of plants, avoid wetting foliage',
-      ],
-      chemicalControl: [
-        'Apply copper-based fungicides',
-        'Use chlorothalonil fungicide every 7-10 days',
-        'Apply mancozeb as preventive measure',
-      ],
-      biologicalControl: [
-        'Use Bacillus subtilis biofungicide',
-        'Apply compost tea as foliar spray',
-        'Use neem oil as organic option',
-      ],
-      preventionTips: [
-        'Plant resistant varieties',
-        'Maintain proper plant spacing (24-36 inches)',
-        'Use drip irrigation instead of overhead watering',
-        'Remove weeds regularly',
-        'Apply balanced fertilizer for healthy plants',
-      ],
-      severity: 'moderate',
+
+    _treatmentCache.putIfAbsent(
+      'healthy',
+      () => _buildFallbackTreatment(
+        const LabelMapping(
+          id: 'healthy',
+          crop: 'General',
+          diseaseName: 'Healthy',
+        ),
+        _diseaseCache['healthy'],
+      ),
     );
-    
-    // Potato diseases
-    _diseaseCache['potato_late_blight'] = Disease(
-      id: 'potato_late_blight',
-      name: 'Late Blight',
-      crop: 'Potato',
-      description: 'Late blight is a devastating disease caused by Phytophthora infestans.',
-      symptoms: [
-        'Water-soaked lesions on leaves',
-        'White fuzzy growth on undersides of leaves',
-        'Brown to black lesions on stems',
-        'Brown spots on tubers',
-      ],
-      causes: [
-        'Oomycete pathogen (Phytophthora infestans)',
-        'Cool, wet weather',
-        'High humidity',
-        'Infected seed potatoes',
-      ],
+  }
+
+  Disease _buildFallbackDisease(LabelMapping mapped) {
+    final isHealthy = mapped.id == 'healthy';
+    return Disease(
+      id: mapped.id,
+      name: mapped.diseaseName,
+      crop: mapped.crop,
+      description: isHealthy
+          ? 'Plant appears healthy with no obvious disease symptoms.'
+          : 'No curated description available yet for this class.',
+      symptoms: isHealthy
+          ? const <String>['No visible disease symptoms detected']
+          : const <String>[
+              'Visual symptoms may vary; inspect leaf color, spots, and lesions.'
+            ],
+      causes: isHealthy
+          ? const <String>['N/A']
+          : const <String>[
+              'Consult local agronomy guidance to confirm root causes for this class.'
+            ],
     );
-    
-    _treatmentCache['potato_late_blight'] = Treatment(
-      diseaseId: 'potato_late_blight',
-      diseaseName: 'Potato Late Blight',
-      culturalControl: [
-        'Plant certified disease-free seed potatoes',
-        'Hill soil around plants to protect tubers',
-        'Destroy volunteer potato plants',
-        'Harvest during dry weather',
-        'Remove infected plants immediately',
-      ],
-      chemicalControl: [
-        'Apply copper fungicides preventively',
-        'Use systemic fungicides (metalaxyl)',
-        'Apply chlorothalonil before disease appears',
-      ],
-      biologicalControl: [
-        'Limited biological options available',
-        'Focus on cultural practices',
-      ],
-      preventionTips: [
-        'Choose resistant varieties',
-        'Avoid overhead irrigation',
-        'Maintain good air circulation',
-        'Monitor weather for favorable conditions',
-        'Inspect plants weekly during growing season',
-      ],
-      severity: 'severe',
+  }
+
+  Treatment _buildFallbackTreatment(LabelMapping mapped, Disease? disease) {
+    final isHealthy = mapped.id == 'healthy';
+    final displayName = disease?.displayName ?? '${mapped.crop} - ${mapped.diseaseName}';
+
+    return Treatment(
+      diseaseId: mapped.id,
+      diseaseName: displayName,
+      culturalControl: isHealthy
+          ? const <String>[
+              'Maintain current care routine and continue periodic monitoring.',
+            ]
+          : const <String>[
+              'Remove severely affected leaves and keep field hygiene high.',
+              'Improve airflow and avoid prolonged leaf wetness when possible.',
+            ],
+      chemicalControl: isHealthy
+          ? const <String>['No chemical control needed for healthy plants.']
+          : const <String>[
+              'Use crop-appropriate products only after confirming diagnosis locally.',
+            ],
+      biologicalControl: isHealthy
+          ? const <String>['No biological control needed.']
+          : const <String>[
+              'Consider locally recommended bio-control options as applicable.',
+            ],
+      preventionTips: isHealthy
+          ? const <String>[
+              'Keep monitoring regularly for early symptom detection.',
+            ]
+          : const <String>[
+              'Use clean tools and avoid moving infected plant material between plots.',
+              'Follow local integrated pest and disease management guidelines.',
+            ],
+      severity: isHealthy ? 'none' : _defaultSeverityForDiseaseId(mapped.id),
     );
-    
-    // Healthy plants
-    _diseaseCache['healthy'] = Disease(
-      id: 'healthy',
-      name: 'Healthy',
-      crop: 'General',
-      description: 'Plant shows no signs of disease. Leaves are vibrant and healthy.',
-      symptoms: ['No symptoms - plant is healthy'],
-      causes: ['N/A'],
-    );
-    
-    _treatmentCache['healthy'] = Treatment(
-      diseaseId: 'healthy',
-      diseaseName: 'Healthy Plant',
-      culturalControl: ['Continue regular care and monitoring'],
-      chemicalControl: ['No treatment needed'],
-      biologicalControl: ['No treatment needed'],
-      preventionTips: [
-        'Maintain current care practices',
-        'Monitor regularly for early disease detection',
-        'Ensure proper watering and fertilization',
-        'Keep area clean and free of debris',
-      ],
-      severity: 'none',
-    );
+  }
+
+  String _defaultSeverityForDiseaseId(String diseaseId) {
+    return diseaseId == 'healthy' ? 'none' : 'moderate';
+  }
+
+  String _normalizeIdentifier(String identifier) {
+    final trimmed = identifier.trim();
+    if (trimmed.contains('___')) {
+      return LabelMapper.toDiseaseId(trimmed);
+    }
+    return trimmed;
+  }
+
+  T? _findCaseInsensitive<T>(Map<String, T> source, String key) {
+    final lower = key.toLowerCase();
+    for (final entry in source.entries) {
+      if (entry.key.toLowerCase() == lower) {
+        return entry.value;
+      }
+    }
+    return null;
   }
   
   /// Get disease information by ID or name
   Disease? getDisease(String identifier) {
-    // Try exact match first
-    if (_diseaseCache.containsKey(identifier)) {
-      return _diseaseCache[identifier];
+    final normalized = _normalizeIdentifier(identifier);
+
+    final direct = _diseaseCache[normalized];
+    if (direct != null) {
+      return direct;
     }
-    
-    // Try case-insensitive match
-    final key = _diseaseCache.keys.firstWhere(
-      (k) => k.toLowerCase() == identifier.toLowerCase(),
-      orElse: () => '',
+
+    final byId = _findCaseInsensitive(_diseaseCache, normalized);
+    if (byId != null) {
+      return byId;
+    }
+
+    return _diseaseCache.values.cast<Disease?>().firstWhere(
+      (d) => d != null && d.name.toLowerCase() == normalized.toLowerCase(),
+      orElse: () => null,
     );
-    
-    return key.isNotEmpty ? _diseaseCache[key] : null;
   }
   
   /// Get treatment information by disease ID
   Treatment? getTreatment(String diseaseId) {
-    // Try exact match
-    if (_treatmentCache.containsKey(diseaseId)) {
-      return _treatmentCache[diseaseId];
+    final normalized = _normalizeIdentifier(diseaseId);
+
+    final direct = _treatmentCache[normalized];
+    if (direct != null) {
+      return direct;
     }
-    
-    // Try case-insensitive match
-    final key = _treatmentCache.keys.firstWhere(
-      (k) => k.toLowerCase() == diseaseId.toLowerCase(),
-      orElse: () => '',
-    );
-    
-    return key.isNotEmpty ? _treatmentCache[key] : null;
+
+    final byId = _findCaseInsensitive(_treatmentCache, normalized);
+    if (byId != null) {
+      return byId;
+    }
+
+    final mapped = LabelMapper.fromLabel(diseaseId);
+    final disease = getDisease(mapped.id);
+    return _buildFallbackTreatment(mapped, disease);
   }
   
   /// Get all diseases for a crop

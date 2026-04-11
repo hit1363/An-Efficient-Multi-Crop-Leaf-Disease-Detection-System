@@ -15,18 +15,16 @@ E:\An Efficient Multi-Crop Leaf Disease Detection System\
 ├── 📄 requirements.txt                   ✅ Python dependencies
 ├── 📄 .gitignore                         ✅ Git ignore rules
 ├── 📄 LICENSE                            ✅ MIT License
-├── 📄 THESIS_PROPOSAL.md                 ✅ Full thesis proposal
-├── 📄 PROJECT_PROPOSAL.md                ✅ Project proposal
-├── 📄 MODEL_ARCHITECTURE_DIAGRAMS.html   ✅ Interactive diagrams (Mermaid.js)
 │
 ├── 📂 docs/                              # Research documentation
 │   ├── architecture_diagrams/
-│   └── experimental_results/
+│   ├── experimental_results/
+│   └── team/
 │
 ├── 📂 dataset/                           # Dataset management
-│   ├── raw/                              ✅ .gitkeep placeholder
-│   ├── processed/                        ✅ .gitkeep placeholder
-│   └── 📄 dataset_description.md         ✅ Dataset documentation
+│   ├── raw/
+│   ├── processed/
+│   └── 🐍 prepare_data.py                ✅ Dataset split utility
 │
 ├── 📂 notebooks/                         # Jupyter notebooks
 │   ├── 📓 data_exploration.ipynb         ✅ Complete (8 sections)
@@ -37,13 +35,14 @@ E:\An Efficient Multi-Crop Leaf Disease Detection System\
 │   ├── 🐍 train.py                       ✅ Full training script
 │   ├── 🐍 evaluate.py                    ✅ Model evaluation
 │   ├── 🐍 model.py                       ✅ Model architectures
-│   ├── ⚙️ config.yaml                    ✅ Training configuration
+│   ├── ⚙️ config_mobilenetv2.yaml        ✅ MobileNetV2 configuration
+│   ├── ⚙️ config_efficientnet_lite0.yaml ✅ EfficientNet-Lite0 configuration
 │   └── 🐍 utils.py                       ✅ Utility functions
 │
 ├── 📂 models/                            # Trained models
-│   ├── mobilenetv2/                      ✅ .gitkeep placeholder
-│   ├── efficientnet_lite0/               ✅ .gitkeep placeholder
-│   └── exported_tflite/                  ✅ .gitkeep placeholder
+│   ├── mobilenetv2/
+│   ├── efficientnet_lite0/
+│   └── exported_tflite/
 │
 ├── 📂 quantization/                      # Model optimization
 │   ├── 🐍 post_training_quant.py         ✅ Quantization script
@@ -56,7 +55,7 @@ E:\An Efficient Multi-Crop Leaf Disease Detection System\
 │   └── 📄 README.md                      ✅ App documentation
 │
 └── 📂 results/                           # Experimental results
-    └── 📄 performance_analysis.md        ✅ Results documentation
+    └── 📄 training_log_mobilenetv2.csv   ✅ Training logs
 ```
 
 ---
@@ -67,16 +66,20 @@ E:\An Efficient Multi-Crop Leaf Disease Detection System\
 
 ```bash
 cd "E:\An Efficient Multi-Crop Leaf Disease Detection System"
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ### 2. Prepare Dataset
 
-- Download PlantVillage dataset from Kaggle
+- Download PlantVillage dataset and  Kaggle
 - Place images in `dataset/raw/`
-- Run preprocessing (see `dataset/dataset_description.md`)
+- Run preprocessing split:
+
+```bash
+python dataset/prepare_data.py
+```
 
 ### 3. Explore Data
 
@@ -87,21 +90,22 @@ jupyter notebook notebooks/data_exploration.ipynb
 ### 4. Train Model
 
 ```bash
-cd training
-python train.py --config config.yaml
+# first run:
+python training/train.py --config training/config_mobilenetv2.yaml
+# second run:
+python training/train.py --config training/config_efficientnet_lite0.yaml
 ```
 
 ### 5. Evaluate Model
 
 ```bash
-python evaluate.py --model ../models/mobilenetv2/best_model.h5
+python training/evaluate.py --model models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --config training/config_mobilenetv2.yaml
 ```
 
 ### 6. Convert to TFLite
 
 ```bash
-cd quantization
-python post_training_quant.py --model_path ../models/mobilenetv2/saved_model --output_path ../models/exported_tflite/model.tflite --quantize --representative_data ../dataset/processed/train
+python quantization/post_training_quant.py --model_path models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --output_path models/exported_tflite/model_quantized.tflite --representative_data dataset/processed/train --evaluate --test_data dataset/processed/test --benchmark
 ```
 
 ### 7. Build Mobile App
@@ -118,15 +122,16 @@ flutter run
 
 ### Research Documents
 
-- **THESIS_PROPOSAL.md**: Complete thesis proposal with all sections
-- **MODEL_ARCHITECTURE_DIAGRAMS.html**: 13 interactive Mermaid diagrams
-- **dataset/dataset_description.md**: Dataset statistics and sources
+- **docs/architecture_diagrams/**: Architecture visuals and system diagrams
+- **docs/experimental_results/**: Research outputs and exported analysis artifacts
+- **docs/team/**: Team photos and profile assets
 
 ### Training Pipeline
 
 - **training/train.py**: Main training script with transfer learning
 - **training/model.py**: MobileNetV2 & EfficientNet model definitions
-- **training/config.yaml**: Configurable training parameters
+- **training/config_mobilenetv2.yaml**: MobileNetV2 training settings
+- **training/config_efficientnet_lite0.yaml**: EfficientNet-Lite0 training settings
 - **training/evaluate.py**: Comprehensive evaluation metrics
 
 ### Model Optimization
@@ -171,7 +176,7 @@ graph LR
 ✅ **Comprehensive evaluation** metrics and visualizations  
 ✅ **Flutter mobile app** structure with TFLite integration  
 ✅ **Documentation** for all components  
-✅ **Git-ready** with .gitignore and .gitkeep files  
+✅ **Git-ready** with .gitignore and clean project layout  
 
 ---
 
@@ -180,9 +185,9 @@ graph LR
 ### Immediate Tasks
 
 1. **Download dataset** → Place in `dataset/raw/`
-2. **Run data exploration notebook** → Verify dataset quality
-3. **Configure training** → Adjust `training/config.yaml` if needed
-4. **Start training** → Run `train.py`
+2. **Run `dataset/prepare_data.py`** → Build train/val/test splits
+3. **Run data exploration notebook** → Verify dataset quality
+4. **Start training** → Run `training/train.py` with one of the config files
 
 ### Development Tasks
 
@@ -203,7 +208,7 @@ graph LR
 ## 🔧 Troubleshooting
 
 ### Dataset not found?
-→ Check paths in `training/config.yaml` and `notebooks/data_exploration.ipynb`
+→ Check paths in `training/config_mobilenetv2.yaml` or `training/config_efficientnet_lite0.yaml`
 
 ### Training too slow?
 → Ensure GPU is detected: `tensorflow.config.list_physical_devices('GPU')`
@@ -220,13 +225,13 @@ graph LR
 
 - **Documentation**: Check README files in each directory
 - **Code Issues**: Review comments in Python scripts
-- **Research Questions**: Refer to THESIS_PROPOSAL.md
+- **Research Questions**: Refer to documents in `docs/`
 
 ---
 
 ## 🎓 Academic Note
 
-This project is structured for a **Master's thesis** in Computer Science. All code is production-ready and follows best practices for:
+This project is structured for an **undergraduate thesis** in Computer Science. All code is production-ready and follows best practices for:
 
 - Reproducibility (seed setting, configuration files)
 - Modularity (separation of concerns)
@@ -238,7 +243,7 @@ This project is structured for a **Master's thesis** in Computer Science. All co
 **Project Status**: ✅ Structure Complete | 🚧 Ready for Development
 
 **Created**: February 19, 2026  
-**Last Updated**: February 19, 2026
+**Last Updated**: April 10, 2026
 
 ---
 

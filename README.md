@@ -36,26 +36,26 @@ multi-crop-leaf-disease-detection/
 ├── LICENSE                   # Project license
 │
 ├── docs/                     # Research documentation
-│   ├── proposal.pdf
-│   ├── thesis_draft.pdf
 │   ├── architecture_diagrams/
-│   └── experimental_results/
+│   ├── experimental_results/
+│   └── team/
 │
 ├── dataset/                  # Dataset management
 │   ├── raw/                  # Original images
 │   ├── processed/            # Preprocessed images
-│   └── dataset_description.md
+│   └── prepare_data.py       # Dataset split utility
 │
 ├── notebooks/                # Jupyter notebooks
+│   ├── colab_training_notebook.ipynb
 │   ├── data_exploration.ipynb
-│   ├── model_training.ipynb
 │   └── evaluation.ipynb
 │
 ├── training/                 # Training pipeline
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── model.py
-│   ├── config.yaml
+│   ├── config_mobilenetv2.yaml
+│   ├── config_efficientnet_lite0.yaml
 │   └── utils.py
 │
 ├── models/                   # Trained models
@@ -74,18 +74,15 @@ multi-crop-leaf-disease-detection/
 │   └── README.md
 │
 └── results/                  # Experimental results
-    ├── confusion_matrix.png
-    ├── f1_scores.csv
-    ├── inference_time_comparison.csv
-    └── performance_analysis.md
+  └── training_log_mobilenetv2.csv
 ```
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-- Python 3.8+
-- TensorFlow 2.10+
+- Python 3.10+ (3.12 compatible)
+- TensorFlow (installed via `requirements.txt`)
 - Flutter 3.x (for mobile app)
 - CUDA-enabled GPU (recommended for training)
 
@@ -99,23 +96,33 @@ cd multi-crop-leaf-disease-detection
 
 2. Install Python dependencies:
 ```bash
+cd "E:\An Efficient Multi-Crop Leaf Disease Detection System"
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-3. Download the dataset (see `dataset/dataset_description.md`)
+3. Download the dataset 
+- Download PlantVillage dataset from Kaggle
+- Place images in `dataset/raw/`
+- Run preprocessing split:
+
+```bash
+python dataset/prepare_data.py
+```
 
 ### Training
 
 ```bash
-cd training
-python train.py --config config.yaml
+python training/train.py --config training/config_mobilenetv2.yaml
+# Optional second run:
+python training/train.py --config training/config_efficientnet_lite0.yaml
 ```
 
 ### Model Quantization
 
 ```bash
-cd quantization
-python post_training_quant.py --model_path ../models/mobilenetv2/saved_model
+python quantization/post_training_quant.py --model_path models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --output_path models/exported_tflite/model_quantized.tflite --representative_data dataset/processed/train --evaluate --test_data dataset/processed/test --benchmark
 ```
 
 ### Mobile App Development
@@ -129,12 +136,10 @@ flutter run
 ## 📊 Dataset
 
 The project uses a curated dataset of leaf images across multiple crops:
-- **Total Images**: ~50,000
+- **Total Images**: 67,072
 - **Crops**: Tomato, Potato, Corn, Rice, Wheat, and more
-- **Classes**: 30+ disease categories + healthy leaves
+- **Classes**: 45 categories (diseases + healthy + invalid)
 - **Split**: 70% Train, 15% Validation, 15% Test
-
-See `dataset/dataset_description.md` for detailed information.
 
 
 ## 📱 Mobile Application
@@ -256,4 +261,4 @@ If you use this work, please cite:
 
 ---
 
-**Status**: 🚧 Active Development | 📅 Last Updated: February 2026
+**Status**: 🚧 Active Development | 📅 Last Updated: April 2026

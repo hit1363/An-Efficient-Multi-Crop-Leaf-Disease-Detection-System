@@ -8,7 +8,6 @@ import argparse
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from pathlib import Path
 
 
 def representative_dataset_generator(data_dir, num_samples=1000, image_size=(224, 224)):
@@ -33,8 +32,8 @@ def representative_dataset_generator(data_dir, num_samples=1000, image_size=(224
         if count >= num_samples:
             break
 
-        # Normalize to [0, 1]
-        images = images / 255.0
+        # Keep input scale consistent with training pipeline.
+        # training/utils.py loads images in [0, 255] float range.
         yield [images]
         count += 1
 
@@ -56,11 +55,8 @@ def convert_to_tflite(
     """
     print(f"Loading model from {model_path}...")
 
-    # Load the model
-    if model_path.endswith(".h5"):
-        model = keras.models.load_model(model_path)
-    else:
-        model = keras.models.load_model(model_path)
+    # Load the model (.h5 or SavedModel directory)
+    model = keras.models.load_model(model_path)
 
     # Create TFLite converter
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -92,7 +88,9 @@ def convert_to_tflite(
     tflite_model = converter.convert()
 
     # Save model
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     with open(output_path, "wb") as f:
         f.write(tflite_model)
 
@@ -100,7 +98,7 @@ def convert_to_tflite(
     original_size = os.path.getsize(model_path) if os.path.isfile(model_path) else 0
     tflite_size = os.path.getsize(output_path)
 
-    print(f"\nConversion complete!")
+    print("\nConversion complete!")
     print(f"Original model size: {original_size / (1024 * 1024):.2f} MB")
     print(f"TFLite model size: {tflite_size / (1024 * 1024):.2f} MB")
 
@@ -151,8 +149,8 @@ def evaluate_tflite_model(tflite_path, test_data_dir, num_samples=100):
         if total >= num_samples:
             break
 
-        # Preprocess input
-        input_data = images.numpy() / 255.0
+        # Preprocess input (keep scale consistent with training/calibration)
+        input_data = images.numpy()
 
         # Check if input should be uint8
         if input_details[0]["dtype"] == np.uint8:
@@ -182,6 +180,11 @@ def evaluate_tflite_model(tflite_path, test_data_dir, num_samples=100):
             correct += 1
         total += 1
 
+    if total == 0:
+        raise ValueError(
+            "No evaluation samples were processed. Check test_data_dir and num_samples."
+        )
+
     accuracy = correct / total
     print(f"\nAccuracy on {total} samples: {accuracy:.4f} ({accuracy * 100:.2f}%)")
 
@@ -201,7 +204,7 @@ def benchmark_inference_time(tflite_path, num_runs=100):
     """
     import time
 
-    print(f"\nBenchmarking inference time...")
+    print("\nBenchmarking inference time...")
 
     # Load interpreter
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
@@ -225,10 +228,10 @@ def benchmark_inference_time(tflite_path, num_runs=100):
     # Benchmark
     times = []
     for _ in range(num_runs):
-        start = time.time()
+        start = time.perf_counter()
         interpreter.set_tensor(input_details[0]["index"], dummy_input)
         interpreter.invoke()
-        end = time.time()
+        end = time.perf_counter()
         times.append((end - start) * 1000)  # Convert to ms
 
     avg_time = np.mean(times)
@@ -252,7 +255,16 @@ def main():
         "--output_path", type=str, required=True, help="Path to save .tflite model"
     )
     parser.add_argument(
-        "--quantize", action="store_true", default=True, help="Apply INT8 quantization"
+        "--quantize",
+        dest="quantize",
+        action="store_true",
+        help="Apply quantization (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-quantize",
+        dest="quantize",
+        action="store_false",
+        help="Disable quantization",
     )
     parser.add_argument(
         "--representative_data",
@@ -269,6 +281,7 @@ def main():
     parser.add_argument(
         "--benchmark", action="store_true", help="Benchmark inference time"
     )
+    parser.set_defaults(quantize=True)
 
     args = parser.parse_args()
 

@@ -8,7 +8,6 @@ import yaml
 import argparse
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from tensorflow import keras
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,13 +18,42 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
 )
 
-from utils import load_class_names, preprocess_image
-
 
 def load_config(config_path="config.yaml"):
     """Load configuration file"""
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
+    return config
+
+
+def _resolve_path(path_value, base_dir):
+    """Resolve relative paths against base_dir while preserving absolute paths."""
+    if not path_value:
+        return path_value
+    if os.path.isabs(path_value):
+        return os.path.normpath(path_value)
+    return os.path.normpath(os.path.join(base_dir, path_value))
+
+
+def resolve_config_paths(config, config_path):
+    """Resolve path-like config values relative to the config file directory."""
+    config_dir = os.path.dirname(os.path.abspath(config_path))
+
+    dataset_cfg = config.get("dataset", {})
+    for key in ["data_dir", "train_dir", "val_dir", "test_dir"]:
+        if key in dataset_cfg:
+            dataset_cfg[key] = _resolve_path(dataset_cfg[key], config_dir)
+
+    evaluation_cfg = config.setdefault("evaluation", {})
+    if "results_dir" in evaluation_cfg:
+        evaluation_cfg["results_dir"] = _resolve_path(
+            evaluation_cfg["results_dir"], config_dir
+        )
+    else:
+        evaluation_cfg["results_dir"] = os.path.normpath(
+            os.path.join(config_dir, "..", "results")
+        )
+
     return config
 
 
@@ -52,6 +80,7 @@ def evaluate_model(model_path, config_path="config.yaml"):
     """
     # Load configuration
     config = load_config(config_path)
+    config = resolve_config_paths(config, config_path)
 
     # Load model
     print(f"Loading model from {model_path}...")
@@ -100,12 +129,12 @@ def evaluate_model(model_path, config_path="config.yaml"):
         precision_recall_fscore_support(y_true, y_pred, average="weighted")
     )
 
-    print(f"\nMacro Average:")
+    print("\nMacro Average:")
     print(f"  Precision: {precision_macro:.4f}")
     print(f"  Recall: {recall_macro:.4f}")
     print(f"  F1-Score: {f1_macro:.4f}")
 
-    print(f"\nWeighted Average:")
+    print("\nWeighted Average:")
     print(f"  Precision: {precision_weighted:.4f}")
     print(f"  Recall: {recall_weighted:.4f}")
     print(f"  F1-Score: {f1_weighted:.4f}")
@@ -117,7 +146,7 @@ def evaluate_model(model_path, config_path="config.yaml"):
     print(classification_report(y_true, y_pred, target_names=class_names))
 
     # Save metrics to CSV
-    results_dir = "../results"
+    results_dir = config.get("evaluation", {}).get("results_dir")
     os.makedirs(results_dir, exist_ok=True)
 
     metrics_df = pd.DataFrame(
@@ -163,8 +192,14 @@ def plot_confusion_matrix(cm, class_names, save_path="confusion_matrix.png"):
     """
     plt.figure(figsize=(20, 18))
 
-    # Normalize confusion matrix
-    cm_normalized = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
+    # Normalize confusion matrix safely to avoid divide-by-zero for empty classes
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_normalized = np.divide(
+        cm.astype("float"),
+        row_sums,
+        out=np.zeros_like(cm, dtype=float),
+        where=row_sums != 0,
+    )
 
     # Plot
     sns.heatmap(
@@ -235,13 +270,30 @@ def main():
         "--model", type=str, required=True, help="Path to trained model"
     )
     parser.add_argument(
-        "--config", type=str, default="config.yaml", help="Path to configuration file"
+        "--config", type=str, default=None, help="Path to configuration file"
     )
 
     args = parser.parse_args()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if args.config:
+        if os.path.isabs(args.config):
+            config_path = args.config
+        else:
+            cwd_candidate = os.path.abspath(args.config)
+            script_candidate = os.path.join(script_dir, args.config)
+            config_path = (
+                cwd_candidate if os.path.exists(cwd_candidate) else script_candidate
+            )
+    else:
+        config_path = os.path.join(script_dir, "config.yaml")
+
+    config_path = os.path.normpath(config_path)
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     # Evaluate model
-    evaluate_model(args.model, args.config)
+    evaluate_model(args.model, config_path)
 
 
 if __name__ == "__main__":

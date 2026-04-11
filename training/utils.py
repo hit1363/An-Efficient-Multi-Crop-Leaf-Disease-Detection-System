@@ -6,17 +6,18 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
-import keras
+from tensorflow import keras
 
 
 def setup_logging(config):
     """Setup logging configuration"""
     log_config = config.get("logging", {})
     level = getattr(logging, log_config.get("level", "INFO"))
+    format_str = log_config.get("format", "%(asctime)s - %(levelname)s - %(message)s")
 
     logging.basicConfig(
         level=level,
-        format=log_config.get("format", "%(asctime)s - %(levelname)s - %(message)s"),
+        format=format_str,
     )
 
     logger = logging.getLogger(__name__)
@@ -24,9 +25,11 @@ def setup_logging(config):
     # Save to file if enabled
     if log_config.get("save_to_file", False):
         log_file = log_config.get("log_file", "training.log")
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(log_config["format"]))
+        file_handler.setFormatter(logging.Formatter(format_str))
         logger.addHandler(file_handler)
 
     return logger
@@ -148,11 +151,22 @@ def setup_callbacks(config):
     # Model Checkpoint
     if callback_config.get("checkpoint", {}).get("enabled", True):
         checkpoint_config = callback_config["checkpoint"]
+        architecture = config.get("model", {}).get("architecture", "").lower()
+        is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
+
+        save_weights_only = checkpoint_config.get("save_weights_only", False)
+        if is_lite0_arch and not save_weights_only:
+            # TF Hub-backed models are more reliable with weights-only checkpoints.
+            save_weights_only = True
+
+        checkpoint_filename = (
+            "best_model.weights.h5" if save_weights_only else "best_model.h5"
+        )
         checkpoint_path = os.path.join(
             config["export"]["save_dir"],
             config["model"]["architecture"],
             "checkpoints",
-            "best_model.h5",
+            checkpoint_filename,
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
@@ -161,7 +175,9 @@ def setup_callbacks(config):
                 checkpoint_path,
                 monitor=checkpoint_config.get("monitor", "val_accuracy"),
                 save_best_only=checkpoint_config.get("save_best_only", True),
+                save_weights_only=save_weights_only,
                 mode=checkpoint_config.get("mode", "max"),
+                save_freq=checkpoint_config.get("save_freq", "epoch"),
                 verbose=1,
             )
         )

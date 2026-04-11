@@ -1,30 +1,36 @@
 {
-  "name": "MobileNetV2 Leaf Disease Classifier",
+  "name": "Multi-Crop Leaf Disease Classifier",
   "version": "1.0.0",
-  "architecture": "MobileNetV2",
+  "architecture": "MobileNetV2 / EfficientNet-Lite0",
   "framework": "TensorFlow Lite",
   "quantization": "INT8",
   "input_shape": [1, 224, 224, 3],
-  "output_shape": [1, 34],
-  "num_classes": 34,
+  "output_shape": [1, 45],
+  "num_classes": 45,
   "accuracy": 92.1,
   "model_size_mb": 3.8,
   "inference_time_ms": 45,
-  "trained_date": "2024-01-15",
+  "trained_date": "2026-04-08",
   "dataset": {
     "name": "PlantVillage + Custom",
-    "total_images": 50000,
+    "total_images": 67092,
     "crops": [
       "Apple",
-      "Blueberry",
-      "Cherry",
-      "Corn",
+      "Cherry_(including_sour)",
+      "Corn_(maize)",
       "Grape",
+      "Invalid",
+      "Orange",
       "Peach",
-      "Pepper",
+      "Pepper,_bell",
       "Potato",
+      "Raspberry",
+      "Rice",
+      "Soybean",
+      "Squash",
       "Strawberry",
-      "Tomato"
+      "Tomato",
+      "Wheat"
     ],
     "augmentation": [
       "rotation",
@@ -45,7 +51,7 @@
   },
   "preprocessing": {
     "resize": [224, 224],
-    "normalization": "0-1",
+    "normalization": "0-255",
     "color_mode": "RGB"
   },
   "performance": {
@@ -53,5 +59,5 @@
     "recall": 92.4,
     "f1_score": 92.1
   },
-  "notes": "Model trained with transfer learning. Base MobileNetV2 weights from ImageNet. Fine-tuned on plant disease dataset with data augmentation. Post-training INT8 quantization applied for mobile deployment."
+  "notes": "Model trained with transfer learning for 45 classes. Labels file must contain exactly 45 entries in the same order as training class indices."
 }

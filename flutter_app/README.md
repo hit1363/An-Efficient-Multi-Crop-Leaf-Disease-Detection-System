@@ -60,7 +60,7 @@ flutter_app/
 │   │   ├── model.tflite          # TFLite model (to be added)
 │   │   └── model_metadata.json   # Model info
 │   ├── labels/
-│   │   └── labels.txt            # Class labels (34 classes)
+│   │   └── labels.txt            # Class labels (45 classes)
 │   ├── images/                   # App images
 │   └── database/
 │       ├── disease_info.json     # Disease descriptions
@@ -84,7 +84,7 @@ Total: ~2,500+ lines of production-ready Dart code
 - **Framework**: TensorFlow Lite 0.10.3
 - **Model**: MobileNetV2 (INT8 quantized)
 - **Input**: 224×224×3 RGB images
-- **Output**: 34 disease classes
+- **Output**: 45 disease classes
 - **Size**: ~3.8 MB
 
 #### Data & Storage
@@ -126,9 +126,9 @@ flutter doctor
 
 3. **Add Model File**
    ```bash
-   # After training (see ../training/README.md)
-   # Copy the quantized model to assets
-   cp ../quantization/model_quantized.tflite assets/models/model.tflite
+   # After training and quantization
+   # Copy your generated TFLite model into assets/models/
+   cp ../models/exported_tflite/model_quantized.tflite assets/models/model.tflite
    ```
 
 4. **Configure Android**
@@ -218,11 +218,12 @@ static const Color accentColor = Color(0xFF8BC34A);
 ```
 
 ### Model Configuration
-Edit `lib/services/ml_service.dart`:
+Edit `lib/utils/constants.dart`:
 ```dart
 static const String modelPath = 'assets/models/model.tflite';
-static const int inputSize = 224;
-static const int numClasses = 34;
+static const String labelsPath = 'assets/labels/labels.txt';
+static const int imageSize = 224;
+static const int numChannels = 3;
 ```
 
 ### Add New Disease Classes
@@ -234,18 +235,9 @@ static const int numClasses = 34;
 ## 📊 Model Details
 
 ### Supported Crops & Diseases
-- **Apple**: 4 classes (Scab, Black rot, Cedar rust, Healthy)
-- **Blueberry**: 1 class (Healthy)
-- **Cherry**: 2 classes (Powdery mildew, Healthy)
-- **Corn/Maize**: 4 classes (Gray leaf spot, Common rust, Northern leaf blight, Healthy)
-- **Grape**: 4 classes (Black rot, Esca, Leaf blight, Healthy)
-- **Peach**: 2 classes (Bacterial spot, Healthy)
-- **Pepper**: 2 classes (Bacterial spot, Healthy)
-- **Potato**: 3 classes (Early blight, Late blight, Healthy)
-- **Strawberry**: 2 classes (Leaf scorch, Healthy)
-- **Tomato**: 10 classes (Multiple diseases + Healthy)
-
-**Total**: 34 classes across 10 crops
+- The app currently targets the training dataset labels in `assets/labels/labels.txt`
+- This project configuration uses **45 classes** across multiple crops and categories
+- If you retrain with a different class set, regenerate and replace `assets/labels/labels.txt`
 
 ### Model Performance
 - **Architecture**: MobileNetV2 with transfer learning
@@ -260,7 +252,7 @@ static const int numClasses = 34;
 
 ### Training Details
 - **Base Model**: ImageNet pre-trained MobileNetV2
-- **Dataset**: PlantVillage + custom collected (~50K images)
+- **Dataset**: PlantVillage + custom collected (~67K images)
 - **Augmentation**: Rotation, flip, brightness, contrast, zoom
 - **Optimizer**: Adam
 - **Learning Rate**: 0.001 with ReduceLROnPlateau
@@ -333,7 +325,7 @@ MIT License - See LICENSE file for details
 
 ## 👥 Contributors
 
-Developed as part of Master's thesis:
+Developed as part of a Bachelor's thesis:
 **"An Efficient Multi-Crop Leaf Disease Detection System Using Deep Learning"**
 
 ## 🤝 Contributing
@@ -366,13 +358,12 @@ For issues or questions:
 
 ## 📚 Related Resources
 
-- Training Pipeline: `../training/README.md`
-- Dataset Documentation: `../dataset/dataset_description.md`
-- Model Architecture: `../MODEL_ARCHITECTURE_DIAGRAMS.html`
+- Training Pipeline: `../training/train.py`
+- Evaluation Script: `../training/evaluate.py`
 - Quantization Guide: `../quantization/quantization_results.md`
 
 ---
 
 **Version**: 1.0.0  
-**Last Updated**: January 2024  
+**Last Updated**: April 2026  
 **Minimum Requirements**: Flutter 3.0+, Android 21+, iOS 12+
