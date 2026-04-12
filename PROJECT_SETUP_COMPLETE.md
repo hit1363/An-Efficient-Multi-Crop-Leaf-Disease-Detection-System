@@ -60,61 +60,92 @@ E:\An Efficient Multi-Crop Leaf Disease Detection System\
 
 ---
 
-## 🚀 Quick Start Guide
+## 🚀 Team Member Setup Guide (Windows)
 
-### 1. Setup Python Environment
+Use this checklist to run training, evaluation, quantization, and Flutter inference on a teammate PC.
 
-```bash
+### 1. Open PowerShell in Project Root and Set Up Environment
+
+```powershell
 cd "E:\An Efficient Multi-Crop Leaf Disease Detection System"
-python -m venv .venv
-.venv\Scripts\activate
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
+### 2. Check TensorFlow Device
 
-### 2. Prepare Dataset
+```powershell
+python -c "import tensorflow as tf; print(tf.__version__); print(tf.config.list_physical_devices('GPU'))"
+```
+
+If the GPU list is empty, continue on CPU or move training to WSL2 for Linux GPU support.
+
+### 3. Prepare Dataset
 
 - Download PlantVillage dataset and  Kaggle
 - Place images in `dataset/raw/`
+- follow this `\flutter_app\assets\labels\labels.txt`
 - Run preprocessing split:
 
 ```bash
 python dataset/prepare_data.py
 ```
 
-### 3. Explore Data
+### 4. Lower Training Load in `config_mobilenetv2.yaml`
 
-```bash
-jupyter notebook notebooks/data_exploration.ipynb
+Update `training/config_mobilenetv2.yaml` for lower VRAM usage:
+
+```yaml
+dataset:
+    batch_size: 8
+
+training:
+    batch_size: 8
+    epochs: 30
 ```
 
-### 4. Train Model
+Use `batch_size: 4` if out-of-memory occurs. The trainer reads `dataset.batch_size` in `training/train.py`.
 
-```bash
-# first run:
+### 5. Train
+
+```powershell
 python training/train.py --config training/config_mobilenetv2.yaml
 # second run:
 python training/train.py --config training/config_efficientnet_lite0.yaml
 ```
 
-### 5. Evaluate Model
+### 6. Evaluate
 
-```bash
+```powershell
 python training/evaluate.py --model models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --config training/config_mobilenetv2.yaml
 ```
 
-### 6. Convert to TFLite
+Replace `saved_model_YYYYMMDD_HHMMSS` with your actual saved model directory.
 
-```bash
+### 7. Quantize for Mobile
+
+```powershell
 python quantization/post_training_quant.py --model_path models/mobilenetv2/saved_model_YYYYMMDD_HHMMSS --output_path models/exported_tflite/model_quantized.tflite --representative_data dataset/processed/train --evaluate --test_data dataset/processed/test --benchmark
 ```
 
-### 7. Build Mobile App
+### 8. Run Flutter App with Generated Model
 
-```bash
+Copy model file:
+
+```powershell
+Copy-Item "models/exported_tflite/model_quantized.tflite" "flutter_app/assets/models/model.tflite" -Force
+```
+
+Run Flutter app:
+
+```powershell
 cd flutter_app
 flutter pub get
 flutter run
 ```
+
+Keep labels aligned with model output classes in `flutter_app/assets/labels/labels.txt`; otherwise, the app will throw a label/model mismatch error.
 
 ---
 
@@ -146,25 +177,7 @@ flutter run
 
 ---
 
-## 📊 Expected Workflow
 
-```mermaid
-graph LR
-    A[Dataset<br/>Preparation] --> B[Data<br/>Exploration]
-    B --> C[Model<br/>Training]
-    C --> D[Model<br/>Evaluation]
-    D --> E[Quantization]
-    E --> F[Mobile<br/>Deployment]
-    F --> G[Testing &<br/>Results]
-```
-
-1. **Week 1-2**: Dataset preparation and exploration
-2. **Week 3-4**: Model training and hyperparameter tuning
-3. **Week 5**: Model evaluation and optimization
-4. **Week 6**: Quantization and mobile deployment
-5. **Week 7-8**: Testing, results analysis, thesis writing
-
----
 
 ## 🎯 Key Features Implemented
 
@@ -228,27 +241,3 @@ graph LR
 - **Research Questions**: Refer to documents in `docs/`
 
 ---
-
-## 🎓 Academic Note
-
-This project is structured for an **undergraduate thesis** in Computer Science. All code is production-ready and follows best practices for:
-
-- Reproducibility (seed setting, configuration files)
-- Modularity (separation of concerns)
-- Documentation (docstrings, README files)
-- Version control (Git-ready structure)
-
----
-
-**Project Status**: ✅ Structure Complete | 🚧 Ready for Development
-
-**Created**: February 19, 2026  
-**Last Updated**: April 10, 2026
-
----
-
-## 🙏 Acknowledgments
-
-Project structure follows industry best practices and academic research standards.
-
-**Good luck with your thesis! 🎓🌱**
