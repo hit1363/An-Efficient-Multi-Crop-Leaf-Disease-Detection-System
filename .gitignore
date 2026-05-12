@@ -54,6 +54,7 @@ dataset/processed/**/*.jpg
 dataset/processed/**/*.jpeg
 dataset/processed/**/*.png
 *.zip
+*.7z
 *.tar
 *.tar.gz
 
