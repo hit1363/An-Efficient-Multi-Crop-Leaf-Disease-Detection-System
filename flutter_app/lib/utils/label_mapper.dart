@@ -24,9 +24,9 @@ class LabelMapper {
     final diseaseName = _beautify(rawDisease);
 
     final lowerLabel = normalizedLabel.toLowerCase();
-    final id = lowerLabel.contains('healthy')
-        ? 'healthy'
-        : _slugify('${rawCrop.toLowerCase()}_${rawDisease.toLowerCase()}');
+    final id = (parts.length == 1 && lowerLabel.contains('healthy'))
+      ? 'healthy'
+      : _slugify('${rawCrop.toLowerCase()}_${rawDisease.toLowerCase()}');
 
     return LabelMapping(
       id: id,

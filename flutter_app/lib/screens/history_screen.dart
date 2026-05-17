@@ -4,6 +4,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../services/database_service.dart';
+import '../services/disease_info_service.dart';
 import '../models/scan_result.dart';
 import '../utils/constants.dart';
 import 'results_screen.dart';
@@ -17,6 +18,7 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   final _databaseService = DatabaseService();
+  final _diseaseInfoService = DiseaseInfoService();
   List<ScanResult> _allScans = [];
   List<ScanResult> _filteredScans = [];
   bool _isLoading = true;
@@ -53,17 +55,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
     setState(() {
       _filteredScans = _allScans.where((scan) {
         final topPrediction = scan.predictions.first;
+        final disease = _diseaseInfoService.getDisease(topPrediction.label) ??
+            topPrediction.disease;
         
         // Filter by crop
-        if (_filterCrop != 'All' && topPrediction.disease.crop != _filterCrop) {
+        if (_filterCrop != 'All' && disease.crop != _filterCrop) {
           return false;
         }
         
         // Filter by search query
         if (_searchQuery.isNotEmpty) {
           final query = _searchQuery.toLowerCase();
-          return topPrediction.disease.name.toLowerCase().contains(query) ||
-                 topPrediction.disease.crop.toLowerCase().contains(query);
+          return disease.name.toLowerCase().contains(query) ||
+                 disease.crop.toLowerCase().contains(query);
         }
         
         return true;
@@ -116,7 +120,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     // Get unique crops for filter
     final crops = ['All', ..._allScans
-        .map((s) => s.predictions.first.disease.crop)
+        .map((s) {
+          final topPrediction = s.predictions.first;
+          final disease = _diseaseInfoService.getDisease(topPrediction.label) ??
+              topPrediction.disease;
+          return disease.crop;
+        })
         .toSet()
         .toList()
       ..sort()];
@@ -304,6 +313,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   
   Widget _buildScanCard(ScanResult scan) {
     final topPrediction = scan.predictions.first;
+    final disease = _diseaseInfoService.getDisease(topPrediction.label) ??
+        topPrediction.disease;
     final timeAgo = _formatDateTime(scan.timestamp);
     final confidencePercent = (topPrediction.confidence * 100).toStringAsFixed(0);
     
@@ -353,14 +364,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      topPrediction.disease.name,
+                      disease.name,
                       style: AppConstants.subheadingStyle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      topPrediction.disease.crop,
+                      disease.crop,
                       style: AppConstants.captionStyle,
                     ),
                     const SizedBox(height: 4),

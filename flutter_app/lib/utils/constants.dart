@@ -14,6 +14,8 @@ class AppConstants {
   static const int imageSize = 224;
   static const int numChannels = 3;
   static const double confidenceThreshold = 0.75;
+  // Preprocessing: "mobilenet_v2" uses [-1, 1], "efficientnet" uses [0, 1]
+  static const String preprocessType = 'mobilenet_v2';
   
   // UI Constants
   static const double borderRadius = 12.0;

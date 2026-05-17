@@ -10,7 +10,34 @@ import tensorflow as tf
 from tensorflow import keras
 
 
-def representative_dataset_generator(data_dir, num_samples=1000, image_size=(224, 224)):
+def get_preprocess_fn(architecture):
+    """Return the appropriate preprocess_input function for a given architecture."""
+    if not architecture:
+        return None
+
+    arch = architecture.lower()
+    if arch == "mobilenetv2":
+        return tf.keras.applications.mobilenet_v2.preprocess_input
+    if "efficientnet" in arch:
+        return tf.keras.applications.efficientnet.preprocess_input
+    return None
+
+
+def infer_architecture_from_path(model_path):
+    lower = model_path.lower()
+    if "efficientnet" in lower:
+        return "efficientnet_lite0"
+    if "mobilenet" in lower:
+        return "mobilenetv2"
+    return "mobilenetv2"
+
+
+def representative_dataset_generator(
+    data_dir,
+    num_samples=1000,
+    image_size=(224, 224),
+    preprocess_fn=None,
+):
     """
     Generator for representative dataset used in quantization calibration
 
@@ -32,14 +59,20 @@ def representative_dataset_generator(data_dir, num_samples=1000, image_size=(224
         if count >= num_samples:
             break
 
-        # Keep input scale consistent with training pipeline.
-        # training/utils.py loads images in [0, 255] float range.
+        if preprocess_fn is not None:
+            images = tf.cast(images, tf.float32)
+            images = preprocess_fn(images)
+
         yield [images]
         count += 1
 
 
 def convert_to_tflite(
-    model_path, output_path, quantize=True, representative_data_dir=None
+    model_path,
+    output_path,
+    quantize=True,
+    representative_data_dir=None,
+    architecture=None,
 ):
     """
     Convert Keras model to TensorFlow Lite format
@@ -61,6 +94,9 @@ def convert_to_tflite(
     # Create TFLite converter
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
+    arch = architecture or infer_architecture_from_path(model_path)
+    preprocess_fn = get_preprocess_fn(arch)
+
     if quantize:
         print("Applying INT8 quantization...")
 
@@ -71,7 +107,9 @@ def convert_to_tflite(
         if representative_data_dir:
             print(f"Using representative dataset from {representative_data_dir}")
             converter.representative_dataset = lambda: representative_dataset_generator(
-                representative_data_dir, num_samples=1000
+                representative_data_dir,
+                num_samples=1000,
+                preprocess_fn=preprocess_fn,
             )
 
             # Enforce full integer quantization
@@ -111,7 +149,12 @@ def convert_to_tflite(
     return output_path
 
 
-def evaluate_tflite_model(tflite_path, test_data_dir, num_samples=100):
+def evaluate_tflite_model(
+    tflite_path,
+    test_data_dir,
+    num_samples=100,
+    architecture=None,
+):
     """
     Evaluate TFLite model accuracy
 
@@ -145,11 +188,17 @@ def evaluate_tflite_model(tflite_path, test_data_dir, num_samples=100):
     correct = 0
     total = 0
 
+    arch = architecture or infer_architecture_from_path(tflite_path)
+    preprocess_fn = get_preprocess_fn(arch)
+
     for images, labels in test_ds:
         if total >= num_samples:
             break
 
-        # Preprocess input (keep scale consistent with training/calibration)
+        images = tf.cast(images, tf.float32)
+        if preprocess_fn is not None:
+            images = preprocess_fn(images)
+
         input_data = images.numpy()
 
         # Check if input should be uint8
@@ -191,7 +240,7 @@ def evaluate_tflite_model(tflite_path, test_data_dir, num_samples=100):
     return accuracy
 
 
-def benchmark_inference_time(tflite_path, num_runs=100):
+def benchmark_inference_time(tflite_path, num_runs=100, architecture=None):
     """
     Benchmark inference time of TFLite model
 
@@ -215,10 +264,18 @@ def benchmark_inference_time(tflite_path, num_runs=100):
     input_dtype = input_details[0]["dtype"]
 
     # Create dummy input
+    arch = architecture or infer_architecture_from_path(tflite_path)
     if input_dtype == np.uint8:
         dummy_input = np.random.randint(0, 255, input_shape, dtype=np.uint8)
     else:
-        dummy_input = np.random.randn(*input_shape).astype(np.float32)
+        if arch == "mobilenetv2":
+            dummy_input = np.random.uniform(-1.0, 1.0, input_shape).astype(
+                np.float32
+            )
+        elif "efficientnet" in arch:
+            dummy_input = np.random.uniform(0.0, 1.0, input_shape).astype(np.float32)
+        else:
+            dummy_input = np.random.randn(*input_shape).astype(np.float32)
 
     # Warm-up runs
     for _ in range(10):
@@ -281,6 +338,12 @@ def main():
     parser.add_argument(
         "--benchmark", action="store_true", help="Benchmark inference time"
     )
+    parser.add_argument(
+        "--arch",
+        type=str,
+        default=None,
+        help="Model architecture for preprocessing (mobilenetv2 or efficientnet_lite0)",
+    )
     parser.set_defaults(quantize=True)
 
     args = parser.parse_args()
@@ -291,15 +354,16 @@ def main():
         args.output_path,
         quantize=args.quantize,
         representative_data_dir=args.representative_data,
+        architecture=args.arch,
     )
 
     # Evaluate if requested
     if args.evaluate and args.test_data:
-        evaluate_tflite_model(tflite_path, args.test_data)
+        evaluate_tflite_model(tflite_path, args.test_data, architecture=args.arch)
 
     # Benchmark if requested
     if args.benchmark:
-        benchmark_inference_time(tflite_path)
+        benchmark_inference_time(tflite_path, architecture=args.arch)
 
 
 if __name__ == "__main__":

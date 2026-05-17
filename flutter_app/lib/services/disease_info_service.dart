@@ -3,8 +3,10 @@
 
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/disease.dart';
 import '../models/treatment.dart';
+import '../utils/constants.dart';
 import '../utils/label_mapper.dart';
 
 class DiseaseInfoService {
@@ -16,9 +18,15 @@ class DiseaseInfoService {
   static const String _treatmentAssetPath = 'assets/database/treatment_info.json';
   static const String _labelsAssetPath = 'assets/labels/labels.txt';
   
-  // In-memory cache for disease information
+  // Raw JSON entries keyed by disease id
+  final Map<String, Map<String, dynamic>> _diseaseRaw = {};
+  final Map<String, Map<String, dynamic>> _treatmentRaw = {};
+
+  // Localized caches for current language
   final Map<String, Disease> _diseaseCache = {};
   final Map<String, Treatment> _treatmentCache = {};
+
+  String _languageCode = 'en';
   bool _initialized = false;
   
   /// Initialize by loading metadata from app assets and ensuring label coverage.
@@ -27,12 +35,33 @@ class DiseaseInfoService {
 
     _diseaseCache.clear();
     _treatmentCache.clear();
+    _diseaseRaw.clear();
+    _treatmentRaw.clear();
 
+    await _loadLanguagePreference();
     await _loadDiseaseDataFromJson();
     await _loadTreatmentDataFromJson();
     await _ensureCoverageForAllLabels();
+    _rebuildLocalizedCaches();
 
     _initialized = true;
+  }
+
+  Future<void> _loadLanguagePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    _languageCode = prefs.getString(AppConstants.keyLanguage) ?? 'en';
+  }
+
+  Future<void> setLanguage(String languageCode) async {
+    if (languageCode.isEmpty || _languageCode == languageCode) {
+      return;
+    }
+
+    _languageCode = languageCode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(AppConstants.keyLanguage, languageCode);
+
+    _rebuildLocalizedCaches();
   }
 
   Future<void> _loadDiseaseDataFromJson() async {
@@ -46,29 +75,7 @@ class DiseaseInfoService {
       final id = (entry['id'] as String?)?.trim();
       if (id == null || id.isEmpty) continue;
 
-      final favorableConditions = entry['favorable_conditions'] is List
-          ? List<String>.from(entry['favorable_conditions'])
-          : <String>[];
-      final spread = (entry['spread'] as String?)?.trim();
-      final causes = entry['causes'] is List
-          ? List<String>.from(entry['causes'])
-          : <String>[
-              ...favorableConditions,
-              if (spread != null && spread.isNotEmpty) spread,
-            ];
-
-      _diseaseCache[id] = Disease(
-        id: id,
-        name: (entry['name'] as String?)?.trim() ?? 'Unknown Disease',
-        crop: (entry['crop'] as String?)?.trim() ?? 'Unknown Crop',
-        description: (entry['description'] as String?)?.trim() ??
-            'No detailed description available.',
-        symptoms: entry['symptoms'] is List
-            ? List<String>.from(entry['symptoms'])
-            : const <String>[],
-        causes: causes,
-        imageUrl: (entry['image_url'] as String?)?.trim(),
-      );
+      _diseaseRaw[id] = Map<String, dynamic>.from(entry);
     }
   }
 
@@ -83,29 +90,7 @@ class DiseaseInfoService {
       final diseaseId = (entry['disease_id'] as String?)?.trim();
       if (diseaseId == null || diseaseId.isEmpty) continue;
 
-      final linkedDisease = _diseaseCache[diseaseId];
-      final diseaseName = (entry['disease_name'] as String?)?.trim() ??
-          linkedDisease?.displayName ??
-          diseaseId.replaceAll('_', ' ');
-
-      _treatmentCache[diseaseId] = Treatment(
-        diseaseId: diseaseId,
-        diseaseName: diseaseName,
-        culturalControl: entry['cultural_control'] is List
-            ? List<String>.from(entry['cultural_control'])
-            : const <String>[],
-        chemicalControl: entry['chemical_control'] is List
-            ? List<String>.from(entry['chemical_control'])
-            : const <String>[],
-        biologicalControl: entry['biological_control'] is List
-            ? List<String>.from(entry['biological_control'])
-            : const <String>[],
-        preventionTips: entry['prevention_tips'] is List
-            ? List<String>.from(entry['prevention_tips'])
-            : const <String>[],
-        severity: (entry['severity'] as String?)?.trim() ??
-            _defaultSeverityForDiseaseId(diseaseId),
-      );
+      _treatmentRaw[diseaseId] = Map<String, dynamic>.from(entry);
     }
   }
 
@@ -120,23 +105,20 @@ class DiseaseInfoService {
     for (final label in labels) {
       final mapped = LabelMapper.fromLabel(label);
 
-      _diseaseCache.putIfAbsent(
+      _diseaseRaw.putIfAbsent(
         mapped.id,
-        () => _buildFallbackDisease(mapped),
+        () => _buildFallbackDiseaseEntry(mapped),
       );
 
-      _treatmentCache.putIfAbsent(
+      _treatmentRaw.putIfAbsent(
         mapped.id,
-        () => _buildFallbackTreatment(
-          mapped,
-          _diseaseCache[mapped.id],
-        ),
+        () => _buildFallbackTreatmentEntry(mapped),
       );
     }
 
-    _diseaseCache.putIfAbsent(
+    _diseaseRaw.putIfAbsent(
       'healthy',
-      () => _buildFallbackDisease(
+      () => _buildFallbackDiseaseEntry(
         const LabelMapping(
           id: 'healthy',
           crop: 'General',
@@ -145,49 +127,84 @@ class DiseaseInfoService {
       ),
     );
 
-    _treatmentCache.putIfAbsent(
+    _treatmentRaw.putIfAbsent(
       'healthy',
-      () => _buildFallbackTreatment(
+      () => _buildFallbackTreatmentEntry(
         const LabelMapping(
           id: 'healthy',
           crop: 'General',
           diseaseName: 'Healthy',
         ),
-        _diseaseCache['healthy'],
       ),
     );
   }
 
-  Disease _buildFallbackDisease(LabelMapping mapped) {
-    final isHealthy = mapped.id == 'healthy';
-    return Disease(
-      id: mapped.id,
-      name: mapped.diseaseName,
-      crop: mapped.crop,
-      description: isHealthy
+  bool _isHealthyId(String diseaseId) {
+    return diseaseId.toLowerCase().endsWith('_healthy') || diseaseId == 'healthy';
+  }
+
+  Map<String, dynamic> _buildFallbackDiseaseEntry(LabelMapping mapped) {
+    final isHealthy = _isHealthyId(mapped.id);
+
+    return {
+      'id': mapped.id,
+      'name_en': mapped.diseaseName,
+      'name_bn': mapped.diseaseName,
+      'name_ur': mapped.diseaseName,
+      'crop_en': mapped.crop,
+      'crop_bn': mapped.crop,
+      'crop_ur': mapped.crop,
+      'description_en': isHealthy
           ? 'Plant appears healthy with no obvious disease symptoms.'
           : 'No curated description available yet for this class.',
-      symptoms: isHealthy
+      'description_bn': isHealthy
+          ? 'গাছে সুস্থতার লক্ষণ রয়েছে, স্পষ্ট রোগের উপসর্গ নেই।'
+          : 'এই শ্রেণির জন্য এখনো বিস্তারিত বর্ণনা নেই।',
+      'description_ur': isHealthy
+          ? 'پودا صحت مند نظر آتا ہے، بیماری کی واضح علامات نہیں ہیں۔'
+          : 'اس کلاس کے لیے ابھی کوئی تفصیلی وضاحت دستیاب نہیں۔',
+      'symptoms_en': isHealthy
           ? const <String>['No visible disease symptoms detected']
           : const <String>[
               'Visual symptoms may vary; inspect leaf color, spots, and lesions.'
             ],
-      causes: isHealthy
+      'symptoms_bn': isHealthy
+          ? const <String>['দৃশ্যমান রোগের উপসর্গ দেখা যায়নি']
+          : const <String>[
+              'উপসর্গ ভিন্ন হতে পারে; পাতার রং, দাগ ও ক্ষত পর্যবেক্ষণ করুন।'
+            ],
+      'symptoms_ur': isHealthy
+          ? const <String>['بیماری کی کوئی واضح علامات نظر نہیں آتیں']
+          : const <String>[
+              'علامات مختلف ہو سکتی ہیں؛ پتوں کے رنگ، دھبوں اور زخموں کا مشاہدہ کریں۔'
+            ],
+      'causes_en': isHealthy
           ? const <String>['N/A']
           : const <String>[
               'Consult local agronomy guidance to confirm root causes for this class.'
             ],
-    );
+      'causes_bn': isHealthy
+          ? const <String>['প্রযোজ্য নয়']
+          : const <String>[
+              'এই শ্রেণির প্রকৃত কারণ নিশ্চিত করতে স্থানীয় কৃষি বিশেষজ্ঞের পরামর্শ নিন।'
+            ],
+      'causes_ur': isHealthy
+          ? const <String>['لاگو نہیں']
+          : const <String>[
+              'اصل وجہ کی تصدیق کے لیے مقامی زرعی ماہر سے مشورہ کریں۔'
+            ],
+    };
   }
 
-  Treatment _buildFallbackTreatment(LabelMapping mapped, Disease? disease) {
-    final isHealthy = mapped.id == 'healthy';
-    final displayName = disease?.displayName ?? '${mapped.crop} - ${mapped.diseaseName}';
+  Map<String, dynamic> _buildFallbackTreatmentEntry(LabelMapping mapped) {
+    final isHealthy = _isHealthyId(mapped.id);
 
-    return Treatment(
-      diseaseId: mapped.id,
-      diseaseName: displayName,
-      culturalControl: isHealthy
+    return {
+      'disease_id': mapped.id,
+      'disease_name_en': '${mapped.crop} - ${mapped.diseaseName}',
+      'disease_name_bn': '${mapped.crop} - ${mapped.diseaseName}',
+      'disease_name_ur': '${mapped.crop} - ${mapped.diseaseName}',
+      'cultural_control_en': isHealthy
           ? const <String>[
               'Maintain current care routine and continue periodic monitoring.',
             ]
@@ -195,17 +212,53 @@ class DiseaseInfoService {
               'Remove severely affected leaves and keep field hygiene high.',
               'Improve airflow and avoid prolonged leaf wetness when possible.',
             ],
-      chemicalControl: isHealthy
+      'cultural_control_bn': isHealthy
+          ? const <String>[
+              'বর্তমান পরিচর্যা বজায় রাখুন এবং নিয়মিত পর্যবেক্ষণ চালিয়ে যান।',
+            ]
+          : const <String>[
+              'অত্যন্ত আক্রান্ত পাতা সরিয়ে দিন এবং ক্ষেত পরিষ্কার রাখুন।',
+              'বাতাস চলাচল বাড়ান এবং পাতার দীর্ঘ ভেজাভাব এড়ান।',
+            ],
+      'cultural_control_ur': isHealthy
+          ? const <String>[
+              'موجودہ نگہداشت جاری رکھیں اور باقاعدگی سے نگرانی کریں۔',
+            ]
+          : const <String>[
+              'شدید متاثرہ پتے ہٹا دیں اور کھیت کی صفائی رکھیں۔',
+              'ہوا کی گردش بہتر کریں اور پتوں کے زیادہ دیر گیلا رہنے سے بچیں۔',
+            ],
+      'chemical_control_en': isHealthy
           ? const <String>['No chemical control needed for healthy plants.']
           : const <String>[
               'Use crop-appropriate products only after confirming diagnosis locally.',
             ],
-      biologicalControl: isHealthy
+      'chemical_control_bn': isHealthy
+          ? const <String>['সুস্থ গাছের জন্য রাসায়নিক প্রয়োজন নেই।']
+          : const <String>[
+              'স্থানীয়ভাবে রোগ নিশ্চিত হওয়ার পরই ফসল উপযোগী পণ্য ব্যবহার করুন।',
+            ],
+      'chemical_control_ur': isHealthy
+          ? const <String>['صحت مند پودوں کے لیے کیمیائی علاج کی ضرورت نہیں۔']
+          : const <String>[
+              'مقامی تشخیص کے بعد ہی فصل کے مطابق مصنوعات استعمال کریں۔',
+            ],
+      'biological_control_en': isHealthy
           ? const <String>['No biological control needed.']
           : const <String>[
               'Consider locally recommended bio-control options as applicable.',
             ],
-      preventionTips: isHealthy
+      'biological_control_bn': isHealthy
+          ? const <String>['কোনো জৈব নিয়ন্ত্রণের প্রয়োজন নেই।']
+          : const <String>[
+              'প্রযোজ্য হলে স্থানীয়ভাবে সুপারিশকৃত জৈব নিয়ন্ত্রণ ব্যবহার করুন।',
+            ],
+      'biological_control_ur': isHealthy
+          ? const <String>['کسی حیاتیاتی کنٹرول کی ضرورت نہیں۔']
+          : const <String>[
+              'ضرورت کے مطابق مقامی طور پر تجویز کردہ بایو کنٹرول اختیار کریں۔',
+            ],
+      'prevention_tips_en': isHealthy
           ? const <String>[
               'Keep monitoring regularly for early symptom detection.',
             ]
@@ -213,8 +266,119 @@ class DiseaseInfoService {
               'Use clean tools and avoid moving infected plant material between plots.',
               'Follow local integrated pest and disease management guidelines.',
             ],
-      severity: isHealthy ? 'none' : _defaultSeverityForDiseaseId(mapped.id),
+      'prevention_tips_bn': isHealthy
+          ? const <String>[
+              'প্রাথমিক লক্ষণ শনাক্তের জন্য নিয়মিত পর্যবেক্ষণ করুন।',
+            ]
+          : const <String>[
+              'পরিষ্কার যন্ত্রপাতি ব্যবহার করুন এবং আক্রান্ত অংশ অন্য ক্ষেতে না নিন।',
+              'স্থানীয় সমন্বিত রোগ ব্যবস্থাপনা নির্দেশিকা অনুসরণ করুন।',
+            ],
+      'prevention_tips_ur': isHealthy
+          ? const <String>[
+              'ابتدائی علامات کے لیے باقاعدہ نگرانی کریں۔',
+            ]
+          : const <String>[
+              'صاف اوزار استعمال کریں اور متاثرہ مواد کو کھیتوں کے درمیان منتقل نہ کریں۔',
+              'مقامی مربوط بیماری مینجمنٹ ہدایات پر عمل کریں۔',
+            ],
+      'severity': isHealthy ? 'none' : _defaultSeverityForDiseaseId(mapped.id),
+    };
+  }
+
+  String _getText(Map<String, dynamic> entry, String baseKey, String fallback) {
+    final langKey = '${baseKey}_$_languageCode';
+    if (entry[langKey] is String && (entry[langKey] as String).trim().isNotEmpty) {
+      return (entry[langKey] as String).trim();
+    }
+
+    final enKey = '${baseKey}_en';
+    if (entry[enKey] is String && (entry[enKey] as String).trim().isNotEmpty) {
+      return (entry[enKey] as String).trim();
+    }
+
+    if (entry[baseKey] is String && (entry[baseKey] as String).trim().isNotEmpty) {
+      return (entry[baseKey] as String).trim();
+    }
+
+    return fallback;
+  }
+
+  List<String> _getList(Map<String, dynamic> entry, String baseKey) {
+    final langKey = '${baseKey}_$_languageCode';
+    if (entry[langKey] is List) {
+      return List<String>.from(entry[langKey]);
+    }
+
+    final enKey = '${baseKey}_en';
+    if (entry[enKey] is List) {
+      return List<String>.from(entry[enKey]);
+    }
+
+    if (entry[baseKey] is List) {
+      return List<String>.from(entry[baseKey]);
+    }
+
+    return const <String>[];
+  }
+
+  Disease _buildDiseaseFromEntry(String id, Map<String, dynamic> entry) {
+    final name = _getText(entry, 'name', 'Unknown Disease');
+    final crop = _getText(entry, 'crop', 'Unknown Crop');
+    final description = _getText(
+      entry,
+      'description',
+      'No detailed description available.',
     );
+    final symptoms = _getList(entry, 'symptoms');
+    final causes = _getList(entry, 'causes');
+    final favorable = _getList(entry, 'favorable_conditions');
+    final spread = _getText(entry, 'spread', '');
+
+    final derivedCauses = causes.isNotEmpty
+        ? causes
+        : <String>[
+            ...favorable,
+            if (spread.isNotEmpty) spread,
+          ];
+
+    return Disease(
+      id: id,
+      name: name,
+      crop: crop,
+      description: description,
+      symptoms: symptoms,
+      causes: derivedCauses,
+      imageUrl: (entry['image_url'] as String?)?.trim(),
+    );
+  }
+
+  Treatment _buildTreatmentFromEntry(String id, Map<String, dynamic> entry) {
+    final diseaseName = _getText(entry, 'disease_name', id.replaceAll('_', ' '));
+
+    return Treatment(
+      diseaseId: id,
+      diseaseName: diseaseName,
+      culturalControl: _getList(entry, 'cultural_control'),
+      chemicalControl: _getList(entry, 'chemical_control'),
+      biologicalControl: _getList(entry, 'biological_control'),
+      preventionTips: _getList(entry, 'prevention_tips'),
+      severity: (entry['severity'] as String?)?.trim() ??
+          _defaultSeverityForDiseaseId(id),
+    );
+  }
+
+  void _rebuildLocalizedCaches() {
+    _diseaseCache.clear();
+    _treatmentCache.clear();
+
+    for (final entry in _diseaseRaw.entries) {
+      _diseaseCache[entry.key] = _buildDiseaseFromEntry(entry.key, entry.value);
+    }
+
+    for (final entry in _treatmentRaw.entries) {
+      _treatmentCache[entry.key] = _buildTreatmentFromEntry(entry.key, entry.value);
+    }
   }
 
   String _defaultSeverityForDiseaseId(String diseaseId) {
@@ -274,8 +438,11 @@ class DiseaseInfoService {
     }
 
     final mapped = LabelMapper.fromLabel(diseaseId);
-    final disease = getDisease(mapped.id);
-    return _buildFallbackTreatment(mapped, disease);
+    final fallbackEntry = _buildFallbackTreatmentEntry(mapped);
+    _treatmentRaw[mapped.id] = fallbackEntry;
+    final fallback = _buildTreatmentFromEntry(mapped.id, fallbackEntry);
+    _treatmentCache[mapped.id] = fallback;
+    return fallback;
   }
   
   /// Get all diseases for a crop

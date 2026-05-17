@@ -41,15 +41,33 @@ class ImageUtils {
       AppConstants.numChannels
     );
     
+    final preprocessType = AppConstants.preprocessType;
+    final useMobilenet = preprocessType == 'mobilenet_v2';
+    final useEfficientnet = preprocessType == 'efficientnet';
+
     int pixelIndex = 0;
     for (int y = 0; y < resizedImage.height; y++) {
       for (int x = 0; x < resizedImage.width; x++) {
         final pixel = resizedImage.getPixel(x, y);
         
         // Extract RGB values
-        convertedBytes[pixelIndex++] = img.getRed(pixel).toDouble();
-        convertedBytes[pixelIndex++] = img.getGreen(pixel).toDouble();
-        convertedBytes[pixelIndex++] = img.getBlue(pixel).toDouble();
+        double r = img.getRed(pixel).toDouble();
+        double g = img.getGreen(pixel).toDouble();
+        double b = img.getBlue(pixel).toDouble();
+
+        if (useMobilenet) {
+          r = r / 127.5 - 1.0;
+          g = g / 127.5 - 1.0;
+          b = b / 127.5 - 1.0;
+        } else if (useEfficientnet) {
+          r = r / 255.0;
+          g = g / 255.0;
+          b = b / 255.0;
+        }
+
+        convertedBytes[pixelIndex++] = r;
+        convertedBytes[pixelIndex++] = g;
+        convertedBytes[pixelIndex++] = b;
       }
     }
     

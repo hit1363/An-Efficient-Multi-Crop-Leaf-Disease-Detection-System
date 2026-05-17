@@ -17,6 +17,8 @@ try:
     from .utils import (
         load_dataset,
         compute_class_weights,
+        create_augmentation_layer,
+        get_preprocess_fn,
         setup_callbacks,
         setup_logging,
         save_class_names,
@@ -27,6 +29,8 @@ except ImportError:
     from utils import (
         load_dataset,
         compute_class_weights,
+        create_augmentation_layer,
+        get_preprocess_fn,
         setup_callbacks,
         setup_logging,
         save_class_names,
@@ -202,11 +206,19 @@ def train_model(config_path="config.yaml"):
 
     # Load datasets
     logger.info("Loading datasets...")
+    preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
+    augmentation = (
+        create_augmentation_layer(config)
+        if config.get("augmentation")
+        else None
+    )
     train_ds, val_ds, class_names = load_dataset(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
         batch_size=config["dataset"]["batch_size"],
         image_size=tuple(config["model"]["input_shape"][:2]),
+        preprocess_fn=preprocess_fn,
+        augmentation=augmentation,
     )
 
     logger.info(f"Found {len(class_names)} classes")

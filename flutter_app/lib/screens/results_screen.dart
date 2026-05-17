@@ -7,7 +7,6 @@ import '../services/ml_service.dart';
 import '../services/database_service.dart';
 import '../services/disease_info_service.dart';
 import '../models/scan_result.dart';
-import '../models/disease.dart';
 import '../models/treatment.dart';
 import '../widgets/disease_card.dart';
 import '../widgets/confidence_bar.dart';
@@ -227,6 +226,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
   
   Widget _buildTopPrediction() {
     final topPrediction = _result!.predictions.first;
+    final disease = _diseaseInfoService.getDisease(topPrediction.label) ??
+        topPrediction.disease;
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -237,7 +238,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
         ),
         const SizedBox(height: 12),
         DiseaseCard(
-          disease: topPrediction.disease,
+          disease: disease,
           confidence: topPrediction.confidence,
         ),
       ],
@@ -261,11 +262,13 @@ class _ResultsScreenState extends State<ResultsScreen> {
             ),
             const SizedBox(height: 16),
             ..._result!.predictions.map((pred) {
+              final disease = _diseaseInfoService.getDisease(pred.label) ??
+                  pred.disease;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: ConfidenceBar(
                   confidence: pred.confidence,
-                  label: '${pred.disease.crop} - ${pred.disease.name}',
+                  label: '${disease.crop} - ${disease.name}',
                 ),
               );
             }).toList(),

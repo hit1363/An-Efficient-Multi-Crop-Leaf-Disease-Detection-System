@@ -35,7 +35,27 @@ def setup_logging(config):
     return logger
 
 
-def load_dataset(train_dir, val_dir, batch_size=32, image_size=(224, 224)):
+def get_preprocess_fn(architecture):
+    """Return the appropriate preprocess_input function for a given architecture."""
+    if not architecture:
+        return None
+
+    arch = architecture.lower()
+    if arch == "mobilenetv2":
+        return tf.keras.applications.mobilenet_v2.preprocess_input
+    if "efficientnet" in arch:
+        return tf.keras.applications.efficientnet.preprocess_input
+    return None
+
+
+def load_dataset(
+    train_dir,
+    val_dir,
+    batch_size=32,
+    image_size=(224, 224),
+    preprocess_fn=None,
+    augmentation=None,
+):
     """
     Load training and validation datasets
 
@@ -69,8 +89,24 @@ def load_dataset(train_dir, val_dir, batch_size=32, image_size=(224, 224)):
 
     class_names = train_ds.class_names
 
-    # Optimize dataset performance
+    # Apply augmentation only on training data
     AUTOTUNE = tf.data.AUTOTUNE
+    if augmentation is not None:
+        train_ds = train_ds.map(
+            lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
+            num_parallel_calls=AUTOTUNE,
+        )
+
+    if preprocess_fn is not None:
+        def _apply_preprocess(x, y):
+            x = tf.cast(x, tf.float32)
+            x = preprocess_fn(x)
+            return x, y
+
+        train_ds = train_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
+        val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
+
+    # Optimize dataset performance
     train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
@@ -128,9 +164,16 @@ def compute_class_weights(data_dir):
         class_counts[i] = count
 
     total = sum(class_counts.values())
-    class_weights = {
-        i: total / (len(class_counts) * count) for i, count in class_counts.items()
-    }
+    nonzero = {i: count for i, count in class_counts.items() if count > 0}
+    if not nonzero:
+        return {}
+
+    class_weights = {}
+    for i, count in class_counts.items():
+        if count > 0:
+            class_weights[i] = total / (len(nonzero) * count)
+        else:
+            class_weights[i] = 0.0
 
     return class_weights
 
@@ -231,7 +274,7 @@ def setup_callbacks(config):
     return callbacks
 
 
-def preprocess_image(image_path, image_size=(224, 224)):
+def preprocess_image(image_path, image_size=(224, 224), preprocess_fn=None):
     """
     Preprocess single image for inference
 
@@ -244,8 +287,11 @@ def preprocess_image(image_path, image_size=(224, 224)):
     """
     img = keras.preprocessing.image.load_img(image_path, target_size=image_size)
     img_array = keras.preprocessing.image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = img_array / 255.0
+    img_array = np.expand_dims(img_array, axis=0).astype("float32")
+    if preprocess_fn is not None:
+        img_array = preprocess_fn(img_array)
+    else:
+        img_array = img_array / 255.0
 
     return img_array
 

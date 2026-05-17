@@ -1,113 +1,316 @@
 [
   {
     "id": "tomato_early_blight",
-    "crop": "Tomato",
-    "name": "Early Blight",
+    "crop_en": "Tomato",
+    "crop_bn": "টমেটো",
+    "crop_ur": "ٹماٹر",
+    "name_en": "Early Blight",
+    "name_bn": "আর্লি ব্লাইট",
+    "name_ur": "ارلی بلائٹ",
     "scientific_name": "Alternaria solani",
     "severity": "moderate",
-    "description": "Early blight is a common fungal disease affecting tomatoes. It appears as dark brown spots with concentric rings on older leaves, eventually causing leaf yellowing and drop.",
-    "symptoms": [
+    "description_en": "Early blight is a common fungal disease affecting tomatoes. It appears as dark brown spots with concentric rings on older leaves, eventually causing leaf yellowing and drop.",
+    "description_bn": "আর্লি ব্লাইট টমেটোর একটি সাধারণ ছত্রাকজনিত রোগ। এটি পুরনো পাতায় বৃত্তাকার রিংসহ গাঢ় বাদামি দাগ হিসেবে দেখা যায় এবং শেষে পাতা হলুদ হয়ে ঝরে পড়ে।",
+    "description_ur": "ارلی بلائٹ ٹماٹر میں ایک عام فنگسی بیماری ہے۔ یہ پرانے پتوں پر ہم مرکز دائروں والے گہرے بھورے دھبوں کی صورت میں ظاہر ہوتی ہے اور آخرکار پتوں کے زرد ہو کر گرنے کا سبب بنتی ہے۔",
+    "symptoms_en": [
       "Dark brown spots with concentric rings (target-like)",
       "Yellowing of older leaves",
       "Leaf drop starting from bottom of plant",
       "Stem lesions near soil line",
       "Fruit rot near calyx"
     ],
-    "favorable_conditions": [
+    "symptoms_bn": [
+      "বৃত্তাকার রিংসহ গাঢ় বাদামি দাগ (টার্গেটের মতো)",
+      "পুরনো পাতায় হলদে ভাব",
+      "গাছের নিচের দিক থেকে পাতা ঝরা",
+      "মাটির কাছাকাছি কাণ্ডে ক্ষত/দাগ",
+      "ফলের ক্যালিক্স অংশের কাছে পচন"
+    ],
+    "symptoms_ur": [
+      "ہم مرکز دائروں والے گہرے بھورے دھبے (ہدف نما)",
+      "پرانے پتوں کا پیلا ہونا",
+      "پودے کے نچلے حصے سے پتوں کا گرنا",
+      "مٹی کے قریب تنے پر زخم",
+      "پھل کے کَیلیکس کے قریب سڑن"
+    ],
+    "favorable_conditions_en": [
       "Warm temperatures (24-29°C)",
       "High humidity",
       "Long periods of leaf wetness",
       "Poor air circulation",
       "Nitrogen deficiency"
     ],
-    "spread": "Spreads by wind-blown spores, water splash, and contaminated tools"
+    "favorable_conditions_bn": [
+      "উষ্ণ তাপমাত্রা (24-29°C)",
+      "উচ্চ আর্দ্রতা",
+      "পাতা দীর্ঘক্ষণ ভেজা থাকা",
+      "বাতাস চলাচল কম",
+      "নাইট্রোজেনের ঘাটতি"
+    ],
+    "favorable_conditions_ur": [
+      "گرم درجہ حرارت (24-29°C)",
+      "زیادہ نمی",
+      "پتوں کا طویل وقت تک نم رہنا",
+      "ہوا کی ناکافی گردش",
+      "نائٹروجن کی کمی"
+    ],
+    "spread_en": "Spreads by wind-blown spores, water splash, and contaminated tools",
+    "spread_bn": "বাতাসে ভেসে যাওয়া স্পোর, পানির ছিটা এবং দূষিত যন্ত্রপাতির মাধ্যমে ছড়ায়",
+    "spread_ur": "ہوا سے اڑنے والے اسپورز، پانی کے چھینٹے اور آلودہ اوزار سے پھیلتی ہے"
   },
   {
     "id": "potato_late_blight",
-    "crop": "Potato",
-    "name": "Late Blight",
+    "crop_en": "Potato",
+    "crop_bn": "আলু",
+    "crop_ur": "آلو",
+    "name_en": "Late Blight",
+    "name_bn": "লেট ব্লাইট",
+    "name_ur": "لیٹ بلائٹ",
     "scientific_name": "Phytophthora infestans",
     "severity": "severe",
-    "description": "Late blight is a devastating disease that can destroy entire potato crops within days. It's the same disease that caused the Irish Potato Famine.",
-    "symptoms": [
+    "description_en": "Late blight is a devastating disease that can destroy entire potato crops within days. It's the same disease that caused the Irish Potato Famine.",
+    "description_bn": "লেট ব্লাইট একটি বিধ্বংসী রোগ যা কয়েক দিনের মধ্যে সম্পূর্ণ আলুর ক্ষেত নষ্ট করতে পারে। এটি আইরিশ পটেটো ফ্যামিন সৃষ্টিকারী একই রোগ।",
+    "description_ur": "لیٹ بلائٹ ایک تباہ کن بیماری ہے جو چند دنوں میں آلو کی پوری فصل کو برباد کر سکتی ہے۔ یہی بیماری آئرش پوٹیٹو قحط کا سبب بنی تھی۔",
+    "symptoms_en": [
       "Water-soaked spots on leaves",
       "White fungal growth on leaf undersides",
       "Rapid browning and death of foliage",
       "Dark brown lesions on stems",
       "Brown rot of tubers"
     ],
-    "favorable_conditions": [
+    "symptoms_bn": [
+      "পাতায় পানিভেজা দাগ",
+      "পাতার নিচে সাদা ছত্রাকের বৃদ্ধি",
+      "পাতা দ্রুত বাদামী হয়ে শুকিয়ে যাওয়া",
+      "কাণ্ডে গাঢ় বাদামি ক্ষত",
+      "কন্দে বাদামি পচন"
+    ],
+    "symptoms_ur": [
+      "پتوں پر پانی سے بھیگے دھبے",
+      "پتوں کی نچلی سطح پر سفید پھپھوندی",
+      "پتوں کا تیزی سے بھورا ہونا اور مرجھا جانا",
+      "تنے پر گہرے بھورے زخم",
+      "گٹھوں میں بھورا سڑاؤ"
+    ],
+    "favorable_conditions_en": [
       "Cool temperatures (15-20°C)",
       "High humidity (>90%)",
       "Frequent rain or heavy dew",
       "Cloudy weather"
     ],
-    "spread": "Spreads rapidly by airborne spores, especially in wet weather"
+    "favorable_conditions_bn": [
+      "শীতল তাপমাত্রা (15-20°C)",
+      "উচ্চ আর্দ্রতা (>90%)",
+      "বারবার বৃষ্টি বা ঘন শিশির",
+      "মেঘলা আবহাওয়া"
+    ],
+    "favorable_conditions_ur": [
+      "ٹھنڈا درجہ حرارت (15-20°C)",
+      "زیادہ نمی (>90%)",
+      "بار بار بارش یا زیادہ شبنم",
+      "ابر آلود موسم"
+    ],
+    "spread_en": "Spreads rapidly by airborne spores, especially in wet weather",
+    "spread_bn": "ভেজা আবহাওয়ায় বাতাসে ভেসে যাওয়া স্পোরের মাধ্যমে দ্রুত ছড়ায়",
+    "spread_ur": "نم موسم میں ہوا کے ذریعے تیزی سے پھیلنے والے اسپورز سے پھیلتی ہے"
   },
   {
     "id": "corn_northern_leaf_blight",
-    "crop": "Corn",
-    "name": "Northern Leaf Blight",
+    "crop_en": "Corn",
+    "crop_bn": "ভুট্টা",
+    "crop_ur": "مکئی",
+    "name_en": "Northern Leaf Blight",
+    "name_bn": "নর্দার্ন লিফ ব্লাইট",
+    "name_ur": "ناردن لیف بلائٹ",
     "scientific_name": "Exserohilum turcicum",
     "severity": "moderate",
-    "description": "Northern leaf blight is a fungal disease causing long, cigar-shaped lesions on corn leaves, reducing photosynthetic area and yield.",
-    "symptoms": [
+    "description_en": "Northern leaf blight is a fungal disease causing long, cigar-shaped lesions on corn leaves, reducing photosynthetic area and yield.",
+    "description_bn": "নর্দার্ন লিফ ব্লাইট ভুট্টার একটি ছত্রাকজনিত রোগ যা পাতায় লম্বা সিগারের মতো দাগ তৈরি করে, ফলে আলোকসংস্লেষণ কমে যায় এবং ফলন কমে।",
+    "description_ur": "ناردن لیف بلائٹ مکئی کی ایک فنگسی بیماری ہے جو پتوں پر لمبی سگار نما دھبے بناتی ہے، جس سے ضیائی تالیف کم اور پیداوار گھٹ جاتی ہے۔",
+    "symptoms_en": [
       "Long, elliptical gray-green lesions",
       "Lesions become tan and papery",
       "Start on lower leaves, progress upward",
       "Can cover entire leaf blade",
       "Reduced yield due to premature leaf death"
     ],
-    "favorable_conditions": [
+    "symptoms_bn": [
+      "লম্বা উপবৃত্তাকার ধূসর-সবুজ দাগ",
+      "দাগগুলো খয়েরি ও কাগজের মতো হয়ে যায়",
+      "নিচের পাতা থেকে শুরু হয়ে ওপরে ছড়ায়",
+      "পুরো পাতার অংশ ঢেকে ফেলতে পারে",
+      "পাতা আগেই মরে যাওয়ায় ফলন কমে"
+    ],
+    "symptoms_ur": [
+      "لمبے بیضوی سرمئی سبز دھبے",
+      "دھبے خاکی اور کاغذی ہو جاتے ہیں",
+      "نچلے پتوں سے شروع ہو کر اوپر پھیلتے ہیں",
+      "پورے پتے کو ڈھانپ سکتے ہیں",
+      "پتے قبل از وقت مرنے سے پیداوار کم ہو جاتی ہے"
+    ],
+    "favorable_conditions_en": [
       "Moderate temperatures (18-27°C)",
       "High humidity",
       "Extended dew periods",
       "Susceptible corn varieties"
     ],
-    "spread": "Wind-blown spores from infected crop debris"
+    "favorable_conditions_bn": [
+      "মধ্যম তাপমাত্রা (18-27°C)",
+      "উচ্চ আর্দ্রতা",
+      "দীর্ঘ সময় শিশির থাকা",
+      "সংবেদনশীল ভুট্টার জাত"
+    ],
+    "favorable_conditions_ur": [
+      "معتدل درجہ حرارت (18-27°C)",
+      "زیادہ نمی",
+      "طویل عرصے تک شبنم رہنا",
+      "حساس مکئی کی اقسام"
+    ],
+    "spread_en": "Wind-blown spores from infected crop debris",
+    "spread_bn": "আক্রান্ত ফসলের অবশিষ্টাংশ থেকে বাতাসে ভেসে যাওয়া স্পোরের মাধ্যমে ছড়ায়",
+    "spread_ur": "متاثرہ فصل کے ملبے سے ہوا کے ذریعے اڑنے والے اسپورز سے پھیلتی ہے"
   },
   {
     "id": "apple_scab",
-    "crop": "Apple",
-    "name": "Apple Scab",
+    "crop_en": "Apple",
+    "crop_bn": "আপেল",
+    "crop_ur": "سیب",
+    "name_en": "Apple Scab",
+    "name_bn": "অ্যাপল স্ক্যাব",
+    "name_ur": "ایپل اسکیب",
     "scientific_name": "Venturia inaequalis",
     "severity": "moderate",
-    "description": "Apple scab is the most serious disease of apple trees, causing dark, scabby lesions on leaves and fruit.",
-    "symptoms": [
+    "description_en": "Apple scab is the most serious disease of apple trees, causing dark, scabby lesions on leaves and fruit.",
+    "description_bn": "অ্যাপল স্ক্যাব আপেল গাছের সবচেয়ে গুরুতর রোগ, যা পাতায় ও ফলের ওপর গাঢ় খসখসে ক্ষত সৃষ্টি করে।",
+    "description_ur": "ایپل اسکیب سیب کے درختوں کی ایک سنگین بیماری ہے جو پتوں اور پھل پر گہرے خارش دار دھبے بناتی ہے۔",
+    "symptoms_en": [
       "Olive-green to brown spots on leaves",
       "Velvety texture on lesions",
       "Scabby lesions on fruit",
       "Premature leaf drop",
       "Deformed fruit"
     ],
-    "favorable_conditions": [
+    "symptoms_bn": [
+      "পাতায় জলপাই সবুজ থেকে বাদামি দাগ",
+      "ক্ষতে মসৃণ-মখমলি ভাব",
+      "ফলে খসখসে ক্ষত",
+      "পাতা আগেই ঝরে পড়া",
+      "ফল বিকৃত হওয়া"
+    ],
+    "symptoms_ur": [
+      "پتوں پر زیتونی سبز سے بھورے دھبے",
+      "زخموں پر مخملی ساخت",
+      "پھل پر خارش دار دھبے",
+      "پتوں کا وقت سے پہلے گرنا",
+      "پھل کا بگڑ جانا"
+    ],
+    "favorable_conditions_en": [
       "Cool, wet spring weather",
       "Temperatures 15-24°C",
       "Frequent rain during bloom",
       "Poor air circulation"
     ],
-    "spread": "Spores released from fallen leaves, spread by rain splash"
+    "favorable_conditions_bn": [
+      "শীতল ও ভেজা বসন্তকাল",
+      "তাপমাত্রা 15-24°C",
+      "ফুল ফোটা সময় বারবার বৃষ্টি",
+      "বাতাস চলাচল কম"
+    ],
+    "favorable_conditions_ur": [
+      "ٹھنڈی اور گیلی بہار",
+      "درجہ حرارت 15-24°C",
+      "پھول آنے کے دوران بار بار بارش",
+      "ہوا کی کم گردش"
+    ],
+    "spread_en": "Spores released from fallen leaves, spread by rain splash",
+    "spread_bn": "ঝরে পড়া পাতার স্পোর বৃষ্টির ছিটায় ছড়ায়",
+    "spread_ur": "گرے ہوئے پتوں سے خارج ہونے والے اسپورز بارش کے چھینٹوں سے پھیلتے ہیں"
   },
   {
     "id": "grape_black_rot",
-    "crop": "Grape",
-    "name": "Black Rot",
+    "crop_en": "Grape",
+    "crop_bn": "আঙ্গুর",
+    "crop_ur": "انگور",
+    "name_en": "Black Rot",
+    "name_bn": "ব্ল্যাক রট",
+    "name_ur": "بلیک راٹ",
     "scientific_name": "Guignardia bidwellii",
     "severity": "severe",
-    "description": "Black rot is a serious fungal disease of grapes causing complete fruit loss if not controlled.",
-    "symptoms": [
+    "description_en": "Black rot is a serious fungal disease of grapes causing complete fruit loss if not controlled.",
+    "description_bn": "ব্ল্যাক রট আঙ্গুরের একটি গুরুতর ছত্রাকজনিত রোগ যা নিয়ন্ত্রণ না করলে সম্পূর্ণ ফলন নষ্ট করতে পারে।",
+    "description_ur": "بلیک راٹ انگور کی ایک سنگین فنگسی بیماری ہے جو قابو نہ پانے پر پوری فصل کو نقصان پہنچا سکتی ہے۔",
+    "symptoms_en": [
       "Circular tan spots with dark border on leaves",
       "Dark lesions on shoots and tendrils",
       "Brown spots on young berries",
       "Berries shrivel and turn into mummies",
       "Complete cluster infection possible"
     ],
-    "favorable_conditions": [
+    "symptoms_bn": [
+      "পাতায় গাঢ় কিনারাযুক্ত গোল খয়েরি দাগ",
+      "কচি ডাল ও টেন্ড্রিলে গাঢ় ক্ষত",
+      "কচি বেরিতে বাদামি দাগ",
+      "বেরি কুঁচকে মমির মতো হয়ে যায়",
+      "সম্পূর্ণ থোকা সংক্রমিত হতে পারে"
+    ],
+    "symptoms_ur": [
+      "پتوں پر گہرے کناروں والے گول خاکی دھبے",
+      "نئی شاخوں اور ٹینڈرلز پر گہرے زخم",
+      "نوجوان بیریوں پر بھورے دھبے",
+      "بیریاں سکڑ کر ممی جیسی بن جاتی ہیں",
+      "پورا گچھا متاثر ہو سکتا ہے"
+    ],
+    "favorable_conditions_en": [
       "Warm temperatures (25-30°C)",
       "High humidity",
       "Frequent rainfall",
       "Poor sanitation"
     ],
-    "spread": "Rain splash from mummified berries and infected plant debris"
+    "favorable_conditions_bn": [
+      "উষ্ণ তাপমাত্রা (25-30°C)",
+      "উচ্চ আর্দ্রতা",
+      "বারবার বৃষ্টি",
+      "পরিচ্ছন্নতার অভাব"
+    ],
+    "favorable_conditions_ur": [
+      "گرم درجہ حرارت (25-30°C)",
+      "زیادہ نمی",
+      "بار بار بارش",
+      "ناقص صفائی"
+    ],
+    "spread_en": "Rain splash from mummified berries and infected plant debris",
+    "spread_bn": "মমি হওয়া বেরি ও আক্রান্ত উদ্ভিদের অবশিষ্টাংশ থেকে বৃষ্টির ছিটায় ছড়ায়",
+    "spread_ur": "ممی بنی بیریوں اور متاثرہ پودوں کے ملبے سے بارش کے چھینٹوں کے ذریعے پھیلتی ہے"
+  },
+  {
+    "id": "healthy",
+    "crop_en": "General",
+    "crop_bn": "সাধারণ",
+    "crop_ur": "عمومی",
+    "name_en": "Healthy",
+    "name_bn": "সুস্থ",
+    "name_ur": "صحت مند",
+    "severity": "none",
+    "description_en": "Plant appears healthy with no obvious disease symptoms.",
+    "description_bn": "গাছে সুস্থতার লক্ষণ রয়েছে, স্পষ্ট রোগের উপসর্গ নেই।",
+    "description_ur": "پودا صحت مند نظر آتا ہے، بیماری کی واضح علامات نہیں ہیں۔",
+    "symptoms_en": [
+      "No visible disease symptoms detected"
+    ],
+    "symptoms_bn": [
+      "দৃশ্যমান রোগের উপসর্গ দেখা যায়নি"
+    ],
+    "symptoms_ur": [
+      "بیماری کی کوئی واضح علامات نظر نہیں آتیں"
+    ],
+    "causes_en": [
+      "N/A"
+    ],
+    "causes_bn": [
+      "প্রযোজ্য নয়"
+    ],
+    "causes_ur": [
+      "لاگو نہیں"
+    ]
   }
 ]

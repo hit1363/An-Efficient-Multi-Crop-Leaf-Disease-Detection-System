@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import '../services/database_service.dart';
 import '../services/camera_service.dart';
+import '../services/disease_info_service.dart';
 import '../models/scan_result.dart';
 import '../utils/constants.dart';
 import 'camera_screen.dart';
@@ -20,6 +21,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _databaseService = DatabaseService();
+  final _diseaseInfoService = DiseaseInfoService();
   List<ScanResult> _recentScans = [];
   bool _isLoading = true;
   
@@ -89,11 +91,14 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const SettingsScreen()),
               );
+              if (mounted) {
+                setState(() {});
+              }
             },
           ),
         ],
@@ -224,13 +229,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.bar_chart,
                 label: 'Statistics',
                 color: Colors.purple,
-                onTap: () {
-                  Navigator.push(
+                onTap: () async {
+                  await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => const SettingsScreen(showStats: true),
                     ),
                   );
+                  if (mounted) {
+                    setState(() {});
+                  }
                 },
               ),
             ),
@@ -348,25 +356,27 @@ class _HomeScreenState extends State<HomeScreen> {
   
   Widget _buildRecentScanCard(ScanResult scan) {
     final topPrediction = scan.predictions.first;
+    final disease = _diseaseInfoService.getDisease(topPrediction.label) ??
+        topPrediction.disease;
     final timeAgo = _getTimeAgo(scan.timestamp);
     
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: topPrediction.disease.isHealthy
+          backgroundColor: disease.isHealthy
               ? AppConstants.successColor
               : AppConstants.primaryColor,
           child: Icon(
-            topPrediction.disease.isHealthy
+            disease.isHealthy
                 ? Icons.check
                 : Icons.warning,
             color: Colors.white,
           ),
         ),
-        title: Text(topPrediction.disease.name),
+        title: Text(disease.name),
         subtitle: Text(
-          '${topPrediction.disease.crop} • $timeAgo',
+          '${disease.crop} • $timeAgo',
           style: AppConstants.captionStyle,
         ),
         trailing: Text(

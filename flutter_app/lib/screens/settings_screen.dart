@@ -2,7 +2,9 @@
 /// App settings, statistics, and about information
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/database_service.dart';
+import '../services/disease_info_service.dart';
 import '../services/ml_service.dart';
 import '../utils/constants.dart';
 
@@ -21,12 +23,20 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with SingleTickerProviderStateMixin {
   final _databaseService = DatabaseService();
+  final _diseaseInfoService = DiseaseInfoService();
   final _mlService = MLService();
   
   late TabController _tabController;
   Map<String, dynamic>? _statistics;
   Map<String, dynamic>? _modelInfo;
   bool _isLoading = true;
+  String _languageCode = 'en';
+
+  static const Map<String, String> _languageLabels = {
+    'en': 'English',
+    'bn': 'বাংলা',
+    'ur': 'اردو',
+  };
   
   @override
   void initState() {
@@ -43,14 +53,20 @@ class _SettingsScreenState extends State<SettingsScreen>
     setState(() => _isLoading = true);
     
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final language = prefs.getString(AppConstants.keyLanguage) ?? 'en';
+
       final stats = await _databaseService.getStatistics();
       final modelInfo = await _mlService.getModelInfo();
       
       setState(() {
         _statistics = stats;
         _modelInfo = modelInfo;
+        _languageCode = language;
         _isLoading = false;
       });
+
+      await _diseaseInfoService.setLanguage(language);
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -58,6 +74,15 @@ class _SettingsScreenState extends State<SettingsScreen>
           SnackBar(content: Text('Error loading data: $e')),
         );
       }
+    }
+  }
+
+  Future<void> _setLanguage(String code) async {
+    if (_languageCode == code) return;
+
+    await _diseaseInfoService.setLanguage(code);
+    if (mounted) {
+      setState(() => _languageCode = code);
     }
   }
   
@@ -151,6 +176,30 @@ class _SettingsScreenState extends State<SettingsScreen>
         Card(
           child: Column(
             children: [
+              ListTile(
+                leading: const Icon(Icons.language),
+                title: const Text('Language'),
+                subtitle: Text(_languageLabels[_languageCode] ?? 'English'),
+                trailing: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _languageCode,
+                    items: _languageLabels.entries
+                        .map(
+                          (entry) => DropdownMenuItem(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        _setLanguage(value);
+                      }
+                    },
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
               SwitchListTile(
                 secondary: const Icon(Icons.flash_on),
                 title: const Text('Auto Flash'),
