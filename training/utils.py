@@ -91,6 +91,10 @@ def load_dataset(
 
     # Apply augmentation only on training data
     AUTOTUNE = tf.data.AUTOTUNE
+
+    # Cache raw decoded images to keep augmentation random each epoch.
+    train_ds = train_ds.cache()
+
     if augmentation is not None:
         train_ds = train_ds.map(
             lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
@@ -98,6 +102,7 @@ def load_dataset(
         )
 
     if preprocess_fn is not None:
+
         def _apply_preprocess(x, y):
             x = tf.cast(x, tf.float32)
             x = preprocess_fn(x)
@@ -107,7 +112,7 @@ def load_dataset(
         val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
 
     # Optimize dataset performance
-    train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
     return train_ds, val_ds, class_names
@@ -125,11 +130,17 @@ def create_augmentation_layer(config):
     """
     aug_config = config.get("augmentation", {})
 
+    zoom_range = aug_config.get("zoom_range", [0.8, 1.2])
+    if isinstance(zoom_range, (list, tuple)) and len(zoom_range) == 2:
+        zoom_factor = (zoom_range[0] - 1.0, zoom_range[1] - 1.0)
+    else:
+        zoom_factor = zoom_range
+
     augmentation = keras.Sequential(
         [
             keras.layers.RandomFlip("horizontal_and_vertical"),
             keras.layers.RandomRotation(aug_config.get("rotation_range", 45) / 360),
-            keras.layers.RandomZoom(aug_config.get("zoom_range", [0.8, 1.2])[0] - 1),
+            keras.layers.RandomZoom(zoom_factor),
             keras.layers.RandomContrast(0.2),
         ]
     )

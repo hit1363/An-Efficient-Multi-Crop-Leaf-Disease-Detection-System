@@ -65,9 +65,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
         throw Exception(validation['error']);
       }
       
-      // Preprocess and run inference
-      final processedImage = await ImageUtils.preprocessImage(widget.imagePath!);
-      final result = await _mlService.classifyImage(processedImage);
+      // Run inference with model-aware preprocessing
+      final result = await _mlService.classifyImage(widget.imagePath!);
       
       // Save to database
       await _databaseService.saveScanResult(result, widget.imagePath!);

@@ -9,7 +9,10 @@ import 'constants.dart';
 class ImageUtils {
   /// Preprocess image for model inference
   /// Resizes to 224x224 and keeps pixel values in [0, 255]
-  static Float32List preprocessImage(dynamic imageInput) {
+  static Float32List preprocessImage(
+    dynamic imageInput, {
+    String? preprocessType,
+  }) {
     final File imageFile;
     if (imageInput is File) {
       imageFile = imageInput;
@@ -41,9 +44,9 @@ class ImageUtils {
       AppConstants.numChannels
     );
     
-    final preprocessType = AppConstants.preprocessType;
-    final useMobilenet = preprocessType == 'mobilenet_v2';
-    final useEfficientnet = preprocessType == 'efficientnet';
+    final selectedType = preprocessType ?? AppConstants.preprocessType;
+    final useMobilenet = selectedType == 'mobilenet_v2';
+    final useEfficientnet = selectedType == 'efficientnet';
 
     int pixelIndex = 0;
     for (int y = 0; y < resizedImage.height; y++) {

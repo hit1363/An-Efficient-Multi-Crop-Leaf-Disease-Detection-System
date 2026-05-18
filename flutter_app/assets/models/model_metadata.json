@@ -49,6 +49,7 @@
     "early_stopping": true,
     "reduce_lr": true
   },
+  "preprocess_type": "mobilenet_v2",
   "preprocessing": {
     "resize": [224, 224],
     "normalization": "0-255",

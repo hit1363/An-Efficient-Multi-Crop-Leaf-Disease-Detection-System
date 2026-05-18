@@ -18,6 +18,7 @@ class MLService {
   Interpreter? _interpreter;
   List<String>? _labels;
   bool _isModelLoaded = false;
+  String _preprocessType = AppConstants.preprocessType;
   
   /// Get model loading status
   bool get isModelLoaded => _isModelLoaded;
@@ -38,6 +39,21 @@ class MLService {
       // Load labels
       final labelsData = await rootBundle.loadString(AppConstants.labelsPath);
       _labels = labelsData.split('\n').where((line) => line.isNotEmpty).toList();
+
+      // Optional metadata-driven preprocess override
+      try {
+        final metadataText =
+            await rootBundle.loadString('assets/models/model_metadata.json');
+        final metadata = jsonDecode(metadataText);
+        if (metadata is Map<String, dynamic>) {
+          final override = metadata['preprocess_type'];
+          if (override is String && override.isNotEmpty) {
+            _preprocessType = override;
+          }
+        }
+      } catch (_) {
+        _preprocessType = AppConstants.preprocessType;
+      }
 
       final outputShape = _interpreter!.getOutputTensor(0).shape;
       final modelClassCount = outputShape.isNotEmpty ? outputShape.last : 0;
@@ -72,12 +88,21 @@ class MLService {
   
   /// Run inference on image
   Future<ScanResult> predict(File imageFile) async {
-    final input = ImageUtils.preprocessImage(imageFile);
+    if (!_isModelLoaded) {
+      await loadModel();
+    }
+    final input = ImageUtils.preprocessImage(
+      imageFile,
+      preprocessType: _preprocessType,
+    );
     return _predictFromInput(input, imagePath: imageFile.path);
   }
 
   /// Backward-compatible classify API used by existing results screen code.
   Future<ScanResult> classifyImage(dynamic imageInput) async {
+    if (!_isModelLoaded) {
+      await loadModel();
+    }
     if (imageInput is File) {
       return predict(imageInput);
     }
