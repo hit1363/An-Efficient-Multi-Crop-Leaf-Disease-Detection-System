@@ -208,9 +208,7 @@ def train_model(config_path="config.yaml"):
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     augmentation = (
-        create_augmentation_layer(config)
-        if config.get("augmentation")
-        else None
+        create_augmentation_layer(config) if config.get("augmentation") else None
     )
     train_ds, val_ds, class_names = load_dataset(
         config["dataset"]["train_dir"],
@@ -337,7 +335,12 @@ def train_model(config_path="config.yaml"):
     if "saved_model" in config["export"]["formats"]:
         sm_path = os.path.join(save_dir, model_name, f"saved_model_{timestamp}")
         os.makedirs(os.path.dirname(sm_path), exist_ok=True)
-        model.save(sm_path)
+        if hasattr(model, "export"):
+            # Keras 3 requires export() for SavedModel directories.
+            model.export(sm_path)
+        else:
+            # Legacy Keras 2 behavior.
+            model.save(sm_path)
         logger.info(f"Saved SavedModel: {sm_path}")
 
     if "tflite" in config["export"]["formats"]:
