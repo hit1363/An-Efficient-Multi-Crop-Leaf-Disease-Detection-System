@@ -92,9 +92,6 @@ def load_dataset(
     # Apply augmentation only on training data
     AUTOTUNE = tf.data.AUTOTUNE
 
-    # Cache raw decoded images to keep augmentation random each epoch.
-    train_ds = train_ds.cache()
-
     if augmentation is not None:
         train_ds = train_ds.map(
             lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
