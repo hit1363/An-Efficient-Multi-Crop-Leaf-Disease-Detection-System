@@ -109,8 +109,8 @@ def load_dataset(
         val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
 
     # Optimize dataset performance
-    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
-    val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    train_ds = train_ds.cache("/content/train_cache").prefetch(buffer_size=AUTOTUNE)
+    val_ds = val_ds.cache("/content/val_cache").prefetch(buffer_size=AUTOTUNE)
 
     return train_ds, val_ds, class_names
 
