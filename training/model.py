@@ -142,8 +142,10 @@ def create_efficientnet_model(
     hub_url = hub_url or "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
 
     cache_dir = hub_cache_dir or os.environ.get("TFHUB_CACHE_DIR")
-    if hub_cache_dir:
-        os.environ["TFHUB_CACHE_DIR"] = hub_cache_dir
+    if not cache_dir and os.path.isdir("/kaggle/working"):
+        cache_dir = os.path.join("/kaggle/working", "tfhub_modules")
+    if cache_dir:
+        os.environ["TFHUB_CACHE_DIR"] = cache_dir
 
     attempts = max(1, int(hub_download_retries or 1))
     base_model = None
