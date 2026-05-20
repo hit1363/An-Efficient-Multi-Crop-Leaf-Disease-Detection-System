@@ -3,6 +3,10 @@ Model Architecture Definition
 Defines MobileNetV2 and EfficientNet-Lite0 models for leaf disease detection
 """
 
+import os
+import shutil
+import time
+
 import tensorflow as tf
 
 
@@ -34,6 +38,27 @@ def _get_tfhub_module():
             "tensorflow_hub is required for EfficientNet-Lite0. "
             "Install dependencies with: pip install -r requirements.txt"
         ) from exc
+
+
+def _is_tfhub_cache_error(exc):
+    """Heuristics to detect corrupted TF Hub downloads."""
+    message = str(exc)
+    return any(
+        token in message
+        for token in [
+            "does not appear to be a valid module",
+            "invalid header",
+            "ReadError",
+        ]
+    )
+
+
+def _clear_tfhub_cache(cache_dir):
+    """Best-effort cleanup for TF Hub cache directory."""
+    if not cache_dir:
+        return
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
 
 def create_mobilenetv2_model(
@@ -82,7 +107,14 @@ def create_mobilenetv2_model(
 
 
 def create_efficientnet_model(
-    input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet"
+    input_shape=(224, 224, 3),
+    num_classes=45,
+    dropout_rate=0.5,
+    weights="imagenet",
+    hub_url=None,
+    hub_cache_dir=None,
+    hub_download_retries=1,
+    hub_download_delay_sec=5,
 ):
     """
     Create EfficientNet-Lite0 based model for leaf disease classification
@@ -92,7 +124,11 @@ def create_efficientnet_model(
         num_classes: Number of disease classes (default 45 for multi-crop dataset)
         dropout_rate: Dropout rate for regularization
         weights: Pre-trained weights (note: Lite0 always uses TensorFlow Hub pretrained;
-                 parameter provided for API compatibility but is ignored)
+             parameter provided for API compatibility but is ignored)
+        hub_url: Optional TF Hub module URL override
+        hub_cache_dir: Optional TF Hub cache directory override
+        hub_download_retries: Total attempts to download/load the Hub module
+        hub_download_delay_sec: Delay between retries in seconds
 
     Returns:
         Tuple of (model, base_model):
@@ -103,9 +139,32 @@ def create_efficientnet_model(
     # Pre-trained on ImageNet, optimized for mobile devices
     # Note: weights parameter is mostly ignored; Hub always provides pretrained ImageNet weights
     hub = _get_tfhub_module()
-    hub_url = "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
+    hub_url = hub_url or "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
 
-    base_model = hub.KerasLayer(hub_url, input_shape=input_shape, trainable=False)
+    cache_dir = hub_cache_dir or os.environ.get("TFHUB_CACHE_DIR")
+    if hub_cache_dir:
+        os.environ["TFHUB_CACHE_DIR"] = hub_cache_dir
+
+    attempts = max(1, int(hub_download_retries or 1))
+    base_model = None
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            base_model = hub.KerasLayer(
+                hub_url, input_shape=input_shape, trainable=False
+            )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            if _is_tfhub_cache_error(exc) and cache_dir:
+                _clear_tfhub_cache(cache_dir)
+            if hub_download_delay_sec and hub_download_delay_sec > 0:
+                time.sleep(hub_download_delay_sec)
+
+    if base_model is None:
+        raise last_exc or RuntimeError("Failed to load TF Hub module")
 
     # Classification head
     # Note: Hub feature-vector endpoint outputs (batch, 1280), already aggregated
@@ -182,6 +241,10 @@ def get_model(architecture="mobilenetv2", **kwargs):
             - num_classes: int (default 45)
             - dropout_rate: float (default 0.5)
             - weights: str (default 'imagenet', ignored for Lite0)
+            - hub_url: str (optional TF Hub URL override)
+            - hub_cache_dir: str (optional TF Hub cache directory override)
+            - hub_download_retries: int (total attempts)
+            - hub_download_delay_sec: int or float (delay between attempts)
 
     Returns:
         Tuple of (model, base_model) where both are unfrozen for initial training

@@ -242,6 +242,10 @@ def train_model(config_path="config.yaml"):
         num_classes=config["model"]["num_classes"],
         dropout_rate=config["model"]["dropout_rate"],
         weights=config["model"]["weights"],
+        hub_url=config["model"].get("hub_url"),
+        hub_cache_dir=config["model"].get("hub_cache_dir"),
+        hub_download_retries=config["model"].get("hub_download_retries", 1),
+        hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
     )
 
     if not freeze_base:
