@@ -8,6 +8,7 @@ import yaml
 import argparse
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from tensorflow import keras
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -17,6 +18,13 @@ from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support,
 )
+
+try:
+    # Support module execution: python -m training.evaluate
+    from .utils import get_preprocess_fn
+except ImportError:
+    # Fallback for script execution: python training/evaluate.py
+    from utils import get_preprocess_fn
 
 
 def _is_saved_model_dir(model_path):
@@ -89,7 +97,9 @@ def resolve_config_paths(config, config_path):
     return config
 
 
-def load_test_dataset(test_dir, batch_size=32, image_size=(224, 224)):
+def load_test_dataset(
+    test_dir, batch_size=32, image_size=(224, 224), preprocess_fn=None
+):
     """Load test dataset"""
     test_ds = keras.preprocessing.image_dataset_from_directory(
         test_dir,
@@ -98,6 +108,18 @@ def load_test_dataset(test_dir, batch_size=32, image_size=(224, 224)):
         label_mode="categorical",
         shuffle=False,
     )
+    AUTOTUNE = tf.data.AUTOTUNE
+
+    if preprocess_fn is not None:
+
+        def _apply_preprocess(x, y):
+            x = tf.cast(x, tf.float32)
+            x = preprocess_fn(x)
+            return x, y
+
+        test_ds = test_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
+
+    test_ds = test_ds.prefetch(buffer_size=AUTOTUNE)
 
     return test_ds, test_ds.class_names
 
@@ -125,7 +147,10 @@ def evaluate_model(model_path, config_path="config.yaml"):
     print(f"Loading model from {model_path}...")
     model = _load_model(model_path, input_shape)
 
-    test_ds, class_names = load_test_dataset(test_dir, batch_size, image_size)
+    preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
+    test_ds, class_names = load_test_dataset(
+        test_dir, batch_size, image_size, preprocess_fn=preprocess_fn
+    )
     print(f"Found {len(class_names)} classes")
 
     # Get predictions

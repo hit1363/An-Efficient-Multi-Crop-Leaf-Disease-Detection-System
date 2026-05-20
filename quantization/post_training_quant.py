@@ -4,7 +4,9 @@ Converts trained TensorFlow model to TensorFlow Lite with INT8 quantization
 """
 
 import os
+import sys
 import argparse
+import yaml
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -30,6 +32,93 @@ def infer_architecture_from_path(model_path):
     if "mobilenet" in lower:
         return "mobilenetv2"
     return "mobilenetv2"
+
+
+def _is_saved_model_dir(model_path):
+    return os.path.isdir(model_path) and (
+        os.path.exists(os.path.join(model_path, "saved_model.pb"))
+        or os.path.exists(os.path.join(model_path, "saved_model.pbtxt"))
+    )
+
+
+def _is_weights_only(model_path):
+    return model_path.lower().endswith(".weights.h5")
+
+
+def _load_config(config_path):
+    if not config_path:
+        return None
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def _get_model_factory():
+    try:
+        from training.model import get_model
+
+        return get_model
+    except Exception:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        try:
+            from training.model import get_model
+
+            return get_model
+        except Exception as exc:
+            raise ImportError(
+                "Unable to import training.model.get_model. "
+                "Run this script from the repository root or provide a valid PYTHONPATH."
+            ) from exc
+
+
+def _build_model_from_config(config, architecture_override=None):
+    if not config or "model" not in config:
+        raise ValueError("Model config is missing or invalid.")
+
+    model_cfg = config.get("model", {})
+    architecture = architecture_override or model_cfg.get("architecture", "mobilenetv2")
+    input_shape = tuple(model_cfg.get("input_shape", [224, 224, 3]))
+    num_classes = int(model_cfg.get("num_classes", 2))
+    dropout_rate = float(model_cfg.get("dropout_rate", 0.5))
+    weights = model_cfg.get("weights", "imagenet")
+
+    get_model = _get_model_factory()
+    model, _ = get_model(
+        architecture=architecture,
+        input_shape=input_shape,
+        num_classes=num_classes,
+        dropout_rate=dropout_rate,
+        weights=weights,
+        hub_url=model_cfg.get("hub_url"),
+        hub_cache_dir=model_cfg.get("hub_cache_dir"),
+        hub_download_retries=model_cfg.get("hub_download_retries", 1),
+        hub_download_delay_sec=model_cfg.get("hub_download_delay_sec", 5),
+    )
+
+    return model
+
+
+def _load_keras_model(model_path, config_path=None, architecture=None):
+    if _is_weights_only(model_path):
+        if not config_path:
+            raise ValueError(
+                "Weights-only checkpoint provided. Please pass --config to rebuild the model."
+            )
+        config = _load_config(config_path)
+        model = _build_model_from_config(config, architecture_override=architecture)
+        model.load_weights(model_path)
+        return model
+
+    return keras.models.load_model(model_path)
+
+
+def _get_dir_size(path):
+    total = 0
+    for root, _, files in os.walk(path):
+        for filename in files:
+            total += os.path.getsize(os.path.join(root, filename))
+    return total
 
 
 def representative_dataset_generator(
@@ -73,6 +162,7 @@ def convert_to_tflite(
     quantize=True,
     representative_data_dir=None,
     architecture=None,
+    config_path=None,
 ):
     """
     Convert Keras model to TensorFlow Lite format
@@ -88,13 +178,21 @@ def convert_to_tflite(
     """
     print(f"Loading model from {model_path}...")
 
-    # Load the model (.h5 or SavedModel directory)
-    model = keras.models.load_model(model_path)
+    config = _load_config(config_path) if config_path else None
 
-    # Create TFLite converter
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    if _is_saved_model_dir(model_path):
+        converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
+    else:
+        model = _load_keras_model(
+            model_path, config_path=config_path, architecture=architecture
+        )
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
-    arch = architecture or infer_architecture_from_path(model_path)
+    arch = (
+        architecture
+        or (config.get("model", {}).get("architecture") if config else None)
+        or infer_architecture_from_path(model_path)
+    )
     preprocess_fn = get_preprocess_fn(arch)
 
     if quantize:
@@ -133,7 +231,12 @@ def convert_to_tflite(
         f.write(tflite_model)
 
     # Print model size
-    original_size = os.path.getsize(model_path) if os.path.isfile(model_path) else 0
+    if os.path.isfile(model_path):
+        original_size = os.path.getsize(model_path)
+    elif _is_saved_model_dir(model_path):
+        original_size = _get_dir_size(model_path)
+    else:
+        original_size = 0
     tflite_size = os.path.getsize(output_path)
 
     print("\nConversion complete!")
@@ -269,9 +372,7 @@ def benchmark_inference_time(tflite_path, num_runs=100, architecture=None):
         dummy_input = np.random.randint(0, 255, input_shape, dtype=np.uint8)
     else:
         if arch == "mobilenetv2":
-            dummy_input = np.random.uniform(-1.0, 1.0, input_shape).astype(
-                np.float32
-            )
+            dummy_input = np.random.uniform(-1.0, 1.0, input_shape).astype(np.float32)
         elif "efficientnet" in arch:
             dummy_input = np.random.uniform(0.0, 1.0, input_shape).astype(np.float32)
         else:
@@ -330,6 +431,12 @@ def main():
         help="Directory with representative dataset for calibration",
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Training config (required for weights-only checkpoints)",
+    )
+    parser.add_argument(
         "--evaluate", action="store_true", help="Evaluate TFLite model accuracy"
     )
     parser.add_argument(
@@ -355,6 +462,7 @@ def main():
         quantize=args.quantize,
         representative_data_dir=args.representative_data,
         architecture=args.arch,
+        config_path=args.config,
     )
 
     # Evaluate if requested
