@@ -19,6 +19,38 @@ from sklearn.metrics import (
 )
 
 
+def _is_saved_model_dir(model_path):
+    return os.path.isdir(model_path) and (
+        os.path.exists(os.path.join(model_path, "saved_model.pb"))
+        or os.path.exists(os.path.join(model_path, "saved_model.pbtxt"))
+    )
+
+
+def _load_saved_model_as_keras(model_path, input_shape):
+    if not hasattr(keras.layers, "TFSMLayer"):
+        raise ValueError(
+            "TFSMLayer is not available in this Keras version. "
+            "Please upgrade to Keras 3 or export a .keras/.h5 model."
+        )
+
+    tfsm_layer = keras.layers.TFSMLayer(model_path, call_endpoint="serving_default")
+    inputs = keras.Input(shape=input_shape, name="input")
+    outputs = tfsm_layer(inputs)
+    if isinstance(outputs, dict):
+        outputs = outputs[next(iter(outputs))]
+    return keras.Model(inputs, outputs, name="saved_model_inference")
+
+
+def _load_model(model_path, input_shape):
+    try:
+        return keras.models.load_model(model_path)
+    except (ValueError, OSError):
+        if _is_saved_model_dir(model_path):
+            print("Detected SavedModel directory; using TFSMLayer for inference.")
+            return _load_saved_model_as_keras(model_path, input_shape)
+        raise
+
+
 def load_config(config_path="config.yaml"):
     """Load configuration file"""
     with open(config_path, "r") as f:
@@ -82,15 +114,16 @@ def evaluate_model(model_path, config_path="config.yaml"):
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
 
-    # Load model
-    print(f"Loading model from {model_path}...")
-    model = keras.models.load_model(model_path)
-
     # Load test dataset
     print("Loading test dataset...")
     test_dir = config["dataset"]["test_dir"]
     batch_size = config["dataset"]["batch_size"]
-    image_size = tuple(config["model"]["input_shape"][:2])
+    input_shape = tuple(config["model"]["input_shape"])
+    image_size = input_shape[:2]
+
+    # Load model
+    print(f"Loading model from {model_path}...")
+    model = _load_model(model_path, input_shape)
 
     test_ds, class_names = load_test_dataset(test_dir, batch_size, image_size)
     print(f"Found {len(class_names)} classes")
