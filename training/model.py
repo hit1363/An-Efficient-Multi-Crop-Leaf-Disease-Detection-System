@@ -254,6 +254,14 @@ def get_model(architecture="mobilenetv2", **kwargs):
     """
     arch_lower = architecture.lower()
     if arch_lower == "mobilenetv2":
+        kwargs = dict(kwargs)
+        for key in [
+            "hub_url",
+            "hub_cache_dir",
+            "hub_download_retries",
+            "hub_download_delay_sec",
+        ]:
+            kwargs.pop(key, None)
         return create_mobilenetv2_model(**kwargs)
     elif arch_lower in ["efficientnet", "efficientnet_lite0"]:
         return create_efficientnet_model(**kwargs)
