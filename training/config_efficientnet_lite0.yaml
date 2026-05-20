@@ -10,8 +10,8 @@ model:
   dropout_rate: 0.5
   # Optional TF Hub overrides
   hub_url: "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
-  hub_cache_dir: null  # Example: "/kaggle/working/tfhub_modules"
-  hub_download_retries: 2
+  hub_cache_dir: "/kaggle/working/tfhub_modules"
+  hub_download_retries: 3
   hub_download_delay_sec: 5
 
 # Dataset Settings
