@@ -5,6 +5,7 @@ Defines MobileNetV2 and EfficientNet-Lite0 models for leaf disease detection
 
 import os
 import shutil
+import tempfile
 import time
 
 import tensorflow as tf
@@ -59,6 +60,49 @@ def _clear_tfhub_cache(cache_dir):
         return
     if os.path.exists(cache_dir):
         shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def _ensure_tfhub_cache_dir(cache_dir):
+    """Ensure TF Hub cache directory exists and is writable."""
+    if not cache_dir:
+        return None
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        test_file = os.path.join(cache_dir, ".tfhub_write_test")
+        with open(test_file, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        os.remove(test_file)
+        return cache_dir
+    except OSError:
+        return None
+
+
+def _resolve_tfhub_cache_dir(hub_cache_dir):
+    """Pick a valid TF Hub cache directory across common environments."""
+    candidates = []
+
+    if hub_cache_dir:
+        candidates.append(hub_cache_dir)
+
+    env_dir = os.environ.get("TFHUB_CACHE_DIR")
+    if env_dir and env_dir not in candidates:
+        candidates.append(env_dir)
+
+    if os.path.isdir("/content"):
+        candidates.append(os.path.join("/content", "tfhub_modules"))
+
+    if os.path.isdir("/kaggle/working"):
+        candidates.append(os.path.join("/kaggle/working", "tfhub_modules"))
+
+    candidates.append(os.path.join(tempfile.gettempdir(), "tfhub_modules"))
+    candidates.append(os.path.join(os.path.expanduser("~"), ".tfhub_modules"))
+
+    for candidate in candidates:
+        resolved = _ensure_tfhub_cache_dir(candidate)
+        if resolved:
+            return resolved
+
+    return None
 
 
 def create_mobilenetv2_model(
@@ -141,9 +185,7 @@ def create_efficientnet_model(
     hub = _get_tfhub_module()
     hub_url = hub_url or "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
 
-    cache_dir = hub_cache_dir or os.environ.get("TFHUB_CACHE_DIR")
-    if not cache_dir and os.path.isdir("/kaggle/working"):
-        cache_dir = os.path.join("/kaggle/working", "tfhub_modules")
+    cache_dir = _resolve_tfhub_cache_dir(hub_cache_dir)
     if cache_dir:
         os.environ["TFHUB_CACHE_DIR"] = cache_dir
 
@@ -160,8 +202,14 @@ def create_efficientnet_model(
             last_exc = exc
             if attempt >= attempts:
                 raise
-            if _is_tfhub_cache_error(exc) and cache_dir:
-                _clear_tfhub_cache(cache_dir)
+            if _is_tfhub_cache_error(exc):
+                if not cache_dir:
+                    cache_dir = _resolve_tfhub_cache_dir(None)
+                    if cache_dir:
+                        os.environ["TFHUB_CACHE_DIR"] = cache_dir
+                if cache_dir:
+                    _clear_tfhub_cache(cache_dir)
+                    _ensure_tfhub_cache_dir(cache_dir)
             if hub_download_delay_sec and hub_download_delay_sec > 0:
                 time.sleep(hub_download_delay_sec)
 

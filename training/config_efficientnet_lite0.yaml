@@ -1,5 +1,6 @@
 # Training Configuration File (EfficientNet-Lite0)
 
+
 # Model Settings
 model:
   architecture: "efficientnet_lite0"  # Options: mobilenetv2, efficientnet_lite0
