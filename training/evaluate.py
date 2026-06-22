@@ -4,6 +4,9 @@ Evaluates trained model on test dataset and generates performance metrics
 """
 
 import os
+
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 import yaml
 import argparse
 import numpy as np

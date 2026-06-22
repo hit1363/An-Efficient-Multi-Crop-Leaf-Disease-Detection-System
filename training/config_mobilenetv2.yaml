@@ -110,6 +110,7 @@ callbacks:
 export:
   save_dir: "../models"
   formats: ["h5", "saved_model", "tflite"]
+  sync_flutter_labels: false
 
 # Evaluation Metrics
 metrics:

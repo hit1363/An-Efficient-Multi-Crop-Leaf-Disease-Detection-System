@@ -4,6 +4,7 @@ Utility Functions for Training Pipeline
 
 import os
 import logging
+import tempfile
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -43,8 +44,31 @@ def get_preprocess_fn(architecture):
     arch = architecture.lower()
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
-    if "efficientnet" in arch:
-        return tf.keras.applications.efficientnet.preprocess_input
+    if arch in {"efficientnet", "efficientnet_lite0"}:
+        return lambda x: tf.cast(x, tf.float32) / 255.0
+    return None
+
+
+def _dataset_cache_path(name):
+    """Return a writable cache file path for the current notebook/runtime."""
+    candidates = []
+    if os.path.isdir("/kaggle/working"):
+        candidates.append(os.path.join("/kaggle/working", "dataset_cache"))
+    if os.path.isdir("/content"):
+        candidates.append(os.path.join("/content", "dataset_cache"))
+    candidates.append(os.path.join(tempfile.gettempdir(), "leaf_dataset_cache"))
+
+    for cache_dir in candidates:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            test_file = os.path.join(cache_dir, ".write_test")
+            with open(test_file, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            os.remove(test_file)
+            return os.path.join(cache_dir, name)
+        except OSError:
+            continue
+
     return None
 
 
@@ -108,9 +132,13 @@ def load_dataset(
         train_ds = train_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
         val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
 
-    # Optimize dataset performance
-    train_ds = train_ds.cache("/content/train_cache").prefetch(buffer_size=AUTOTUNE)
-    val_ds = val_ds.cache("/content/val_cache").prefetch(buffer_size=AUTOTUNE)
+    # Optimize dataset performance using writable paths in Kaggle, Colab, or local runs.
+    train_cache = _dataset_cache_path("train_cache")
+    val_cache = _dataset_cache_path("val_cache")
+    train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
+    val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
+    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
+    val_ds = val_ds.prefetch(buffer_size=AUTOTUNE)
 
     return train_ds, val_ds, class_names
 

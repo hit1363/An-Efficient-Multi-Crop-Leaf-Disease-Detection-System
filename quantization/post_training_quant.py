@@ -4,6 +4,9 @@ Converts trained TensorFlow model to TensorFlow Lite with INT8 quantization
 """
 
 import os
+
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 import sys
 import argparse
 import yaml
@@ -20,8 +23,8 @@ def get_preprocess_fn(architecture):
     arch = architecture.lower()
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
-    if "efficientnet" in arch:
-        return tf.keras.applications.efficientnet.preprocess_input
+    if arch in {"efficientnet", "efficientnet_lite0"}:
+        return lambda x: tf.cast(x, tf.float32) / 255.0
     return None
 
 

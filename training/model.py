@@ -4,6 +4,9 @@ Defines MobileNetV2 and EfficientNet-Lite0 models for leaf disease detection
 """
 
 import os
+
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 import shutil
 import tempfile
 import time

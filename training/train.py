@@ -4,6 +4,9 @@ Uses transfer learning with MobileNetV2 or EfficientNet-Lite0
 """
 
 import os
+
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 import yaml
 import argparse
 import numpy as np
@@ -362,19 +365,20 @@ def train_model(config_path="config.yaml"):
     save_class_names(class_names, class_names_path)
     logger.info(f"Saved class names: {class_names_path}")
 
-    flutter_labels_path = os.path.normpath(
-        os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "flutter_app",
-            "assets",
-            "labels",
-            "labels.txt",
+    if config.get("export", {}).get("sync_flutter_labels", False):
+        flutter_labels_path = os.path.normpath(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                "flutter_app",
+                "assets",
+                "labels",
+                "labels.txt",
+            )
         )
-    )
-    if os.path.exists(os.path.dirname(flutter_labels_path)):
-        save_class_names(class_names, flutter_labels_path)
-        logger.info(f"Synchronized Flutter labels: {flutter_labels_path}")
+        if os.path.exists(os.path.dirname(flutter_labels_path)):
+            save_class_names(class_names, flutter_labels_path)
+            logger.info(f"Synchronized Flutter labels: {flutter_labels_path}")
 
     logger.info("Training completed successfully!")
 
