@@ -109,18 +109,81 @@ def build_metrics(metric_names, num_classes):
         elif metric_key == "recall":
             built_metrics.append(keras.metrics.Recall(name="recall", top_k=1))
         elif metric_key == "auc":
-            built_metrics.append(
-                keras.metrics.AUC(
-                    name="auc",
-                    multi_label=True,
-                    num_labels=num_classes,
-                )
-            )
+            # Single-label softmax classifier: macro AUC over the 1-hot labels.
+            # multi_label=True would misreport AUC for this task.
+            built_metrics.append(keras.metrics.AUC(name="auc"))
         else:
             # Keep custom/unknown metric names to avoid breaking user-provided settings.
             built_metrics.append(metric_name)
 
     return built_metrics
+
+
+class FocalLoss(keras.losses.Loss):
+    """Focal Loss for addressing class imbalance.
+
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Configurable via ``loss.gamma`` (default 2.0) and ``loss.alpha`` (default 0.25)
+    in the YAML. Set ``loss.name: focal_loss`` to activate.
+    """
+
+    def __init__(self, gamma=2.0, alpha=0.25, label_smoothing=0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.gamma = float(gamma)
+        self.alpha = float(alpha)
+        self.label_smoothing = float(label_smoothing)
+
+    def call(self, y_true, y_pred):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+
+        # Label smoothing
+        if self.label_smoothing > 0:
+            num_classes = tf.cast(tf.shape(y_true)[-1], tf.float32)
+            y_true = y_true * (1.0 - self.label_smoothing) + self.label_smoothing / num_classes
+
+        # Clip predictions for numerical stability
+        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+
+        # Compute focal loss
+        cross_entropy = -y_true * tf.math.log(y_pred)
+        p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
+        modulating_factor = tf.pow(1.0 - p_t, self.gamma)
+        focal_loss = modulating_factor * tf.reduce_sum(cross_entropy, axis=-1)
+
+        # Apply alpha weighting
+        alpha_weight = y_true * self.alpha + (1.0 - y_true) * (1.0 - self.alpha)
+        alpha_weight = tf.reduce_sum(alpha_weight, axis=-1)
+        focal_loss = alpha_weight * focal_loss
+
+        return tf.reduce_mean(focal_loss)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"gamma": self.gamma, "alpha": self.alpha,
+                        "label_smoothing": self.label_smoothing})
+        return config
+
+
+def _get_loss(config):
+    """Resolve the loss function from config.
+
+    Supports:
+      - ``categorical_crossentropy`` (default, passed as string)
+      - ``focal_loss`` with optional ``loss.gamma`` and ``loss.alpha``
+    """
+    loss_cfg = config.get("loss", {})
+    loss_name = loss_cfg.get("name", "categorical_crossentropy")
+
+    if loss_name == "focal_loss":
+        return FocalLoss(
+            gamma=loss_cfg.get("gamma", 2.0),
+            alpha=loss_cfg.get("alpha", 0.25),
+            label_smoothing=loss_cfg.get("label_smoothing", 0.0),
+        )
+
+    return loss_name
 
 
 def compile_model(model, config):
@@ -163,7 +226,7 @@ def compile_model(model, config):
         )
 
     # Setup loss
-    loss = config["loss"]["name"]
+    loss = _get_loss(config)
 
     # Setup metrics
     metric_names = config.get("metrics", ["accuracy"])
@@ -184,11 +247,12 @@ def train_model(config_path="config.yaml"):
     # Setup logging
     logger = setup_logging(config)
     logger.info("Starting training...")
-    logger.info(f"Configuration: {config['model']['architecture']}")
+    arch = config.get("model", {}).get("architecture", "unknown")
+    logger.info(f"Configuration: {arch}")
 
     freeze_base = config.get("training", {}).get("freeze_base", True)
-    total_epochs = int(config["training"]["epochs"])
-    unfreeze_epoch = int(config["training"].get("unfreeze_epoch", 10))
+    total_epochs = int(config.get("training", {}).get("epochs", 50))
+    unfreeze_epoch = int(config.get("training", {}).get("unfreeze_epoch", 10))
     if total_epochs < 1:
         raise ValueError("training.epochs must be >= 1")
 
@@ -204,8 +268,9 @@ def train_model(config_path="config.yaml"):
         initial_epochs = total_epochs
 
     # Set random seeds for reproducibility
-    tf.random.set_seed(config["seed"])
-    np.random.seed(config["seed"])
+    seed = config.get("seed", 42)
+    tf.random.set_seed(seed)
+    np.random.seed(seed)
 
     # Load datasets
     logger.info("Loading datasets...")
@@ -220,6 +285,7 @@ def train_model(config_path="config.yaml"):
         image_size=tuple(config["model"]["input_shape"][:2]),
         preprocess_fn=preprocess_fn,
         augmentation=augmentation,
+        shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
     )
 
     logger.info(f"Found {len(class_names)} classes")
@@ -286,7 +352,9 @@ def train_model(config_path="config.yaml"):
         logger.info("=" * 50 + "\n")
 
         # Unfreeze base model
-        unfreeze_from = config["training"].get("freeze_until_layer", 100)
+        # Support both old config key "freeze_until_layer" and new "unfreeze_from_layer" for backwards compatibility
+        unfreeze_from = config.get("training", {}).get("unfreeze_from_layer") or \
+                       config.get("training", {}).get("freeze_until_layer", 100)
         unfreeze_base_model(base_model, unfreeze_from)
 
         # Recompile with lower learning rate
@@ -297,7 +365,7 @@ def train_model(config_path="config.yaml"):
         )
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=fine_tune_lr),
-            loss=config["loss"]["name"],
+            loss=_get_loss(config),
             metrics=fine_tune_metrics,
         )
 
@@ -320,8 +388,8 @@ def train_model(config_path="config.yaml"):
 
     # Save final model
     logger.info("Saving final model...")
-    save_dir = config["export"]["save_dir"]
-    model_name = config["model"]["architecture"]
+    save_dir = config.get("export", {}).get("save_dir", "../models")
+    model_name = config.get("model", {}).get("architecture", "model")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Save in multiple formats

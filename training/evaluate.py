@@ -7,6 +7,7 @@ import os
 
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
+import json
 import yaml
 import argparse
 import numpy as np
@@ -35,6 +36,17 @@ def _is_saved_model_dir(model_path):
         os.path.exists(os.path.join(model_path, "saved_model.pb"))
         or os.path.exists(os.path.join(model_path, "saved_model.pbtxt"))
     )
+
+
+def _get_model_size_mb(model_path):
+    if os.path.isfile(model_path):
+        return os.path.getsize(model_path) / (1024 * 1024)
+
+    total_size = 0
+    for root, _, filenames in os.walk(model_path):
+        for filename in filenames:
+            total_size += os.path.getsize(os.path.join(root, filename))
+    return total_size / (1024 * 1024)
 
 
 def _load_saved_model_as_keras(model_path, input_shape):
@@ -111,6 +123,7 @@ def load_test_dataset(
         label_mode="categorical",
         shuffle=False,
     )
+    class_names = test_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
 
     if preprocess_fn is not None:
@@ -124,10 +137,10 @@ def load_test_dataset(
 
     test_ds = test_ds.prefetch(buffer_size=AUTOTUNE)
 
-    return test_ds, test_ds.class_names
+    return test_ds, class_names
 
 
-def evaluate_model(model_path, config_path="config.yaml"):
+def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     """
     Evaluate trained model on test set
 
@@ -138,6 +151,8 @@ def evaluate_model(model_path, config_path="config.yaml"):
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
+    if results_dir:
+        config.setdefault("evaluation", {})["results_dir"] = os.path.abspath(results_dir)
 
     # Load test dataset
     print("Loading test dataset...")
@@ -179,15 +194,21 @@ def evaluate_model(model_path, config_path="config.yaml"):
 
     # Per-class metrics
     precision, recall, f1, support = precision_recall_fscore_support(
-        y_true, y_pred, average=None, labels=range(len(class_names))
+        y_true,
+        y_pred,
+        average=None,
+        labels=range(len(class_names)),
+        zero_division=0,
     )
 
     # Macro and weighted averages
     precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
-        y_true, y_pred, average="macro"
+        y_true, y_pred, average="macro", zero_division=0
     )
     precision_weighted, recall_weighted, f1_weighted, _ = (
-        precision_recall_fscore_support(y_true, y_pred, average="weighted")
+        precision_recall_fscore_support(
+            y_true, y_pred, average="weighted", zero_division=0
+        )
     )
 
     print("\nMacro Average:")
@@ -204,7 +225,15 @@ def evaluate_model(model_path, config_path="config.yaml"):
     print("\n" + "=" * 50)
     print("CLASSIFICATION REPORT")
     print("=" * 50 + "\n")
-    print(classification_report(y_true, y_pred, target_names=class_names))
+    print(
+        classification_report(
+            y_true,
+            y_pred,
+            labels=range(len(class_names)),
+            target_names=class_names,
+            zero_division=0,
+        )
+    )
 
     # Save metrics to CSV
     results_dir = config.get("evaluation", {}).get("results_dir")
@@ -233,13 +262,24 @@ def evaluate_model(model_path, config_path="config.yaml"):
         accuracy, precision, recall, f1, class_names, results_dir
     )
 
-    return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "confusion_matrix": cm,
+    summary = {
+        "model_path": os.path.abspath(model_path),
+        "model_size_mb": round(_get_model_size_mb(model_path), 4),
+        "samples": int(len(y_true)),
+        "accuracy": float(accuracy),
+        "macro_precision": float(precision_macro),
+        "macro_recall": float(recall_macro),
+        "macro_f1": float(f1_macro),
+        "weighted_precision": float(precision_weighted),
+        "weighted_recall": float(recall_weighted),
+        "weighted_f1": float(f1_weighted),
     }
+    summary_path = os.path.join(results_dir, "metrics_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2)
+    print(f"Saved summary to {summary_path}")
+
+    return summary
 
 
 def plot_confusion_matrix(cm, class_names, save_path="confusion_matrix.png"):
@@ -333,6 +373,9 @@ def main():
     parser.add_argument(
         "--config", type=str, default=None, help="Path to configuration file"
     )
+    parser.add_argument(
+        "--results-dir", type=str, default=None, help="Directory for evaluation reports"
+    )
 
     args = parser.parse_args()
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -354,7 +397,7 @@ def main():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     # Evaluate model
-    evaluate_model(args.model, config_path)
+    evaluate_model(args.model, config_path, results_dir=args.results_dir)
 
 
 if __name__ == "__main__":

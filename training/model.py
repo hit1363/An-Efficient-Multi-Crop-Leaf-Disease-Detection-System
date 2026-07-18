@@ -45,16 +45,35 @@ def _get_tfhub_module():
 
 
 def _is_tfhub_cache_error(exc):
-    """Heuristics to detect corrupted TF Hub downloads."""
-    message = str(exc)
-    return any(
-        token in message
-        for token in [
-            "does not appear to be a valid module",
-            "invalid header",
-            "ReadError",
-        ]
-    )
+    """Heuristics to detect corrupted TF Hub downloads and transient load failures.
+
+    A broad match is intentional: anything that looks like a corrupt cache,
+    a network/resolver issue, or a server-side error is worth clearing the
+    cache and retrying once before giving up.
+    """
+    message = str(exc).lower()
+    tokens = [
+        # Corrupt / invalid module
+        "does not appear to be a valid module",
+        "invalid header",
+        "readerror",
+        "bad signature",
+        "not a valid tar",
+        # Network / resolver
+        "404",
+        "http",
+        "https",
+        "url",
+        "failed",
+        "ssl",
+        "timeout",
+        "timed out",
+        "connection",
+        "resolver",
+        "urLError".lower(),
+        "no such file",  # partially downloaded cache
+    ]
+    return any(token in message for token in tokens)
 
 
 def _clear_tfhub_cache(cache_dir):
@@ -106,6 +125,133 @@ def _resolve_tfhub_cache_dir(hub_cache_dir):
             return resolved
 
     return None
+
+
+def _tfhub_gcs_url(hub_url):
+    """Map a tfhub.dev / kaggle.com URL to its canonical GCS mirror.
+
+    TF Hub serves every published module as a tarball on
+    ``https://storage.googleapis.com/tfhub-modules/<publisher>/<name>/<version>``.
+    Downloading from GCS directly avoids the tfhub.dev redirect/resolver which
+    is the common point of failure for TF1-format modules (like Lite0).
+    Returns ``None`` if the URL cannot be mapped.
+    """
+    if not hub_url:
+        return None
+    url = hub_url.split("?")[0].rstrip("/")
+    # Canonical tfhub.dev URL: https://tfhub.dev/google/efficientnet/lite0/feature-vector/2
+    for prefix in ("https://tfhub.dev/", "http://tfhub.dev/"):
+        if url.lower().startswith(prefix):
+            path = url[len(prefix):].strip("/")
+            return f"https://storage.googleapis.com/tfhub-modules/{path}"
+    # Already a GCS / kaggle URL we can't reliably map.
+    return None
+
+
+def _resolve_module_handle(hub_url, hub_cache_dir):
+    """Return a local-or-remote handle that ``hub.KerasLayer`` can consume.
+
+    Resolution order (first usable wins):
+      1. ``hub_url`` already points at an existing local path -> use as-is.
+      2. Direct GCS download via ``tf.keras.utils.get_file`` into the TF Hub
+         cache dir -> return the extracted local path.
+      3. Fall back to the original ``hub_url`` (let hub resolve it online).
+
+    Returns ``(handle, is_local_path)``.
+    """
+    import urllib.parse as _up
+
+    # 1. Local path provided directly (downloaded/vendored module).
+    if hub_url and os.path.exists(hub_url):
+        return hub_url, True
+
+    # 2. Try a direct GCS download; bypasses the tfhub.dev resolver entirely.
+    cache_dir = _resolve_tfhub_cache_dir(hub_cache_dir)
+    if cache_dir:
+        os.environ["TFHUB_CACHE_DIR"] = cache_dir
+        gcs_url = _tfhub_gcs_url(hub_url)
+        if gcs_url:
+            # Stable sub-dir per module so re-runs reuse the download.
+            parsed = _up.urlparse(gcs_url)
+            module_subdir = parsed.path.strip("/").replace("/", "_")
+            local_dir = os.path.join(cache_dir, module_subdir)
+            try:
+                downloaded = tf.keras.utils.get_file(
+                    fname=module_subdir + ".tar.gz",
+                    origin=gcs_url,
+                    extract=True,
+                    cache_dir=cache_dir,
+                    cache_subdir="downloads",
+                )
+                # get_file(extract=True) extracts the tarball; the SavedModel
+                # lives either at `downloaded` (if it was a dir) or next to it.
+                extracted = (
+                    downloaded
+                    if os.path.isdir(downloaded)
+                    else os.path.splitext(downloaded)[0]
+                )
+                # The tarball's top-level dir is usually the version (e.g. "2"
+                # or "1") containing saved_model.pb. Walk to find it.
+                if os.path.isdir(extracted) and not os.path.exists(
+                    os.path.join(extracted, "saved_model.pb")
+                ):
+                    for root, _dirs, files in os.walk(extracted):
+                        if "saved_model.pb" in files or "saved_model.pbtxt" in files:
+                            extracted = root
+                            break
+                if os.path.exists(os.path.join(extracted, "saved_model.pb")) or (
+                    os.path.isdir(extracted)
+                ):
+                    local_dir = extracted
+                if os.path.isdir(local_dir):
+                    return local_dir, True
+            except Exception as exc:
+                print(
+                    f"[model] Direct GCS download failed ({exc}); "
+                    "falling back to TF Hub online resolver."
+                )
+
+    # 3. Fall back to the original URL (hub resolves it online w/ cache).
+    return hub_url, False
+
+
+def _create_tfhub_layer(hub_url, hub_cache_dir, input_shape):
+    """Create a hub.KerasLayer, trying local/GCS resolution first.
+
+    Tries the handle directly first (works if hub can resolve it online),
+    then a locally-resolved handle. Returns the ``hub.KerasLayer``.
+    """
+    hub = _get_tfhub_module()
+
+    # Preferred path: resolve to a local/GCS-downloaded module handle.
+    handle, is_local = _resolve_module_handle(hub_url, hub_cache_dir)
+    try:
+        layer = hub.KerasLayer(handle, input_shape=input_shape, trainable=False)
+        return layer
+    except Exception:
+        # If local resolution already happened and still failed, nothing more
+        # to try. Otherwise fall back to the raw hub URL as a last resort.
+        if is_local:
+            raise
+        return hub.KerasLayer(hub_url, input_shape=input_shape, trainable=False)
+
+
+def _sanity_check_layer(layer, input_shape):
+    """Run one forward pass on random input to catch a corrupt module early.
+
+    Raises only if the layer cannot produce output for a dummy batch, so we
+    fail in seconds rather than partway through ``model.fit()``.
+    """
+    try:
+        dummy = tf.random.normal((1,) + tuple(input_shape))
+        _ = layer(dummy, training=False)
+    except Exception as exc:
+        raise RuntimeError(
+            "EfficientNet-Lite0 backbone failed its forward-pass sanity check. "
+            "The downloaded module may be corrupt. Clear the TF Hub cache "
+            f"(TFHUB_CACHE_DIR={os.environ.get('TFHUB_CACHE_DIR')}) and retry. "
+            f"Underlying error: {exc}"
+        ) from exc
 
 
 def create_mobilenetv2_model(
@@ -185,7 +331,6 @@ def create_efficientnet_model(
     # Load official EfficientNetLite0 from TensorFlow Hub
     # Pre-trained on ImageNet, optimized for mobile devices
     # Note: weights parameter is mostly ignored; Hub always provides pretrained ImageNet weights
-    hub = _get_tfhub_module()
     hub_url = hub_url or "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
 
     cache_dir = _resolve_tfhub_cache_dir(hub_cache_dir)
@@ -197,15 +342,20 @@ def create_efficientnet_model(
     last_exc = None
     for attempt in range(1, attempts + 1):
         try:
-            base_model = hub.KerasLayer(
-                hub_url, input_shape=input_shape, trainable=False
+            base_model = _create_tfhub_layer(
+                hub_url=hub_url,
+                hub_cache_dir=hub_cache_dir,
+                input_shape=input_shape,
             )
+            # Catch corrupt modules now instead of partway through fit().
+            _sanity_check_layer(base_model, input_shape)
             break
         except Exception as exc:
             last_exc = exc
             if attempt >= attempts:
                 raise
             if _is_tfhub_cache_error(exc):
+                # Clear the cache so the next attempt re-downloads cleanly.
                 if not cache_dir:
                     cache_dir = _resolve_tfhub_cache_dir(None)
                     if cache_dir:
@@ -273,12 +423,15 @@ def print_model_summary(model):
     """Print model architecture summary"""
     model.summary()
 
-    total_params = model.count_params()
-    trainable_params = sum([tf.size(w).numpy() for w in model.trainable_weights])
+    trainable_params = sum([w.numpy().size if hasattr(w, 'numpy') else int(tf.size(w)) 
+                           for w in model.trainable_weights])
+    non_trainable_params = sum([w.numpy().size if hasattr(w, 'numpy') else int(tf.size(w)) 
+                               for w in model.non_trainable_weights])
+    total_params = trainable_params + non_trainable_params
 
     print(f"\nTotal parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Non-trainable parameters: {total_params - trainable_params:,}")
+    print(f"Non-trainable parameters: {non_trainable_params:,}")
 
 
 def get_model(architecture="mobilenetv2", **kwargs):

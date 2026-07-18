@@ -79,6 +79,7 @@ def load_dataset(
     image_size=(224, 224),
     preprocess_fn=None,
     augmentation=None,
+    shuffle_buffer=1000,
 ):
     """
     Load training and validation datasets
@@ -88,21 +89,26 @@ def load_dataset(
         val_dir: Path to validation data directory
         batch_size: Batch size for training
         image_size: Target image size (height, width)
+        preprocess_fn: Deterministic preprocessing applied to both splits
+        augmentation: Random augmentation layer applied to training split only
+        shuffle_buffer: Shuffle buffer size for the training split. Shuffling is
+            applied AFTER caching so the order reshuffles every epoch instead of
+            being frozen in the cache.
 
     Returns:
         train_ds, val_ds, class_names
     """
-    # Load training dataset
+    # Load datasets without shuffling at the source; we shuffle after the cache
+    # so each epoch sees a fresh order (a shuffle before .cache() would freeze).
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
         batch_size=batch_size,
         label_mode="categorical",
-        shuffle=True,
+        shuffle=False,
         seed=42,
     )
 
-    # Load validation dataset
     val_ds = keras.preprocessing.image_dataset_from_directory(
         val_dir,
         image_size=image_size,
@@ -112,16 +118,31 @@ def load_dataset(
     )
 
     class_names = train_ds.class_names
-
-    # Apply augmentation only on training data
     AUTOTUNE = tf.data.AUTOTUNE
 
+    # Cache the RAW images first. This is critical: if augmentation ran before
+    # .cache(), the random transforms would be applied once and then frozen for
+    # every subsequent epoch, defeating data augmentation.
+    train_cache = _dataset_cache_path("train_cache")
+    val_cache = _dataset_cache_path("val_cache")
+    train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
+    val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
+
+    # Reshuffle the training order each epoch (after cache, before augment).
+    if shuffle_buffer and shuffle_buffer > 0:
+        train_ds = train_ds.shuffle(
+            buffer_size=shuffle_buffer, seed=42, reshuffle_each_iteration=True
+        )
+
+    # Augmentation only on training data. Runs each epoch because it sits
+    # after the cache.
     if augmentation is not None:
         train_ds = train_ds.map(
             lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
             num_parallel_calls=AUTOTUNE,
         )
 
+    # Deterministic preprocessing on both splits.
     if preprocess_fn is not None:
 
         def _apply_preprocess(x, y):
@@ -132,11 +153,6 @@ def load_dataset(
         train_ds = train_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
         val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
 
-    # Optimize dataset performance using writable paths in Kaggle, Colab, or local runs.
-    train_cache = _dataset_cache_path("train_cache")
-    val_cache = _dataset_cache_path("val_cache")
-    train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
-    val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
     train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.prefetch(buffer_size=AUTOTUNE)
 
@@ -275,8 +291,12 @@ def setup_callbacks(config):
         )
 
     # Learning Rate Scheduler
-    if config.get("lr_schedule", {}).get("type") == "reduce_on_plateau":
-        lr_config = config["lr_schedule"]
+    lr_config = config.get("lr_schedule", {})
+    lr_type = lr_config.get("type", "reduce_on_plateau")
+    initial_lr = lr_config.get("initial_learning_rate",
+                              config.get("optimizer", {}).get("learning_rate", 0.001))
+
+    if lr_type == "reduce_on_plateau":
         callbacks.append(
             keras.callbacks.ReduceLROnPlateau(
                 monitor=lr_config.get("monitor", "val_loss"),
@@ -285,6 +305,29 @@ def setup_callbacks(config):
                 min_lr=lr_config.get("min_lr", 1e-7),
                 verbose=1,
             )
+        )
+    elif lr_type == "exponential_decay":
+        decay_steps = lr_config.get("decay_steps", 1000)
+        decay_rate = lr_config.get("decay_rate", 0.96)
+        schedule = keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=initial_lr,
+            decay_steps=decay_steps,
+            decay_rate=decay_rate,
+            staircase=lr_config.get("staircase", False),
+        )
+        callbacks.append(
+            keras.callbacks.LearningRateScheduler(schedule, verbose=1)
+        )
+    elif lr_type == "cosine_decay":
+        decay_steps = lr_config.get("decay_steps", 1000)
+        alpha = lr_config.get("alpha", 0.0)  # minimum LR fraction
+        schedule = keras.optimizers.schedules.CosineDecay(
+            initial_learning_rate=initial_lr,
+            decay_steps=decay_steps,
+            alpha=alpha,
+        )
+        callbacks.append(
+            keras.callbacks.LearningRateScheduler(schedule, verbose=1)
         )
 
     # TensorBoard
@@ -321,8 +364,8 @@ def preprocess_image(image_path, image_size=(224, 224), preprocess_fn=None):
     Returns:
         Preprocessed image tensor
     """
-    img = keras.preprocessing.image.load_img(image_path, target_size=image_size)
-    img_array = keras.preprocessing.image.img_to_array(img)
+    img = tf.keras.utils.load_img(image_path, target_size=image_size)
+    img_array = tf.keras.utils.img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0).astype("float32")
     if preprocess_fn is not None:
         img_array = preprocess_fn(img_array)

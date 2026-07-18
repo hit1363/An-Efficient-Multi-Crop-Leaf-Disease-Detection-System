@@ -14,18 +14,27 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-
-def get_preprocess_fn(architecture):
-    """Return the appropriate preprocess_input function for a given architecture."""
-    if not architecture:
-        return None
-
-    arch = architecture.lower()
-    if arch == "mobilenetv2":
-        return tf.keras.applications.mobilenet_v2.preprocess_input
-    if arch in {"efficientnet", "efficientnet_lite0"}:
-        return lambda x: tf.cast(x, tf.float32) / 255.0
-    return None
+# Import shared utilities from the training package, with sys.path fallback.
+try:
+    from training.utils import get_preprocess_fn
+except ImportError:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from training.utils import get_preprocess_fn
+    except ImportError:
+        # Last-resort: define locally (kept in sync with training/utils.py).
+        def get_preprocess_fn(architecture):
+            """Return the appropriate preprocess_input function for a given architecture."""
+            if not architecture:
+                return None
+            arch = architecture.lower()
+            if arch == "mobilenetv2":
+                return tf.keras.applications.mobilenet_v2.preprocess_input
+            if arch in {"efficientnet", "efficientnet_lite0"}:
+                return lambda x: tf.cast(x, tf.float32) / 255.0
+            return None
 
 
 def infer_architecture_from_path(model_path):
@@ -288,7 +297,11 @@ def evaluate_tflite_model(
 
     # Load test dataset
     test_ds = keras.preprocessing.image_dataset_from_directory(
-        test_data_dir, image_size=(224, 224), batch_size=1, shuffle=False
+        test_data_dir,
+        image_size=(224, 224),
+        batch_size=1,
+        label_mode="int",
+        shuffle=False,
     )
 
     correct = 0
@@ -310,6 +323,11 @@ def evaluate_tflite_model(
         # Check if input should be uint8
         if input_details[0]["dtype"] == np.uint8:
             input_scale, input_zero_point = input_details[0]["quantization"]
+            if input_scale == 0:
+                raise ValueError(
+                    f"Quantization scale cannot be zero. Model may be corrupted. "
+                    f"Got scale={input_scale}, zero_point={input_zero_point}"
+                )
             input_data = input_data / input_scale + input_zero_point
             input_data = np.clip(input_data, 0, 255).astype(np.uint8)
         else:
@@ -323,13 +341,18 @@ def evaluate_tflite_model(
         # Dequantize output if needed
         if output_details[0]["dtype"] == np.uint8:
             output_scale, output_zero_point = output_details[0]["quantization"]
+            if output_scale == 0:
+                raise ValueError(
+                    f"Output quantization scale cannot be zero. Model may be corrupted. "
+                    f"Got scale={output_scale}, zero_point={output_zero_point}"
+                )
             output_data = (
-                output_data.astype(np.float32) - output_zero_point
-            ) * output_scale
+                output_data.astype(np.float32) - float(output_zero_point)
+            ) * float(output_scale)
 
         # Get prediction
         predicted_class = np.argmax(output_data)
-        true_class = np.argmax(labels.numpy())
+        true_class = int(labels.numpy().reshape(-1)[0])
 
         if predicted_class == true_class:
             correct += 1
