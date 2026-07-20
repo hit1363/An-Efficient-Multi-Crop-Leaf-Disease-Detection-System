@@ -2,10 +2,10 @@
 
 # Model Settings
 model:
-  architecture: "mobilenetv2"  # Options: mobilenetv2, efficientnet_lite0
+  architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_lite0
   input_shape: [224, 224, 3]
   num_classes: 45
-  weights: "imagenet"  # Use ImageNet pre-trained weights
+  weights: "imagenet" # Use ImageNet pre-trained weights
   dropout_rate: 0.5
 
 # Dataset Settings
@@ -16,6 +16,7 @@ dataset:
   test_dir: "../dataset/processed/test"
   batch_size: 32
   shuffle_buffer: 1000
+  cache_mode: "none"
 
 # Data Augmentation
 augmentation:
@@ -28,13 +29,13 @@ augmentation:
 training:
   epochs: 50
   freeze_base: true
-  unfreeze_from_layer: 100  # Layer index to start unfreezing from
-  unfreeze_epoch: 10  # Unfreeze after this epoch
+  unfreeze_from_layer: 100 # Layer index to start unfreezing from
+  unfreeze_epoch: 10 # Unfreeze after this epoch
   fine_tune_learning_rate: 0.0001
 
 # Optimizer Settings
 optimizer:
-  name: "adam"  # Options: adam, sgd, rmsprop
+  name: "adam" # Options: adam, sgd, rmsprop
   learning_rate: 0.001
   beta_1: 0.9
   beta_2: 0.999
@@ -47,7 +48,7 @@ optimizer:
 #   exponential_decay: uses decay_steps, decay_rate, staircase
 #   cosine_decay:     uses decay_steps, alpha (minimum LR fraction)
 lr_schedule:
-  type: "reduce_on_plateau"  # Options: reduce_on_plateau, exponential_decay, cosine_decay
+  type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
   monitor: "val_loss"
   factor: 0.5
   patience: 5
@@ -62,7 +63,7 @@ lr_schedule:
 
 # Loss Function
 loss:
-  name: "categorical_crossentropy"  # Options: categorical_crossentropy, focal_loss
+  name: "categorical_crossentropy" # Options: categorical_crossentropy, focal_loss
   # For focal_loss only:
   # gamma: 2.0        # focusing parameter (higher = more focus on hard examples)
   # alpha: 0.25       # weight-balancing parameter
@@ -71,7 +72,7 @@ loss:
 # Class Weights (for imbalanced dataset)
 class_weights:
   enabled: true
-  auto_compute: true  # Automatically compute from dataset
+  auto_compute: true # Automatically compute from dataset
 
 # Callbacks
 callbacks:

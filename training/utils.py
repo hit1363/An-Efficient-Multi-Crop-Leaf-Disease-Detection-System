@@ -10,6 +10,21 @@ import tensorflow as tf
 from tensorflow import keras
 
 
+def _normalize_cache_mode(cache_mode):
+    if cache_mode is None:
+        return "none"
+
+    mode = str(cache_mode).strip().lower()
+    if mode in {"none", "disabled", "off"}:
+        return "none"
+    if mode in {"memory", "in_memory", "ram"}:
+        return "memory"
+    if mode in {"disk", "file", "on_disk"}:
+        return "disk"
+
+    raise ValueError("dataset.cache_mode must be one of: none, memory, disk")
+
+
 def setup_logging(config):
     """Setup logging configuration"""
     log_config = config.get("logging", {})
@@ -80,6 +95,7 @@ def load_dataset(
     preprocess_fn=None,
     augmentation=None,
     shuffle_buffer=1000,
+    cache_mode="none",
 ):
     """
     Load training and validation datasets
@@ -94,6 +110,9 @@ def load_dataset(
         shuffle_buffer: Shuffle buffer size for the training split. Shuffling is
             applied AFTER caching so the order reshuffles every epoch instead of
             being frozen in the cache.
+        cache_mode: Dataset cache strategy. Use "none" to disable caching,
+            "memory" to keep cached batches in RAM, or "disk" to cache to a
+            writable filesystem path.
 
     Returns:
         train_ds, val_ds, class_names
@@ -120,13 +139,18 @@ def load_dataset(
     class_names = train_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
 
-    # Cache the RAW images first. This is critical: if augmentation ran before
-    # .cache(), the random transforms would be applied once and then frozen for
-    # every subsequent epoch, defeating data augmentation.
-    train_cache = _dataset_cache_path("train_cache")
-    val_cache = _dataset_cache_path("val_cache")
-    train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
-    val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
+    cache_mode = _normalize_cache_mode(cache_mode)
+
+    # Cache the RAW images first only when cache_mode requests it. This keeps
+    # augmentation stochastic across epochs while avoiding accidental disk use.
+    if cache_mode == "disk":
+        train_cache = _dataset_cache_path("train_cache")
+        val_cache = _dataset_cache_path("val_cache")
+        train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
+        val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
+    elif cache_mode == "memory":
+        train_ds = train_ds.cache()
+        val_ds = val_ds.cache()
 
     # Reshuffle the training order each epoch (after cache, before augment).
     if shuffle_buffer and shuffle_buffer > 0:

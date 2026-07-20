@@ -286,6 +286,7 @@ def train_model(config_path="config.yaml"):
         preprocess_fn=preprocess_fn,
         augmentation=augmentation,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
+        cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
     )
 
     logger.info(f"Found {len(class_names)} classes")
