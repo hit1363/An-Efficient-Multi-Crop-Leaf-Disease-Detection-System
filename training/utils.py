@@ -117,12 +117,13 @@ def load_dataset(
     Returns:
         train_ds, val_ds, class_names
     """
-    # Load datasets without shuffling at the source; we shuffle after the cache
-    # so each epoch sees a fresh order (a shuffle before .cache() would freeze).
+    # Load datasets as individual examples so shuffling happens on raw images,
+    # not on already-batched tensors. This keeps the shuffle buffer memory use
+    # proportional to images instead of full batches.
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
-        batch_size=batch_size,
+        batch_size=None,
         label_mode="categorical",
         shuffle=False,
         seed=42,
@@ -131,7 +132,7 @@ def load_dataset(
     val_ds = keras.preprocessing.image_dataset_from_directory(
         val_dir,
         image_size=image_size,
-        batch_size=batch_size,
+        batch_size=None,
         label_mode="categorical",
         shuffle=False,
     )
@@ -152,11 +153,15 @@ def load_dataset(
         train_ds = train_ds.cache()
         val_ds = val_ds.cache()
 
-    # Reshuffle the training order each epoch (after cache, before augment).
+    # Reshuffle the training order each epoch on raw examples.
     if shuffle_buffer and shuffle_buffer > 0:
         train_ds = train_ds.shuffle(
             buffer_size=shuffle_buffer, seed=42, reshuffle_each_iteration=True
         )
+
+    # Batch after shuffling so the shuffle buffer stays small.
+    train_ds = train_ds.batch(batch_size)
+    val_ds = val_ds.batch(batch_size)
 
     # Augmentation only on training data. Runs each epoch because it sits
     # after the cache.
