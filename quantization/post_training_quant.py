@@ -32,6 +32,8 @@ except ImportError:
             arch = architecture.lower()
             if arch == "mobilenetv2":
                 return tf.keras.applications.mobilenet_v2.preprocess_input
+            if arch == "efficientnet_b0":
+                return tf.keras.applications.efficientnet.preprocess_input
             if arch in {"efficientnet", "efficientnet_lite0"}:
                 return lambda x: tf.cast(x, tf.float32) / 255.0
             return None
@@ -39,6 +41,8 @@ except ImportError:
 
 def infer_architecture_from_path(model_path):
     lower = model_path.lower()
+    if "efficientnet_b0" in lower:
+        return "efficientnet_b0"
     if "efficientnet" in lower:
         return "efficientnet_lite0"
     if "mobilenet" in lower:
@@ -475,7 +479,7 @@ def main():
         "--arch",
         type=str,
         default=None,
-        help="Model architecture for preprocessing (mobilenetv2 or efficientnet_lite0)",
+        help="Model architecture for preprocessing (mobilenetv2, efficientnet_b0, or efficientnet_lite0)",
     )
     parser.set_defaults(quantize=True)
 

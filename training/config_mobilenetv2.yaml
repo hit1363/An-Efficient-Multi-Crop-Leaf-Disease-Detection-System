@@ -2,7 +2,7 @@
 
 # Model Settings
 model:
-  architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_lite0
+  architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0
   input_shape: [224, 224, 3]
   num_classes: 45
   weights: "imagenet" # Use ImageNet pre-trained weights
@@ -24,6 +24,7 @@ augmentation:
   zoom_range: [0.8, 1.2]
   horizontal_flip: true
   vertical_flip: true
+  brightness_range: [0.8, 1.2]
 
 # Training Settings
 training:

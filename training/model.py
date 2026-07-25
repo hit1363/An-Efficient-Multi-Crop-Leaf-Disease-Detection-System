@@ -254,6 +254,37 @@ def _sanity_check_layer(layer, input_shape):
         ) from exc
 
 
+def create_efficientnet_b0_model(
+    input_shape,
+    num_classes,
+    dropout_rate,
+    weights="imagenet",
+):
+    """Build a standard Keras EfficientNetB0 classifier."""
+    print(
+        "[model] Using tf.keras.applications.EfficientNetB0 "
+        "with ImageNet weights."
+    )
+    base_model = tf.keras.applications.EfficientNetB0(
+        include_top=False,
+        weights=weights,
+        input_shape=input_shape,
+    )
+    base_model.trainable = False
+
+    inputs = tf.keras.Input(shape=input_shape)
+    x = base_model(inputs, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dense(512, activation="relu")(x)
+    x = tf.keras.layers.Dropout(dropout_rate)(x)
+    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
+    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+
+    model = tf.keras.Model(inputs, outputs, name="efficientnet_b0_disease_detector")
+    return model, base_model
+
+
 def create_mobilenetv2_model(
     input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet"
 ):
@@ -339,7 +370,6 @@ def create_efficientnet_model(
 
     attempts = max(1, int(hub_download_retries or 1))
     base_model = None
-    last_exc = None
     for attempt in range(1, attempts + 1):
         try:
             base_model = _create_tfhub_layer(
@@ -351,9 +381,15 @@ def create_efficientnet_model(
             _sanity_check_layer(base_model, input_shape)
             break
         except Exception as exc:
-            last_exc = exc
             if attempt >= attempts:
-                raise
+                print(
+                    f"[model] TF Hub Lite0 module failed after {attempts} attempt(s): {exc}"
+                )
+                raise RuntimeError(
+                    "The TF Hub EfficientNet-Lite0 module could not be loaded. "
+                    "Use architecture 'efficientnet_b0' for the supported Keras "
+                    "EfficientNetB0 implementation, or fix the TF Hub/network cache."
+                ) from exc
             if _is_tfhub_cache_error(exc):
                 # Clear the cache so the next attempt re-downloads cleanly.
                 if not cache_dir:
@@ -367,7 +403,7 @@ def create_efficientnet_model(
                 time.sleep(hub_download_delay_sec)
 
     if base_model is None:
-        raise last_exc or RuntimeError("Failed to load TF Hub module")
+        raise RuntimeError("EfficientNet-Lite0 backbone was not created.")
 
     # Classification head
     # Note: Hub feature-vector endpoint outputs (batch, 1280), already aggregated
@@ -411,7 +447,7 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
         layer.trainable = False
 
     for layer in base_model.layers[unfreeze_from_layer:]:
-        layer.trainable = True
+        layer.trainable = not isinstance(layer, tf.keras.layers.BatchNormalization)
 
     print(f"Unfroze {len(base_model.layers[unfreeze_from_layer:])} layers")
     print(
@@ -441,6 +477,7 @@ def get_model(architecture="mobilenetv2", **kwargs):
     Args:
         architecture: Model architecture name. Options:
             - 'mobilenetv2': MobileNetV2 backbone (full layer-level control)
+            - 'efficientnet_b0': Standard Keras EfficientNetB0 backbone
             - 'efficientnet' or 'efficientnet_lite0': EfficientNet-Lite0 from TF Hub
         **kwargs: Additional arguments passed to model creation functions:
             - input_shape: tuple (default (224, 224, 3))
@@ -469,12 +506,22 @@ def get_model(architecture="mobilenetv2", **kwargs):
         ]:
             kwargs.pop(key, None)
         return create_mobilenetv2_model(**kwargs)
+    elif arch_lower == "efficientnet_b0":
+        kwargs = dict(kwargs)
+        for key in [
+            "hub_url",
+            "hub_cache_dir",
+            "hub_download_retries",
+            "hub_download_delay_sec",
+        ]:
+            kwargs.pop(key, None)
+        return create_efficientnet_b0_model(**kwargs)
     elif arch_lower in ["efficientnet", "efficientnet_lite0"]:
         return create_efficientnet_model(**kwargs)
     else:
         raise ValueError(
             f"Unknown architecture: {architecture}. "
-            f"Supported: 'mobilenetv2', 'efficientnet', 'efficientnet_lite0'"
+            f"Supported: 'mobilenetv2', 'efficientnet_b0', 'efficientnet', 'efficientnet_lite0'"
         )
 
 

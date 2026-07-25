@@ -27,6 +27,8 @@ from training.utils import get_preprocess_fn
 
 def infer_architecture_from_path(model_path):
     lower_path = model_path.lower()
+    if "efficientnet_b0" in lower_path:
+        return "efficientnet_b0"
     if "efficientnet" in lower_path:
         return "efficientnet_lite0"
     if "mobilenet" in lower_path:
@@ -213,7 +215,11 @@ def main():
     parser.add_argument("--model", required=True, help="Path to a .tflite model")
     parser.add_argument("--test-data", required=True, help="Directory containing class folders")
     parser.add_argument("--output-dir", required=True, help="Directory for evaluation reports")
-    parser.add_argument("--arch", default=None, help="mobilenetv2 or efficientnet_lite0")
+    parser.add_argument(
+        "--arch",
+        default=None,
+        help="mobilenetv2, efficientnet_b0, or efficientnet_lite0",
+    )
     parser.add_argument(
         "--max-samples", type=int, default=None, help="Optional limit for faster checks"
     )

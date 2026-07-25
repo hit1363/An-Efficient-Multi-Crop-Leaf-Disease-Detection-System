@@ -59,6 +59,8 @@ def get_preprocess_fn(architecture):
     arch = architecture.lower()
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
+    if arch == "efficientnet_b0":
+        return tf.keras.applications.efficientnet.preprocess_input
     if arch in {"efficientnet", "efficientnet_lite0"}:
         return lambda x: tf.cast(x, tf.float32) / 255.0
     return None
@@ -214,6 +216,20 @@ def create_augmentation_layer(config):
             keras.layers.RandomContrast(0.2),
         ]
     )
+
+    brightness_range = aug_config.get("brightness_range")
+    random_brightness = getattr(keras.layers, "RandomBrightness", None)
+    if brightness_range and random_brightness is not None:
+        if isinstance(brightness_range, (list, tuple)) and len(brightness_range) == 2:
+            brightness_factor = (
+                brightness_range[0] - 1.0,
+                brightness_range[1] - 1.0,
+            )
+        else:
+            brightness_factor = brightness_range
+        augmentation.add(
+            random_brightness(brightness_factor, value_range=(0, 255))
+        )
 
     return augmentation
 

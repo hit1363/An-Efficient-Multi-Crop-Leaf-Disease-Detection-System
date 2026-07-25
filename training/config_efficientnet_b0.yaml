@@ -1,0 +1,108 @@
+# Training Configuration File (EfficientNetB0)
+
+model:
+  architecture: "efficientnet_b0"
+  input_shape: [224, 224, 3]
+  num_classes: 45
+  weights: "imagenet"
+  dropout_rate: 0.5
+
+dataset:
+  data_dir: "../dataset/processed"
+  train_dir: "../dataset/processed/train"
+  val_dir: "../dataset/processed/val"
+  test_dir: "../dataset/processed/test"
+  batch_size: 32
+  shuffle_buffer: 1000
+  cache_mode: "none"
+
+augmentation:
+  rotation_range: 45
+  zoom_range: [0.8, 1.2]
+  horizontal_flip: true
+  vertical_flip: true
+  brightness_range: [0.8, 1.2]
+
+training:
+  epochs: 50
+  freeze_base: true
+  unfreeze_from_layer: 100
+  unfreeze_epoch: 10
+  fine_tune_learning_rate: 0.0001
+
+optimizer:
+  name: "adam"
+  learning_rate: 0.001
+  beta_1: 0.9
+  beta_2: 0.999
+  epsilon: 1.0e-7
+  decay: 0.0
+
+lr_schedule:
+  type: "reduce_on_plateau"
+  monitor: "val_loss"
+  factor: 0.5
+  patience: 5
+  min_lr: 1.0e-7
+
+loss:
+  name: "categorical_crossentropy"
+
+class_weights:
+  enabled: true
+  auto_compute: true
+
+callbacks:
+  checkpoint:
+    enabled: true
+    monitor: "val_accuracy"
+    save_best_only: true
+    save_weights_only: true
+    mode: "max"
+    save_freq: "epoch"
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    patience: 10
+    restore_best_weights: true
+    mode: "min"
+  tensorboard:
+    enabled: true
+    log_dir: "../logs"
+    histogram_freq: 1
+    write_graph: true
+    write_images: false
+    update_freq: "epoch"
+  csv_logger:
+    enabled: true
+    filename: "../results/training_log_efficientnet_b0.csv"
+    append: false
+
+export:
+  save_dir: "../models"
+  formats: ["saved_model", "tflite"]
+  sync_flutter_labels: false
+
+metrics:
+  - "accuracy"
+  - "precision"
+  - "recall"
+  - "auc"
+
+seed: 42
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  save_to_file: true
+  log_file: "../logs/training_efficientnet_b0.log"
+
+mlflow:
+  enabled: false
+  tracking_uri: "http://localhost:5000"
+  experiment_name: "multi-crop-disease-detection"
+
+wandb:
+  enabled: false
+  project: "leaf-disease-detection"
+  entity: "your-username"

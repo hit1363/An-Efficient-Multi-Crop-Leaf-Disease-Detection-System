@@ -64,13 +64,42 @@ def _load_saved_model_as_keras(model_path, input_shape):
     return keras.Model(inputs, outputs, name="saved_model_inference")
 
 
+class _SavedModelPredictor:
+    """Small predictor adapter for SavedModel exports unavailable to load_model."""
+
+    def __init__(self, model_path):
+        loaded = tf.saved_model.load(model_path)
+        signatures = getattr(loaded, "signatures", {})
+        self._signature = signatures.get("serving_default")
+        if self._signature is None and signatures:
+            self._signature = next(iter(signatures.values()))
+        if self._signature is None:
+            raise ValueError(f"No callable SavedModel signature found in {model_path}")
+
+        _, keyword_inputs = self._signature.structured_input_signature
+        self._input_name = next(iter(keyword_inputs), None)
+
+    def predict(self, inputs, verbose=0):
+        del verbose
+        if self._input_name:
+            outputs = self._signature(**{self._input_name: inputs})
+        else:
+            outputs = self._signature(inputs)
+        if isinstance(outputs, dict):
+            outputs = outputs[next(iter(outputs))]
+        return outputs.numpy()
+
+
 def _load_model(model_path, input_shape):
     try:
         return keras.models.load_model(model_path)
     except (ValueError, OSError):
         if _is_saved_model_dir(model_path):
-            print("Detected SavedModel directory; using TFSMLayer for inference.")
-            return _load_saved_model_as_keras(model_path, input_shape)
+            if hasattr(keras.layers, "TFSMLayer"):
+                print("Detected SavedModel directory; using TFSMLayer for inference.")
+                return _load_saved_model_as_keras(model_path, input_shape)
+            print("Detected SavedModel directory; using its serving signature.")
+            return _SavedModelPredictor(model_path)
         raise
 
 
