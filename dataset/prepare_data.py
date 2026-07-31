@@ -7,6 +7,7 @@ import json
 import random
 import shutil
 from pathlib import Path
+
 from PIL import Image, ImageOps
 
 # Ensure compatibility with older and newer Pillow versions
@@ -75,7 +76,7 @@ def process_and_save_image(src_path: Path, dst_path: Path, target_size=224):
                 img.save(dst_path)
 
         return 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error processing {src_path}: {e}")
         return 0
 
