@@ -1,6 +1,6 @@
 """
 Training Script for Multi-Crop Leaf Disease Detection
-Uses transfer learning with MobileNetV2 or EfficientNet-Lite0
+Uses transfer learning with the supported MobileNet, EfficientNet, and ShuffleNet backbones.
 """
 
 import os
@@ -9,7 +9,6 @@ os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
 import yaml
 import argparse
-import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from datetime import datetime
@@ -25,6 +24,7 @@ try:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        configure_runtime,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -37,6 +37,7 @@ except ImportError:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        configure_runtime,
     )
 
 
@@ -186,24 +187,42 @@ def _get_loss(config):
     return loss_name
 
 
-def compile_model(model, config):
-    """Compile model with optimizer and loss function"""
+def compile_model(model, config, phase="head"):
+    """Compile a model for either classifier-head or fine-tuning training."""
 
     # Setup optimizer
-    optimizer_config = config["optimizer"]
+    optimizer_config = dict(config.get("optimizer", {}))
+    if phase == "fine_tune":
+        fine_tune_config = config.get("training", {}).get("fine_tune_optimizer", {})
+        if isinstance(fine_tune_config, str):
+            fine_tune_config = {"name": fine_tune_config}
+        if not isinstance(fine_tune_config, dict):
+            fine_tune_config = {}
+        optimizer_config.update(fine_tune_config)
+        optimizer_config["learning_rate"] = config["training"].get(
+            "fine_tune_learning_rate", optimizer_config.get("learning_rate", 1e-4)
+        )
     optimizer_name = optimizer_config.get("name", "adam").lower()
     lr = optimizer_config.get("learning_rate", 0.001)
     decay = optimizer_config.get("decay", 0.0)
     weight_decay = decay if decay and decay > 0 else None
 
-    if optimizer_name == "adam":
+    if optimizer_name in {"adam", "adamw"}:
         adam_kwargs = {"learning_rate": lr}
         for key in ["beta_1", "beta_2", "epsilon"]:
             if key in optimizer_config and optimizer_config[key] is not None:
                 adam_kwargs[key] = optimizer_config[key]
-        if weight_decay is not None:
+        if weight_decay is not None and optimizer_name == "adamw":
             adam_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.Adam(**adam_kwargs)
+        if optimizer_name == "adamw" and weight_decay is not None:
+            try:
+                optimizer = keras.optimizers.AdamW(
+                    weight_decay=weight_decay, **{k: v for k, v in adam_kwargs.items() if k != "weight_decay"}
+                )
+            except AttributeError:
+                # Older TensorFlow builds do not expose AdamW; Adam remains valid.
+                optimizer = keras.optimizers.Adam(**adam_kwargs)
     elif optimizer_name == "sgd":
         sgd_kwargs = {
             "learning_rate": lr,
@@ -222,7 +241,7 @@ def compile_model(model, config):
         optimizer = keras.optimizers.RMSprop(**rmsprop_kwargs)
     else:
         raise ValueError(
-            f"Unsupported optimizer '{optimizer_name}'. Supported: adam, sgd, rmsprop"
+            f"Unsupported optimizer '{optimizer_name}'. Supported: adam, adamw, sgd, rmsprop"
         )
 
     # Setup loss
@@ -232,7 +251,19 @@ def compile_model(model, config):
     metric_names = config.get("metrics", ["accuracy"])
     metrics = build_metrics(metric_names, config["model"]["num_classes"])
 
-    model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
+    performance = config.get("performance", {})
+    compile_kwargs = {
+        "optimizer": optimizer,
+        "loss": loss,
+        "metrics": metrics,
+    }
+    steps_per_execution = int(performance.get("steps_per_execution", 1))
+    if steps_per_execution > 1:
+        compile_kwargs["steps_per_execution"] = steps_per_execution
+    if performance.get("jit_compile", False):
+        compile_kwargs["jit_compile"] = True
+
+    model.compile(**compile_kwargs)
 
     return model
 
@@ -243,6 +274,9 @@ def train_model(config_path="config.yaml"):
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
+
+    # Configure runtime before loading data or creating the model.
+    configure_runtime(config)
 
     # Setup logging
     logger = setup_logging(config)
@@ -267,11 +301,6 @@ def train_model(config_path="config.yaml"):
     else:
         initial_epochs = total_epochs
 
-    # Set random seeds for reproducibility
-    seed = config.get("seed", 42)
-    tf.random.set_seed(seed)
-    np.random.seed(seed)
-
     # Load datasets
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
@@ -287,6 +316,7 @@ def train_model(config_path="config.yaml"):
         augmentation=augmentation,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
+        deterministic=config.get("performance", {}).get("deterministic", False),
     )
 
     logger.info(f"Found {len(class_names)} classes")
@@ -306,7 +336,7 @@ def train_model(config_path="config.yaml"):
 
     # Create model
     logger.info(f"Creating {config['model']['architecture']} model...")
-    model, base_model = get_model(
+    model_kwargs = dict(
         architecture=config["model"]["architecture"],
         input_shape=tuple(config["model"]["input_shape"]),
         num_classes=config["model"]["num_classes"],
@@ -317,6 +347,28 @@ def train_model(config_path="config.yaml"):
         hub_download_retries=config["model"].get("hub_download_retries", 1),
         hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
     )
+    if config["model"]["architecture"].lower() in {
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenetv3small",
+        "mobilenet_v3_small",
+        "shufflenetv2_05",
+        "shufflenet_v2_05",
+        "shufflenetv2_0.5x",
+        "shufflenet_v2_0.5x",
+    }:
+        model_kwargs["classifier_units"] = config["model"].get(
+            "classifier_units", 256
+        )
+    if config["model"]["architecture"].lower() in {
+        "mobilenetv3_small",
+        "mobilenetv3small",
+        "mobilenet_v3_small",
+    }:
+        model_kwargs["include_preprocessing"] = config["model"].get(
+            "include_preprocessing", False
+        )
+    model, base_model = get_model(**model_kwargs)
 
     if not freeze_base:
         logger.info("freeze_base is False: training backbone from the first epoch")
@@ -330,8 +382,6 @@ def train_model(config_path="config.yaml"):
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
-    callbacks = setup_callbacks(config)
-
     # Phase 1: Train classifier head with frozen base
     logger.info("\n" + "=" * 50)
     logger.info("Phase 1: Training classifier head (base frozen)")
@@ -341,7 +391,7 @@ def train_model(config_path="config.yaml"):
         train_ds,
         validation_data=val_ds,
         epochs=initial_epochs,
-        callbacks=callbacks,
+        callbacks=setup_callbacks(config, csv_append=False),
         class_weight=class_weights,
     )
 
@@ -354,21 +404,13 @@ def train_model(config_path="config.yaml"):
 
         # Unfreeze base model
         # Support both old config key "freeze_until_layer" and new "unfreeze_from_layer" for backwards compatibility
-        unfreeze_from = config.get("training", {}).get("unfreeze_from_layer") or \
-                       config.get("training", {}).get("freeze_until_layer", 100)
+        unfreeze_from = config.get("training", {}).get("unfreeze_from_layer")
+        if unfreeze_from is None:
+            unfreeze_from = config.get("training", {}).get("freeze_until_layer", 100)
         unfreeze_base_model(base_model, unfreeze_from)
 
-        # Recompile with lower learning rate
-        fine_tune_lr = config["training"].get("fine_tune_learning_rate", 0.0001)
-        fine_tune_metrics = build_metrics(
-            config.get("metrics", ["accuracy"]),
-            config["model"]["num_classes"],
-        )
-        model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=fine_tune_lr),
-            loss=_get_loss(config),
-            metrics=fine_tune_metrics,
-        )
+        # Recompile with the configured fine-tuning optimizer and lower LR.
+        compile_model(model, config, phase="fine_tune")
 
         # Continue training
         history2 = model.fit(
@@ -376,7 +418,7 @@ def train_model(config_path="config.yaml"):
             validation_data=val_ds,
             initial_epoch=initial_epochs,
             epochs=total_epochs,
-            callbacks=callbacks,
+            callbacks=setup_callbacks(config, csv_append=True),
             class_weight=class_weights,
         )
 

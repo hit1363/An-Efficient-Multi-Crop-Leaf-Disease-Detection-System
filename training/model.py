@@ -1,6 +1,6 @@
 """
 Model Architecture Definition
-Defines MobileNetV2 and EfficientNet-Lite0 models for leaf disease detection
+Defines the supported mobile backbones for leaf disease detection.
 """
 
 import os
@@ -286,7 +286,11 @@ def create_efficientnet_b0_model(
 
 
 def create_mobilenetv2_model(
-    input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet"
+    input_shape=(224, 224, 3),
+    num_classes=45,
+    dropout_rate=0.5,
+    weights="imagenet",
+    classifier_units=256,
 ):
     """
     Create MobileNetV2-based model for leaf disease classification
@@ -295,6 +299,8 @@ def create_mobilenetv2_model(
         input_shape: Input image shape (height, width, channels)
         num_classes: Number of disease classes (default 45 for multi-crop dataset)
         dropout_rate: Dropout rate for regularization
+        classifier_units: Hidden units in the lightweight classifier head. Set to
+            0 to use a linear classifier on pooled backbone features.
         weights: Pre-trained weights ('imagenet' for ImageNet pretrained, None for random init)
 
     Returns:
@@ -314,20 +320,218 @@ def create_mobilenetv2_model(
     # MobileNetV2 outputs (batch, 7, 7, 1280), so we use GlobalAveragePooling2D
     inputs = tf.keras.Input(shape=input_shape)
     x = base_model(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D()(
-        x
-    )  # Converts (batch, H, W, C) -> (batch, C)
-    x = tf.keras.layers.Dense(512, activation="relu", name="fc1")(x)
-    x = tf.keras.layers.Dropout(dropout_rate)(x)
-    x = tf.keras.layers.Dense(256, activation="relu", name="fc2")(x)
-    x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
+    x = tf.keras.layers.GlobalAveragePooling2D(name="global_average_pooling")(x)
+    # Normalize pooled ImageNet features to make the classifier head easier to
+    # optimize during both frozen-backbone training and fine-tuning.
+    x = tf.keras.layers.BatchNormalization(name="classifier_bn")(x)
+    if classifier_units and int(classifier_units) > 0:
+        x = tf.keras.layers.Dense(
+            int(classifier_units), activation="relu", name="classifier_dense"
+        )(x)
+        x = tf.keras.layers.Dropout(dropout_rate, name="classifier_dropout")(x)
+    else:
+        x = tf.keras.layers.Dropout(dropout_rate, name="classifier_dropout")(x)
     outputs = tf.keras.layers.Dense(
-        num_classes, activation="softmax", name="predictions"
+        num_classes, activation="softmax", dtype="float32", name="predictions"
     )(x)
 
     model = tf.keras.Model(inputs, outputs, name="mobilenetv2_disease_detector")
 
     return model, base_model  # base_model is a standard Keras Model
+
+
+def _attach_classifier_head(
+    base_model,
+    input_shape,
+    num_classes,
+    dropout_rate=0.35,
+    classifier_units=256,
+    model_name="classifier",
+):
+    """Attach the shared lightweight classifier head to a feature backbone."""
+    inputs = tf.keras.Input(shape=input_shape, name="image")
+    x = base_model(inputs, training=False)
+    if len(x.shape) == 4:
+        x = tf.keras.layers.GlobalAveragePooling2D(
+            name="global_average_pooling"
+        )(x)
+    x = tf.keras.layers.BatchNormalization(name="classifier_bn")(x)
+    if classifier_units and int(classifier_units) > 0:
+        x = tf.keras.layers.Dense(
+            int(classifier_units), activation="relu", name="classifier_dense"
+        )(x)
+    x = tf.keras.layers.Dropout(dropout_rate, name="classifier_dropout")(x)
+    outputs = tf.keras.layers.Dense(
+        int(num_classes),
+        activation="softmax",
+        dtype="float32",
+        name="predictions",
+    )(x)
+    return tf.keras.Model(inputs, outputs, name=model_name)
+
+
+def create_mobilenetv3_small_model(
+    input_shape=(224, 224, 3),
+    num_classes=45,
+    dropout_rate=0.35,
+    weights="imagenet",
+    classifier_units=256,
+    include_preprocessing=False,
+):
+    """Create a MobileNetV3-Small classifier with optional ImageNet weights."""
+    base_model = tf.keras.applications.MobileNetV3Small(
+        input_shape=input_shape,
+        include_top=False,
+        weights=weights,
+        include_preprocessing=include_preprocessing,
+    )
+    base_model.trainable = False
+    model = _attach_classifier_head(
+        base_model,
+        input_shape,
+        num_classes,
+        dropout_rate=dropout_rate,
+        classifier_units=classifier_units,
+        model_name="mobilenetv3_small_disease_detector",
+    )
+    return model, base_model
+
+
+@tf.keras.utils.register_keras_serializable(package="LeafDisease")
+class ChannelShuffle(tf.keras.layers.Layer):
+    """Channel shuffle operation used by ShuffleNetV2."""
+
+    def __init__(self, groups=2, **kwargs):
+        super().__init__(**kwargs)
+        self.groups = int(groups)
+
+    def call(self, inputs):
+        shape = tf.shape(inputs)
+        channels = inputs.shape[-1]
+        if channels is None or channels % self.groups != 0:
+            raise ValueError("Channel count must be divisible by groups.")
+        x = tf.reshape(
+            inputs,
+            [shape[0], shape[1], shape[2], self.groups, channels // self.groups],
+        )
+        x = tf.transpose(x, [0, 1, 2, 4, 3])
+        return tf.reshape(x, [shape[0], shape[1], shape[2], channels])
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"groups": self.groups})
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="LeafDisease")
+class ChannelSplit(tf.keras.layers.Layer):
+    """Serializable two-way channel split used by stride-1 units."""
+
+    def call(self, inputs):
+        return tf.split(inputs, 2, axis=-1)
+
+
+def _conv_bn_relu(x, filters, kernel_size, strides=1, name="conv"):
+    x = tf.keras.layers.Conv2D(
+        filters,
+        kernel_size,
+        strides=strides,
+        padding="same",
+        use_bias=False,
+        name=f"{name}_conv",
+    )(x)
+    x = tf.keras.layers.BatchNormalization(name=f"{name}_bn")(x)
+    return tf.keras.layers.ReLU(name=f"{name}_relu")(x)
+
+
+def _shufflenet_v2_unit(x, output_channels, stride, name):
+    """Build one ShuffleNetV2 basic unit."""
+    branch_channels = output_channels // 2
+    if stride == 1:
+        input_channels = x.shape[-1]
+        if input_channels is None or input_channels % 2 != 0:
+            raise ValueError("Stride-1 ShuffleNetV2 units require even channels.")
+        branch_left, branch_right = ChannelSplit(name=f"{name}_split")(x)
+        projection = branch_left
+    else:
+        projection = tf.keras.layers.DepthwiseConv2D(
+            3, strides=2, padding="same", use_bias=False, name=f"{name}_proj_dw"
+        )(x)
+        projection = tf.keras.layers.BatchNormalization(name=f"{name}_proj_dw_bn")(
+            projection
+        )
+        projection = _conv_bn_relu(
+            projection, branch_channels, 1, name=f"{name}_proj_pw"
+        )
+        branch_right = x
+
+    branch_right = _conv_bn_relu(
+        branch_right, branch_channels, 1, name=f"{name}_main_pw1"
+    )
+    branch_right = tf.keras.layers.DepthwiseConv2D(
+        3,
+        strides=stride,
+        padding="same",
+        use_bias=False,
+        name=f"{name}_main_dw",
+    )(branch_right)
+    branch_right = tf.keras.layers.BatchNormalization(name=f"{name}_main_dw_bn")(
+        branch_right
+    )
+    branch_right = _conv_bn_relu(
+        branch_right, branch_channels, 1, name=f"{name}_main_pw2"
+    )
+    x = tf.keras.layers.Concatenate(axis=-1, name=f"{name}_concat")(
+        [projection, branch_right]
+    )
+    return ChannelShuffle(name=f"{name}_shuffle")(x)
+
+
+def create_shufflenetv2_05_model(
+    input_shape=(224, 224, 3),
+    num_classes=45,
+    dropout_rate=0.35,
+    weights=None,
+    classifier_units=256,
+):
+    """Create a native ShuffleNetV2 0.5x classifier.
+
+    This implementation intentionally trains from scratch because the project
+    does not add a third-party or PyTorch weight-conversion dependency.
+    """
+    if weights not in (None, "none"):
+        raise ValueError(
+            "ShuffleNetV2 0.5x supports weights=None only in the native Keras implementation."
+        )
+
+    inputs = tf.keras.Input(shape=input_shape, name="image")
+    x = _conv_bn_relu(inputs, 24, 3, strides=2, name="stem")
+    x = tf.keras.layers.MaxPooling2D(3, strides=2, padding="same", name="stem_pool")(x)
+
+    for stage_index, (repeats, channels) in enumerate(
+        zip((4, 8, 4), (48, 96, 192)), start=2
+    ):
+        x = _shufflenet_v2_unit(
+            x, channels, stride=2, name=f"stage{stage_index}_unit0"
+        )
+        for unit_index in range(1, repeats):
+            x = _shufflenet_v2_unit(
+                x, channels, stride=1, name=f"stage{stage_index}_unit{unit_index}"
+            )
+    x = _conv_bn_relu(x, 1024, 1, name="final_conv")
+    base_model = tf.keras.Model(
+        inputs, x, name="shufflenetv2_05_backbone"
+    )
+    base_model.trainable = False
+    model = _attach_classifier_head(
+        base_model,
+        input_shape,
+        num_classes,
+        dropout_rate=dropout_rate,
+        classifier_units=classifier_units,
+        model_name="shufflenetv2_05_disease_detector",
+    )
+    return model, base_model
 
 
 def create_efficientnet_model(
@@ -429,7 +633,8 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
 
     Args:
         base_model: Base model to unfreeze. Can be:
-            - MobileNetV2: Standard Keras Model (layers will be selectively unfrozen)
+            - MobileNetV2/MobileNetV3-Small: Standard Keras models (layers selectively unfrozen)
+            - ShuffleNetV2 0.5x: Native Keras model (layers selectively unfrozen)
             - EfficientNet-Lite0: hub.KerasLayer (all-or-nothing; entire layer unfrozen)
         unfreeze_from_layer: Layer index to start unfreezing from (only for Keras Models)
     """
@@ -479,11 +684,15 @@ def get_model(architecture="mobilenetv2", **kwargs):
             - 'mobilenetv2': MobileNetV2 backbone (full layer-level control)
             - 'efficientnet_b0': Standard Keras EfficientNetB0 backbone
             - 'efficientnet' or 'efficientnet_lite0': EfficientNet-Lite0 from TF Hub
+            - 'mobilenetv3_small': Standard Keras MobileNetV3-Small backbone
+            - 'shufflenetv2_05': Native ShuffleNetV2 0.5x backbone
         **kwargs: Additional arguments passed to model creation functions:
             - input_shape: tuple (default (224, 224, 3))
             - num_classes: int (default 45)
             - dropout_rate: float (default 0.5)
             - weights: str (default 'imagenet', ignored for Lite0)
+            - classifier_units: optional hidden units for lightweight heads
+            - include_preprocessing: MobileNetV3 preprocessing flag
             - hub_url: str (optional TF Hub URL override)
             - hub_cache_dir: str (optional TF Hub cache directory override)
             - hub_download_retries: int (total attempts)
@@ -506,6 +715,32 @@ def get_model(architecture="mobilenetv2", **kwargs):
         ]:
             kwargs.pop(key, None)
         return create_mobilenetv2_model(**kwargs)
+    elif arch_lower in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
+        kwargs = dict(kwargs)
+        for key in [
+            "hub_url",
+            "hub_cache_dir",
+            "hub_download_retries",
+            "hub_download_delay_sec",
+        ]:
+            kwargs.pop(key, None)
+        return create_mobilenetv3_small_model(**kwargs)
+    elif arch_lower in {
+        "shufflenetv2_05",
+        "shufflenet_v2_05",
+        "shufflenetv2_0.5x",
+        "shufflenet_v2_0.5x",
+    }:
+        kwargs = dict(kwargs)
+        for key in [
+            "hub_url",
+            "hub_cache_dir",
+            "hub_download_retries",
+            "hub_download_delay_sec",
+            "include_preprocessing",
+        ]:
+            kwargs.pop(key, None)
+        return create_shufflenetv2_05_model(**kwargs)
     elif arch_lower == "efficientnet_b0":
         kwargs = dict(kwargs)
         for key in [
@@ -521,7 +756,8 @@ def get_model(architecture="mobilenetv2", **kwargs):
     else:
         raise ValueError(
             f"Unknown architecture: {architecture}. "
-            f"Supported: 'mobilenetv2', 'efficientnet_b0', 'efficientnet', 'efficientnet_lite0'"
+            f"Supported: 'mobilenetv2', 'efficientnet_b0', 'efficientnet_lite0', "
+            f"'mobilenetv3_small', 'shufflenetv2_05'"
         )
 
 

@@ -10,6 +10,42 @@ import tensorflow as tf
 from tensorflow import keras
 
 
+def configure_runtime(config):
+    """Configure reproducibility and optional GPU performance features."""
+    seed = int(config.get("seed", 42))
+    keras.utils.set_random_seed(seed)
+
+    performance = config.get("performance", {})
+    deterministic = bool(performance.get("deterministic", False))
+    if deterministic:
+        tf.config.experimental.enable_op_determinism()
+
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError:
+            # Memory growth must be set before the device is initialized.
+            pass
+
+    mixed_precision_requested = bool(performance.get("mixed_precision", False))
+    if mixed_precision_requested and gpus:
+        keras.mixed_precision.set_global_policy("mixed_float16")
+        print("Mixed precision enabled for GPU training.")
+    elif mixed_precision_requested:
+        print("Mixed precision requested, but no GPU was found; using float32.")
+
+    if bool(performance.get("xla", False)):
+        tf.config.optimizer.set_jit(True)
+        print("XLA JIT enabled.")
+
+    return {
+        "seed": seed,
+        "deterministic": deterministic,
+        "has_gpu": bool(gpus),
+    }
+
+
 def _normalize_cache_mode(cache_mode):
     if cache_mode is None:
         return "none"
@@ -59,6 +95,16 @@ def get_preprocess_fn(architecture):
     arch = architecture.lower()
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
+    if arch in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
+        return tf.keras.applications.mobilenet_v3.preprocess_input
+    if arch in {
+        "shufflenetv2_05",
+        "shufflenet_v2_05",
+        "shufflenetv2_0.5x",
+        "shufflenet_v2_0.5x",
+    }:
+        # Native ShuffleNetV2 uses the same [-1, 1] input contract as MobileNetV2.
+        return tf.keras.applications.mobilenet_v2.preprocess_input
     if arch == "efficientnet_b0":
         return tf.keras.applications.efficientnet.preprocess_input
     if arch in {"efficientnet", "efficientnet_lite0"}:
@@ -98,6 +144,7 @@ def load_dataset(
     augmentation=None,
     shuffle_buffer=1000,
     cache_mode="none",
+    deterministic=False,
 ):
     """
     Load training and validation datasets
@@ -141,6 +188,8 @@ def load_dataset(
 
     class_names = train_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
+    options = tf.data.Options()
+    options.experimental_deterministic = bool(deterministic)
 
     cache_mode = _normalize_cache_mode(cache_mode)
 
@@ -184,8 +233,10 @@ def load_dataset(
         train_ds = train_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
         val_ds = val_ds.map(_apply_preprocess, num_parallel_calls=AUTOTUNE)
 
-    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
-    val_ds = val_ds.prefetch(buffer_size=AUTOTUNE)
+    # Allow non-deterministic interleave/map scheduling when explicitly enabled.
+    # This improves GPU utilization without changing labels or validation order.
+    train_ds = train_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
+    val_ds = val_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
 
     return train_ds, val_ds, class_names
 
@@ -208,14 +259,27 @@ def create_augmentation_layer(config):
     else:
         zoom_factor = zoom_range
 
-    augmentation = keras.Sequential(
-        [
-            keras.layers.RandomFlip("horizontal_and_vertical"),
-            keras.layers.RandomRotation(aug_config.get("rotation_range", 45) / 360),
-            keras.layers.RandomZoom(zoom_factor),
-            keras.layers.RandomContrast(0.2),
-        ]
-    )
+    layers = []
+    horizontal_flip = aug_config.get("horizontal_flip", True)
+    vertical_flip = aug_config.get("vertical_flip", False)
+    if horizontal_flip and vertical_flip:
+        flip_mode = "horizontal_and_vertical"
+    elif horizontal_flip:
+        flip_mode = "horizontal"
+    elif vertical_flip:
+        flip_mode = "vertical"
+    else:
+        flip_mode = None
+    if flip_mode:
+        layers.append(keras.layers.RandomFlip(flip_mode))
+
+    rotation_range = float(aug_config.get("rotation_range", 45))
+    if rotation_range > 0:
+        layers.append(keras.layers.RandomRotation(rotation_range / 360))
+    layers.append(keras.layers.RandomZoom(zoom_factor))
+    layers.append(keras.layers.RandomContrast(0.2))
+
+    augmentation = keras.Sequential(layers)
 
     brightness_range = aug_config.get("brightness_range")
     random_brightness = getattr(keras.layers, "RandomBrightness", None)
@@ -275,7 +339,7 @@ def compute_class_weights(data_dir):
     return class_weights
 
 
-def setup_callbacks(config):
+def setup_callbacks(config, csv_append=None):
     """
     Setup training callbacks
 
@@ -352,25 +416,29 @@ def setup_callbacks(config):
             )
         )
     elif lr_type == "exponential_decay":
-        decay_steps = lr_config.get("decay_steps", 1000)
-        decay_rate = lr_config.get("decay_rate", 0.96)
-        schedule = keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=initial_lr,
-            decay_steps=decay_steps,
-            decay_rate=decay_rate,
-            staircase=lr_config.get("staircase", False),
+        decay_epochs = float(
+            lr_config.get("decay_epochs", config.get("training", {}).get("epochs", 50))
         )
+        decay_rate = lr_config.get("decay_rate", 0.96)
+
+        def schedule(epoch, _current_lr):
+            exponent = int(epoch) if lr_config.get("staircase", False) else float(epoch)
+            return initial_lr * (decay_rate ** (exponent / max(decay_epochs, 1.0)))
+
         callbacks.append(
             keras.callbacks.LearningRateScheduler(schedule, verbose=1)
         )
     elif lr_type == "cosine_decay":
-        decay_steps = lr_config.get("decay_steps", 1000)
-        alpha = lr_config.get("alpha", 0.0)  # minimum LR fraction
-        schedule = keras.optimizers.schedules.CosineDecay(
-            initial_learning_rate=initial_lr,
-            decay_steps=decay_steps,
-            alpha=alpha,
+        decay_epochs = float(
+            lr_config.get("decay_epochs", config.get("training", {}).get("epochs", 50))
         )
+        alpha = lr_config.get("alpha", 0.0)  # minimum LR fraction
+
+        def schedule(epoch, _current_lr):
+            progress = min(float(epoch) / max(decay_epochs, 1.0), 1.0)
+            cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+            return initial_lr * (alpha + (1.0 - alpha) * cosine)
+
         callbacks.append(
             keras.callbacks.LearningRateScheduler(schedule, verbose=1)
         )
@@ -392,8 +460,11 @@ def setup_callbacks(config):
     if callback_config.get("csv_logger", {}).get("enabled", True):
         csv_config = callback_config["csv_logger"]
         csv_path = csv_config.get("filename", "../results/training_log.csv")
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        callbacks.append(keras.callbacks.CSVLogger(csv_path))
+        csv_dir = os.path.dirname(csv_path)
+        if csv_dir:
+            os.makedirs(csv_dir, exist_ok=True)
+        append = csv_config.get("append", False) if csv_append is None else csv_append
+        callbacks.append(keras.callbacks.CSVLogger(csv_path, append=append))
 
     return callbacks
 

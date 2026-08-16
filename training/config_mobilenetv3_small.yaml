@@ -1,0 +1,108 @@
+# Training Configuration File (MobileNetV3-Small)
+
+model:
+  architecture: "mobilenetv3_small" # One of the five supported architectures
+  input_shape: [224, 224, 3]
+  num_classes: 45
+  weights: "imagenet"
+  dropout_rate: 0.35
+  classifier_units: 256
+  # Keep preprocessing outside the backbone so the [-1, 1] contract is explicit.
+  include_preprocessing: false
+
+dataset:
+  data_dir: "../dataset/processed"
+  train_dir: "../dataset/processed/train"
+  val_dir: "../dataset/processed/val"
+  test_dir: "../dataset/processed/test"
+  batch_size: 64
+  shuffle_buffer: 1000
+  cache_mode: "none"
+
+augmentation:
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
+  horizontal_flip: true
+  vertical_flip: true
+  brightness_range: [0.8, 1.2]
+
+training:
+  epochs: 35
+  freeze_base: true
+  unfreeze_from_layer: 100
+  unfreeze_epoch: 5
+  fine_tune_learning_rate: 0.00005
+  fine_tune_optimizer:
+    name: "sgd"
+    momentum: 0.9
+    decay: 1.0e-5
+
+optimizer:
+  name: "adam"
+  learning_rate: 0.001
+  beta_1: 0.9
+  beta_2: 0.999
+  epsilon: 1.0e-7
+  decay: 0.0
+
+lr_schedule:
+  type: "reduce_on_plateau"
+  monitor: "val_loss"
+  factor: 0.5
+  patience: 4
+  min_lr: 1.0e-7
+
+loss:
+  name: "categorical_crossentropy"
+
+class_weights:
+  enabled: true
+  auto_compute: true
+
+callbacks:
+  checkpoint:
+    enabled: true
+    monitor: "val_accuracy"
+    save_best_only: true
+    save_weights_only: true
+    mode: "max"
+    save_freq: "epoch"
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    patience: 7
+    restore_best_weights: true
+    mode: "min"
+  tensorboard:
+    enabled: true
+    log_dir: "../logs"
+    histogram_freq: 0
+    write_graph: true
+    write_images: false
+    update_freq: "epoch"
+  csv_logger:
+    enabled: true
+    filename: "../results/training_log_mobilenetv3_small.csv"
+    append: false
+
+export:
+  save_dir: "../models"
+  formats: ["h5", "saved_model", "tflite"]
+  sync_flutter_labels: false
+
+metrics:
+  - "accuracy"
+
+performance:
+  mixed_precision: true
+  steps_per_execution: 32
+  jit_compile: false
+  deterministic: false
+
+seed: 42
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  save_to_file: true
+  log_file: "../logs/training_mobilenetv3_small.log"

@@ -1,11 +1,12 @@
 # Multi-Crop Leaf Disease Detection System
 
-Lightweight, offline-capable multi-crop leaf disease detection optimized for mobile deployment. The system trains MobileNetV2 and EfficientNet-Lite0, exports TensorFlow Lite models, and ships a Flutter app for on-device inference.
+Lightweight, offline-capable multi-crop leaf disease detection optimized for mobile deployment. The system trains five mobile backbones, exports TensorFlow Lite models, and ships a Flutter app for on-device inference.
 
 ## Overview
 
 - 45 classes (diseases + healthy + invalid) across 15+ crops
-- MobileNetV2 and EfficientNet-Lite0 with ImageNet pretraining
+- MobileNetV2, EfficientNetB0, EfficientNet-Lite0, and MobileNetV3-Small with ImageNet pretraining
+- Native ShuffleNetV2 0.5x implementation trained from scratch
 - Post-training quantization (dynamic range and full INT8)
 - Flutter app with camera/gallery input and offline inference
 
@@ -29,6 +30,8 @@ Lightweight, offline-capable multi-crop leaf disease detection optimized for mob
 │   └── prepare_data.py
 ├── notebooks/
 │   ├── colab_training_notebook.ipynb
+│   ├── colab_<model>_training.ipynb
+│   ├── kaggle_<model>_training.ipynb
 │   ├── data_exploration.ipynb
 │   └── evaluation.ipynb
 ├── training/
@@ -37,7 +40,10 @@ Lightweight, offline-capable multi-crop leaf disease detection optimized for mob
 │   ├── model.py
 │   ├── utils.py
 │   ├── config_mobilenetv2.yaml
-│   └── config_efficientnet_lite0.yaml
+│   ├── config_efficientnet_b0.yaml
+│   ├── config_efficientnet_lite0.yaml
+│   ├── config_mobilenetv3_small.yaml
+│   └── config_shufflenetv2_05.yaml
 ├── quantization/
 │   └── post_training_quant.py
 ├── models/
@@ -78,7 +84,10 @@ python dataset/prepare_data.py
 
 ```bash
 python training/train.py --config training/config_mobilenetv2.yaml
+python training/train.py --config training/config_efficientnet_b0.yaml
 python training/train.py --config training/config_efficientnet_lite0.yaml
+python training/train.py --config training/config_mobilenetv3_small.yaml
+python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
 ### Evaluation
@@ -105,14 +114,17 @@ python quantization/post_training_quant.py \
 
 ## Google Colab Workflow
 
-Use the notebook at notebooks/colab_training_notebook.ipynb. It reads the dataset from Drive, trains both models, evaluates, quantizes (dynamic + full INT8), and benchmarks TFLite on Colab CPU.
+Use one of the model-specific notebooks named `colab_<model>_training.ipynb` or `kaggle_<model>_training.ipynb`. Each standalone notebook reads the platform dataset, trains one model, evaluates it, exports dynamic-range and full INT8 TFLite models, and benchmarks CPU inference. The existing combined notebooks remain available for backward compatibility.
 
 ## Preprocessing Alignment
 
 Training and quantization use TensorFlow preprocess_input for the selected architecture. The Flutter app must match the same normalization:
 
 - MobileNetV2: input range [-1, 1]
-- EfficientNet: input range [0, 1]
+- MobileNetV3-Small: input range [-1, 1]
+- ShuffleNetV2 0.5x: input range [-1, 1]
+- EfficientNetB0: raw input range [0, 255] (the Keras model includes rescaling)
+- EfficientNet-Lite0: input range [0, 1]
 
 Set flutter_app/lib/utils/constants.dart -> AppConstants.preprocessType to mobilenet_v2 or efficientnet to match the deployed model.
 

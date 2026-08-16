@@ -2,7 +2,7 @@
 
 # Model Settings
 model:
-  architecture: "efficientnet_lite0" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0
+  architecture: "efficientnet_lite0" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0, mobilenetv3_small, shufflenetv2_05
   input_shape: [224, 224, 3]
   num_classes: 45
   weights: "imagenet" # Use ImageNet pre-trained weights

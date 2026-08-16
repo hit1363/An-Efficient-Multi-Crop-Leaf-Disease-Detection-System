@@ -27,6 +27,10 @@ from training.utils import get_preprocess_fn
 
 def infer_architecture_from_path(model_path):
     lower_path = model_path.lower()
+    if "shufflenetv2_05" in lower_path or "shufflenet_v2_05" in lower_path:
+        return "shufflenetv2_05"
+    if "mobilenetv3_small" in lower_path or "mobilenet_v3_small" in lower_path:
+        return "mobilenetv3_small"
     if "efficientnet_b0" in lower_path:
         return "efficientnet_b0"
     if "efficientnet" in lower_path:
@@ -218,7 +222,7 @@ def main():
     parser.add_argument(
         "--arch",
         default=None,
-        help="mobilenetv2, efficientnet_b0, or efficientnet_lite0",
+        help="mobilenetv2, efficientnet_b0, efficientnet_lite0, mobilenetv3_small, or shufflenetv2_05",
     )
     parser.add_argument(
         "--max-samples", type=int, default=None, help="Optional limit for faster checks"

@@ -32,6 +32,15 @@ except ImportError:
             arch = architecture.lower()
             if arch == "mobilenetv2":
                 return tf.keras.applications.mobilenet_v2.preprocess_input
+            if arch in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
+                return tf.keras.applications.mobilenet_v3.preprocess_input
+            if arch in {
+                "shufflenetv2_05",
+                "shufflenet_v2_05",
+                "shufflenetv2_0.5x",
+                "shufflenet_v2_0.5x",
+            }:
+                return tf.keras.applications.mobilenet_v2.preprocess_input
             if arch == "efficientnet_b0":
                 return tf.keras.applications.efficientnet.preprocess_input
             if arch in {"efficientnet", "efficientnet_lite0"}:
@@ -41,6 +50,10 @@ except ImportError:
 
 def infer_architecture_from_path(model_path):
     lower = model_path.lower()
+    if "shufflenetv2_05" in lower or "shufflenet_v2_05" in lower:
+        return "shufflenetv2_05"
+    if "mobilenetv3_small" in lower or "mobilenet_v3_small" in lower:
+        return "mobilenetv3_small"
     if "efficientnet_b0" in lower:
         return "efficientnet_b0"
     if "efficientnet" in lower:
@@ -100,17 +113,34 @@ def _build_model_from_config(config, architecture_override=None):
     weights = model_cfg.get("weights", "imagenet")
 
     get_model = _get_model_factory()
-    model, _ = get_model(
-        architecture=architecture,
-        input_shape=input_shape,
-        num_classes=num_classes,
-        dropout_rate=dropout_rate,
-        weights=weights,
-        hub_url=model_cfg.get("hub_url"),
-        hub_cache_dir=model_cfg.get("hub_cache_dir"),
-        hub_download_retries=model_cfg.get("hub_download_retries", 1),
-        hub_download_delay_sec=model_cfg.get("hub_download_delay_sec", 5),
-    )
+    model_kwargs = {
+        "architecture": architecture,
+        "input_shape": input_shape,
+        "num_classes": num_classes,
+        "dropout_rate": dropout_rate,
+        "weights": weights,
+        "hub_url": model_cfg.get("hub_url"),
+        "hub_cache_dir": model_cfg.get("hub_cache_dir"),
+        "hub_download_retries": model_cfg.get("hub_download_retries", 1),
+        "hub_download_delay_sec": model_cfg.get("hub_download_delay_sec", 5),
+    }
+    arch_lower = architecture.lower()
+    if arch_lower in {
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenetv3small",
+        "mobilenet_v3_small",
+        "shufflenetv2_05",
+        "shufflenet_v2_05",
+        "shufflenetv2_0.5x",
+        "shufflenet_v2_0.5x",
+    }:
+        model_kwargs["classifier_units"] = model_cfg.get("classifier_units", 256)
+    if arch_lower in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
+        model_kwargs["include_preprocessing"] = model_cfg.get(
+            "include_preprocessing", False
+        )
+    model, _ = get_model(**model_kwargs)
 
     return model
 
@@ -401,8 +431,19 @@ def benchmark_inference_time(tflite_path, num_runs=100, architecture=None):
     if input_dtype == np.uint8:
         dummy_input = np.random.randint(0, 255, input_shape, dtype=np.uint8)
     else:
-        if arch == "mobilenetv2":
+        if arch in {
+            "mobilenetv2",
+            "mobilenetv3_small",
+            "mobilenetv3small",
+            "mobilenet_v3_small",
+            "shufflenetv2_05",
+            "shufflenet_v2_05",
+            "shufflenetv2_0.5x",
+            "shufflenet_v2_0.5x",
+        }:
             dummy_input = np.random.uniform(-1.0, 1.0, input_shape).astype(np.float32)
+        elif arch == "efficientnet_b0":
+            dummy_input = np.random.uniform(0.0, 255.0, input_shape).astype(np.float32)
         elif "efficientnet" in arch:
             dummy_input = np.random.uniform(0.0, 1.0, input_shape).astype(np.float32)
         else:
@@ -479,7 +520,7 @@ def main():
         "--arch",
         type=str,
         default=None,
-        help="Model architecture for preprocessing (mobilenetv2, efficientnet_b0, or efficientnet_lite0)",
+        help="Model architecture for preprocessing (mobilenetv2, efficientnet_b0, efficientnet_lite0, mobilenetv3_small, or shufflenetv2_05)",
     )
     parser.set_defaults(quantize=True)
 

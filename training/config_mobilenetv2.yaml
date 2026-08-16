@@ -2,11 +2,12 @@
 
 # Model Settings
 model:
-  architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0
+  architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0, mobilenetv3_small, shufflenetv2_05
   input_shape: [224, 224, 3]
   num_classes: 45
   weights: "imagenet" # Use ImageNet pre-trained weights
-  dropout_rate: 0.5
+  dropout_rate: 0.35
+  classifier_units: 256
 
 # Dataset Settings
 dataset:
@@ -14,25 +15,29 @@ dataset:
   train_dir: "../dataset/processed/train"
   val_dir: "../dataset/processed/val"
   test_dir: "../dataset/processed/test"
-  batch_size: 32
+  batch_size: 64
   shuffle_buffer: 1000
   cache_mode: "none"
 
 # Data Augmentation
 augmentation:
-  rotation_range: 45
-  zoom_range: [0.8, 1.2]
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
   brightness_range: [0.8, 1.2]
 
 # Training Settings
 training:
-  epochs: 50
+  epochs: 35
   freeze_base: true
-  unfreeze_from_layer: 100 # Layer index to start unfreezing from
-  unfreeze_epoch: 10 # Unfreeze after this epoch
-  fine_tune_learning_rate: 0.0001
+  unfreeze_from_layer: 100 # Keep early generic features frozen
+  unfreeze_epoch: 5 # Train the head briefly before fine-tuning
+  fine_tune_learning_rate: 0.00005
+  fine_tune_optimizer:
+    name: "sgd"
+    momentum: 0.9
+    decay: 1.0e-5
 
 # Optimizer Settings
 optimizer:
@@ -46,8 +51,8 @@ optimizer:
 # Learning Rate Schedule
 # type: reduce_on_plateau (default) | exponential_decay | cosine_decay
 #   reduce_on_plateau: uses factor, patience, min_lr (above)
-#   exponential_decay: uses decay_steps, decay_rate, staircase
-#   cosine_decay:     uses decay_steps, alpha (minimum LR fraction)
+#   exponential_decay: uses decay_epochs, decay_rate, staircase
+#   cosine_decay:     uses decay_epochs, alpha (minimum LR fraction)
 lr_schedule:
   type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
   monitor: "val_loss"
@@ -55,11 +60,11 @@ lr_schedule:
   patience: 5
   min_lr: 1.0e-7
   # For exponential_decay:
-  # decay_steps: 1000
+  # decay_epochs: 35
   # decay_rate: 0.96
   # staircase: false
   # For cosine_decay:
-  # decay_steps: 1000
+  # decay_epochs: 35
   # alpha: 0.0
 
 # Loss Function
@@ -82,7 +87,7 @@ callbacks:
     enabled: true
     monitor: "val_accuracy"
     save_best_only: true
-    save_weights_only: false
+    save_weights_only: true
     mode: "max"
     save_freq: "epoch"
 
@@ -90,7 +95,7 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 10
+    patience: 7
     restore_best_weights: true
     mode: "min"
 
@@ -98,7 +103,7 @@ callbacks:
   tensorboard:
     enabled: true
     log_dir: "../logs"
-    histogram_freq: 1
+    histogram_freq: 0
     write_graph: true
     write_images: false
     update_freq: "epoch"
@@ -118,9 +123,14 @@ export:
 # Evaluation Metrics
 metrics:
   - "accuracy"
-  - "precision"
-  - "recall"
-  - "auc"
+
+# Runtime performance. Mixed precision and batched execution are especially
+# effective for MobileNetV2 on Kaggle GPUs. Set mixed_precision to false for CPU.
+performance:
+  mixed_precision: true
+  steps_per_execution: 32
+  jit_compile: false
+  deterministic: false
 
 # Reproducibility
 seed: 42
