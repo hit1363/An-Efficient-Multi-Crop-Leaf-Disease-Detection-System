@@ -4,7 +4,9 @@ Utility Functions for Training Pipeline
 
 import os
 import logging
+import shutil
 import tempfile
+import time
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -39,10 +41,37 @@ def configure_runtime(config):
         tf.config.optimizer.set_jit(True)
         print("XLA JIT enabled.")
 
+    distribution = performance.get("distribution", "auto")
+    distribution_key = (
+        distribution.strip().lower() if isinstance(distribution, str) else distribution
+    )
+    distribution_enabled = distribution_key not in {
+        False,
+        None,
+        "false",
+        "off",
+        "none",
+    }
+    if distribution_enabled and len(gpus) > 1:
+        strategy = tf.distribute.MirroredStrategy()
+        strategy_name = "MirroredStrategy"
+    else:
+        strategy = tf.distribute.get_strategy()
+        strategy_name = "DefaultStrategy"
+
+    print(
+        "Distribution strategy: "
+        f"{strategy_name} ({strategy.num_replicas_in_sync} replica(s))"
+    )
+
     return {
         "seed": seed,
         "deterministic": deterministic,
         "has_gpu": bool(gpus),
+        "gpu_count": len(gpus),
+        "strategy": strategy,
+        "strategy_name": strategy_name,
+        "num_replicas": strategy.num_replicas_in_sync,
     }
 
 
@@ -53,12 +82,14 @@ def _normalize_cache_mode(cache_mode):
     mode = str(cache_mode).strip().lower()
     if mode in {"none", "disabled", "off"}:
         return "none"
+    if mode in {"auto", "automatic"}:
+        return "auto"
     if mode in {"memory", "in_memory", "ram"}:
         return "memory"
     if mode in {"disk", "file", "on_disk"}:
         return "disk"
 
-    raise ValueError("dataset.cache_mode must be one of: none, memory, disk")
+    raise ValueError("dataset.cache_mode must be one of: none, memory, disk, auto")
 
 
 def setup_logging(config):
@@ -112,7 +143,7 @@ def get_preprocess_fn(architecture):
     return None
 
 
-def _dataset_cache_path(name):
+def _dataset_cache_path(name, cache_key=None):
     """Return a writable cache file path for the current notebook/runtime."""
     candidates = []
     if os.path.isdir("/kaggle/working"):
@@ -128,11 +159,67 @@ def _dataset_cache_path(name):
             with open(test_file, "w", encoding="utf-8") as handle:
                 handle.write("ok")
             os.remove(test_file)
-            return os.path.join(cache_dir, name)
+            suffix = f"_{cache_key}" if cache_key else ""
+            return os.path.join(cache_dir, name + suffix)
         except OSError:
             continue
 
     return None
+
+
+def _available_host_memory_gb():
+    """Return available host RAM when psutil is available."""
+    try:
+        import psutil
+
+        return float(psutil.virtual_memory().available) / (1024**3)
+    except (ImportError, AttributeError, OSError):
+        return None
+
+
+def _resolve_cache_mode(cache_mode, train_ds, val_ds, image_size, batch_size):
+    """Resolve ``auto`` caching without risking an uncontrolled RAM cache."""
+    requested = _normalize_cache_mode(cache_mode)
+    if requested != "auto":
+        return requested
+
+    train_cardinality = tf.data.experimental.cardinality(train_ds)
+    val_cardinality = tf.data.experimental.cardinality(val_ds)
+    try:
+        # Cardinality is measured in batches because the source datasets are
+        # batched. This is intentionally an upper-bound estimate for the last
+        # partial batch, which keeps the memory decision conservative.
+        train_count = int(train_cardinality.numpy()) * int(batch_size)
+        val_count = int(val_cardinality.numpy()) * int(batch_size)
+    except (AttributeError, TypeError, ValueError):
+        train_count = val_count = -1
+
+    # The cache is created before augmentation and preprocessing, so estimate
+    # the raw uint8 image footprint. Keep a generous headroom factor for TF
+    # bookkeeping and the rest of the notebook process.
+    required_gb = 0.0
+    if train_count >= 0 and val_count >= 0:
+        height, width = image_size[:2]
+        required_gb = (train_count + val_count) * height * width * 3 / (1024**3)
+        required_gb *= 1.25
+
+    available_gb = _available_host_memory_gb()
+    if available_gb is not None and required_gb > 0 and available_gb >= required_gb * 1.25:
+        return "memory"
+
+    # Disk caching is slower than RAM but avoids killing hosted runtimes when
+    # the dataset is too large for a safe in-memory cache. Do not select it if
+    # the target filesystem cannot hold the estimated cache.
+    for candidate in ("/kaggle/working", "/content", tempfile.gettempdir()):
+        if os.path.isdir(candidate):
+            try:
+                free_gb = shutil.disk_usage(candidate).free / (1024**3)
+                if required_gb <= 0 or free_gb >= required_gb * 1.25:
+                    return "disk"
+            except OSError:
+                continue
+
+    return "none"
 
 
 def load_dataset(
@@ -160,19 +247,19 @@ def load_dataset(
             applied AFTER caching so the order reshuffles every epoch instead of
             being frozen in the cache.
         cache_mode: Dataset cache strategy. Use "none" to disable caching,
-            "memory" to keep cached batches in RAM, or "disk" to cache to a
-            writable filesystem path.
+            "memory" to keep cached batches in RAM, "disk" to cache to a
+            writable filesystem path, or "auto" to select RAM only when the
+            estimated footprint is safe and otherwise use disk/no cache.
 
     Returns:
         train_ds, val_ds, class_names
     """
-    # Load datasets as individual examples so shuffling happens on raw images,
-    # not on already-batched tensors. This keeps the shuffle buffer memory use
-    # proportional to images instead of full batches.
+    # Batch at the source. The previous unbatched -> shuffle -> batch path
+    # added substantial tf.data overhead for large hosted datasets.
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
-        batch_size=None,
+        batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
         seed=42,
@@ -181,7 +268,7 @@ def load_dataset(
     val_ds = keras.preprocessing.image_dataset_from_directory(
         val_dir,
         image_size=image_size,
-        batch_size=None,
+        batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
     )
@@ -191,28 +278,36 @@ def load_dataset(
     options = tf.data.Options()
     options.experimental_deterministic = bool(deterministic)
 
-    cache_mode = _normalize_cache_mode(cache_mode)
+    cache_mode = _resolve_cache_mode(
+        cache_mode, train_ds, val_ds, image_size, batch_size
+    )
+    logger = logging.getLogger(__name__)
 
-    # Cache the RAW images first only when cache_mode requests it. This keeps
-    # augmentation stochastic across epochs while avoiding accidental disk use.
+    # Cache decoded/resized batches before augmentation so augmentation remains
+    # stochastic on every epoch while image decoding happens only once.
     if cache_mode == "disk":
-        train_cache = _dataset_cache_path("train_cache")
-        val_cache = _dataset_cache_path("val_cache")
-        train_ds = train_ds.cache(train_cache) if train_cache else train_ds.cache()
-        val_ds = val_ds.cache(val_cache) if val_cache else val_ds.cache()
+        height, width = image_size[:2]
+        cache_key = f"v2_{height}x{width}_b{int(batch_size)}"
+        train_cache = _dataset_cache_path("train_cache", cache_key)
+        val_cache = _dataset_cache_path("val_cache", cache_key)
+        if train_cache and val_cache:
+            train_ds = train_ds.cache(train_cache)
+            val_ds = val_ds.cache(val_cache)
+        else:
+            logger.warning("Disk cache is unavailable; continuing without caching.")
+            cache_mode = "none"
     elif cache_mode == "memory":
         train_ds = train_ds.cache()
         val_ds = val_ds.cache()
 
-    # Reshuffle the training order each epoch on raw examples.
+    # Shuffle batches after caching so cached datasets still reshuffle each
+    # epoch. The source dataset is already batched, avoiding the expensive
+    # individual-example shuffle and re-batch path.
     if shuffle_buffer and shuffle_buffer > 0:
+        shuffle_batches = max(1, int(np.ceil(shuffle_buffer / batch_size)))
         train_ds = train_ds.shuffle(
-            buffer_size=shuffle_buffer, seed=42, reshuffle_each_iteration=True
+            buffer_size=shuffle_batches, seed=42, reshuffle_each_iteration=True
         )
-
-    # Batch after shuffling so the shuffle buffer stays small.
-    train_ds = train_ds.batch(batch_size)
-    val_ds = val_ds.batch(batch_size)
 
     # Augmentation only on training data. Runs each epoch because it sits
     # after the cache.
@@ -237,6 +332,16 @@ def load_dataset(
     # This improves GPU utilization without changing labels or validation order.
     train_ds = train_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
+
+    logger.info(
+        "Dataset pipeline: batch_size=%d, train_steps=%s, val_steps=%s, "
+        "cache_mode=%s, shuffle_batch_buffer=%d",
+        batch_size,
+        train_ds.cardinality(),
+        val_ds.cardinality(),
+        cache_mode,
+        max(1, int(np.ceil(shuffle_buffer / batch_size))) if shuffle_buffer else 0,
+    )
 
     return train_ds, val_ds, class_names
 
@@ -298,6 +403,39 @@ def create_augmentation_layer(config):
     return augmentation
 
 
+class ThroughputCallback(keras.callbacks.Callback):
+    """Log epoch duration and effective image throughput."""
+
+    def __init__(self, batch_size, cache_mode="none"):
+        super().__init__()
+        self.batch_size = int(batch_size)
+        self.cache_mode = str(cache_mode)
+        self._epoch_started = None
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self._epoch_started = time.perf_counter()
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self._epoch_started is None:
+            return
+        elapsed = max(time.perf_counter() - self._epoch_started, 1e-6)
+        steps = self.params.get("steps") or 0
+        images = int(steps) * self.batch_size
+        images_per_second = images / elapsed if images else 0.0
+        logging.getLogger(__name__).info(
+            "Epoch %d throughput: %.1f images/sec (%.2f min, %d steps, cache=%s)",
+            epoch + 1,
+            images_per_second,
+            elapsed / 60.0,
+            int(steps),
+            self.cache_mode,
+        )
+        if epoch == 0 and self.cache_mode in {"memory", "disk", "auto"}:
+            logging.getLogger(__name__).info(
+                "The first epoch may be slower while the dataset cache is populated."
+            )
+
+
 def compute_class_weights(data_dir):
     """
     Compute class weights for imbalanced dataset
@@ -351,6 +489,15 @@ def setup_callbacks(config, csv_append=None):
     """
     callbacks = []
     callback_config = config.get("callbacks", {})
+    performance_config = config.get("performance", {})
+
+    if performance_config.get("log_throughput", True):
+        callbacks.append(
+            ThroughputCallback(
+                batch_size=config.get("dataset", {}).get("batch_size", 32),
+                cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
+            )
+        )
 
     # Model Checkpoint
     if callback_config.get("checkpoint", {}).get("enabled", True):

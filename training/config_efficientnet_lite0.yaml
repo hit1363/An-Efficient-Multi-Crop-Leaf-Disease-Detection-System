@@ -19,17 +19,17 @@ dataset:
   train_dir: "../dataset/processed/train"
   val_dir: "../dataset/processed/val"
   test_dir: "../dataset/processed/test"
-  batch_size: 32
+  batch_size: 64
   shuffle_buffer: 1000
-  cache_mode: "none"
+  cache_mode: "auto"
 
 # Data Augmentation
 augmentation:
-  rotation_range: 45
-  zoom_range: [0.8, 1.2]
+  rotation_range: 20
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
-  brightness_range: [0.8, 1.2]
+  brightness_range: [0.9, 1.1]
 
 # Training Settings
 training:
@@ -136,3 +136,11 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   save_to_file: true
   log_file: "../logs/training_efficientnet_lite0.log"
+
+performance:
+  mixed_precision: true
+  steps_per_execution: 32
+  jit_compile: false
+  deterministic: false
+  distribution: auto
+  log_throughput: true

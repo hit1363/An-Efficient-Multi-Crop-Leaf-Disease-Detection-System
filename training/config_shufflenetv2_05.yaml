@@ -14,16 +14,16 @@ dataset:
   train_dir: "../dataset/processed/train"
   val_dir: "../dataset/processed/val"
   test_dir: "../dataset/processed/test"
-  batch_size: 64
+  batch_size: 128
   shuffle_buffer: 1000
-  cache_mode: "none"
+  cache_mode: "auto"
 
 augmentation:
-  rotation_range: 25
-  zoom_range: [0.9, 1.1]
+  rotation_range: 15
+  zoom_range: [0.95, 1.05]
   horizontal_flip: true
   vertical_flip: true
-  brightness_range: [0.8, 1.2]
+  brightness_range: [0.9, 1.1]
 
 training:
   # The backbone is randomly initialized, so it must train from epoch one.
@@ -98,6 +98,8 @@ performance:
   steps_per_execution: 32
   jit_compile: false
   deterministic: false
+  distribution: auto
+  log_throughput: true
 
 seed: 42
 

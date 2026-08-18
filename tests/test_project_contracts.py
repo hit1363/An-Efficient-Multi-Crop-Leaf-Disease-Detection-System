@@ -32,6 +32,39 @@ def test_all_model_configs_exist():
         assert f'architecture: "{architecture}"' in config_text
 
 
+def test_optimized_runtime_defaults_are_present():
+    mobile_architectures = (
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+    )
+    efficient_architectures = ("efficientnet_b0", "efficientnet_lite0")
+
+    for architecture in mobile_architectures:
+        config_text = (
+            ROOT / "training" / f"config_{architecture}.yaml"
+        ).read_text(encoding="utf-8")
+        assert "batch_size: 128" in config_text
+        assert 'cache_mode: "auto"' in config_text
+        assert "distribution: auto" in config_text
+        assert "log_throughput: true" in config_text
+
+    for architecture in efficient_architectures:
+        config_text = (
+            ROOT / "training" / f"config_{architecture}.yaml"
+        ).read_text(encoding="utf-8")
+        assert "batch_size: 64" in config_text
+        assert 'cache_mode: "auto"' in config_text
+        assert "distribution: auto" in config_text
+
+    utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
+    train_text = (ROOT / "training" / "train.py").read_text(encoding="utf-8")
+    assert "MirroredStrategy" in utils_text
+    assert "batch_size=batch_size" in utils_text
+    assert "ThroughputCallback" in utils_text
+    assert "with strategy.scope()" in train_text
+
+
 def test_standalone_notebooks_have_valid_code_and_platform_paths():
     architectures = [
         "mobilenetv2",
@@ -56,4 +89,5 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert f'ARCH = "{architecture}"' in code
             assert "--representative_data" in code
             assert "--arch" in code
-
+            assert 'cfg["dataset"]["cache_mode"] = "auto"' in code
+            assert '"distribution": "auto"' in code

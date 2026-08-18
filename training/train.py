@@ -275,14 +275,23 @@ def train_model(config_path="config.yaml"):
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
 
-    # Configure runtime before loading data or creating the model.
-    configure_runtime(config)
+    # Configure runtime before loading data or creating the model. The returned
+    # strategy is reused for model creation, compilation, and fine-tuning.
+    runtime = configure_runtime(config)
+    strategy = runtime["strategy"]
 
     # Setup logging
     logger = setup_logging(config)
     logger.info("Starting training...")
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
+    logger.info(
+        "Runtime: GPUs=%d, strategy=%s, replicas=%d, global_batch_size=%d",
+        runtime["gpu_count"],
+        runtime["strategy_name"],
+        runtime["num_replicas"],
+        int(config.get("dataset", {}).get("batch_size", 32)),
+    )
 
     freeze_base = config.get("training", {}).get("freeze_base", True)
     total_epochs = int(config.get("training", {}).get("epochs", 50))
@@ -322,6 +331,19 @@ def train_model(config_path="config.yaml"):
     logger.info(f"Found {len(class_names)} classes")
     logger.info(f"Classes: {class_names}")
 
+    train_cardinality = tf.data.experimental.cardinality(train_ds)
+    val_cardinality = tf.data.experimental.cardinality(val_ds)
+    try:
+        train_steps = int(train_cardinality.numpy())
+        val_steps = int(val_cardinality.numpy())
+    except (AttributeError, TypeError, ValueError):
+        train_steps = val_steps = -1
+    logger.info(
+        "Training workload: %s train steps + %s validation steps per epoch",
+        train_steps if train_steps >= 0 else "unknown",
+        val_steps if val_steps >= 0 else "unknown",
+    )
+
     if len(class_names) != config["model"]["num_classes"]:
         raise ValueError(
             f"Class count mismatch: dataset has {len(class_names)} classes, "
@@ -334,51 +356,53 @@ def train_model(config_path="config.yaml"):
         logger.info("Computing class weights...")
         class_weights = compute_class_weights(config["dataset"]["train_dir"])
 
-    # Create model
+    # Create and compile the model inside the distribution scope. This is
+    # required for MirroredStrategy to place variables on every replica.
     logger.info(f"Creating {config['model']['architecture']} model...")
-    model_kwargs = dict(
-        architecture=config["model"]["architecture"],
-        input_shape=tuple(config["model"]["input_shape"]),
-        num_classes=config["model"]["num_classes"],
-        dropout_rate=config["model"]["dropout_rate"],
-        weights=config["model"]["weights"],
-        hub_url=config["model"].get("hub_url"),
-        hub_cache_dir=config["model"].get("hub_cache_dir"),
-        hub_download_retries=config["model"].get("hub_download_retries", 1),
-        hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
-    )
-    if config["model"]["architecture"].lower() in {
-        "mobilenetv2",
-        "mobilenetv3_small",
-        "mobilenetv3small",
-        "mobilenet_v3_small",
-        "shufflenetv2_05",
-        "shufflenet_v2_05",
-        "shufflenetv2_0.5x",
-        "shufflenet_v2_0.5x",
-    }:
-        model_kwargs["classifier_units"] = config["model"].get(
-            "classifier_units", 256
+    with strategy.scope():
+        model_kwargs = dict(
+            architecture=config["model"]["architecture"],
+            input_shape=tuple(config["model"]["input_shape"]),
+            num_classes=config["model"]["num_classes"],
+            dropout_rate=config["model"]["dropout_rate"],
+            weights=config["model"]["weights"],
+            hub_url=config["model"].get("hub_url"),
+            hub_cache_dir=config["model"].get("hub_cache_dir"),
+            hub_download_retries=config["model"].get("hub_download_retries", 1),
+            hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
         )
-    if config["model"]["architecture"].lower() in {
-        "mobilenetv3_small",
-        "mobilenetv3small",
-        "mobilenet_v3_small",
-    }:
-        model_kwargs["include_preprocessing"] = config["model"].get(
-            "include_preprocessing", False
-        )
-    model, base_model = get_model(**model_kwargs)
+        if config["model"]["architecture"].lower() in {
+            "mobilenetv2",
+            "mobilenetv3_small",
+            "mobilenetv3small",
+            "mobilenet_v3_small",
+            "shufflenetv2_05",
+            "shufflenet_v2_05",
+            "shufflenetv2_0.5x",
+            "shufflenet_v2_0.5x",
+        }:
+            model_kwargs["classifier_units"] = config["model"].get(
+                "classifier_units", 256
+            )
+        if config["model"]["architecture"].lower() in {
+            "mobilenetv3_small",
+            "mobilenetv3small",
+            "mobilenet_v3_small",
+        }:
+            model_kwargs["include_preprocessing"] = config["model"].get(
+                "include_preprocessing", False
+            )
+        model, base_model = get_model(**model_kwargs)
 
-    if not freeze_base:
-        logger.info("freeze_base is False: training backbone from the first epoch")
-        unfreeze_base_model(base_model, unfreeze_from_layer=0)
+        if not freeze_base:
+            logger.info("freeze_base is False: training backbone from the first epoch")
+            unfreeze_base_model(base_model, unfreeze_from_layer=0)
+
+        # Compile model
+        logger.info("Compiling model...")
+        model = compile_model(model, config)
 
     print_model_summary(model)
-
-    # Compile model
-    logger.info("Compiling model...")
-    model = compile_model(model, config)
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
@@ -407,10 +431,11 @@ def train_model(config_path="config.yaml"):
         unfreeze_from = config.get("training", {}).get("unfreeze_from_layer")
         if unfreeze_from is None:
             unfreeze_from = config.get("training", {}).get("freeze_until_layer", 100)
-        unfreeze_base_model(base_model, unfreeze_from)
+        with strategy.scope():
+            unfreeze_base_model(base_model, unfreeze_from)
 
-        # Recompile with the configured fine-tuning optimizer and lower LR.
-        compile_model(model, config, phase="fine_tune")
+            # Recompile with the configured fine-tuning optimizer and lower LR.
+            compile_model(model, config, phase="fine_tune")
 
         # Continue training
         history2 = model.fit(
