@@ -131,7 +131,7 @@ def _tfhub_gcs_url(hub_url):
     """Map a tfhub.dev / kaggle.com URL to its canonical GCS mirror.
 
     TF Hub serves every published module as a tarball on
-    ``https://storage.googleapis.com/tfhub-modules/<publisher>/<name>/<version>``.
+    ``https://storage.googleapis.com/tfhub-modules/<publisher>/<name>/<version>.tar.gz``.
     Downloading from GCS directly avoids the tfhub.dev redirect/resolver which
     is the common point of failure for TF1-format modules (like Lite0).
     Returns ``None`` if the URL cannot be mapped.
@@ -139,7 +139,7 @@ def _tfhub_gcs_url(hub_url):
     if not hub_url:
         return None
     url = hub_url.split("?")[0].rstrip("/")
-    # Canonical tfhub.dev URL: https://tfhub.dev/google/efficientnet/lite0/feature-vector/2
+    # Canonical tfhub.dev URL: https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2
     for prefix in ("https://tfhub.dev/", "http://tfhub.dev/"):
         if url.lower().startswith(prefix):
             path = url[len(prefix):].strip("/")
@@ -175,36 +175,30 @@ def _resolve_module_handle(hub_url, hub_cache_dir):
             parsed = _up.urlparse(gcs_url)
             module_subdir = parsed.path.strip("/").replace("/", "_")
             local_dir = os.path.join(cache_dir, module_subdir)
+            # The GCS mirror is an archive endpoint. Keep ``gcs_url`` without
+            # the suffix for stable cache naming, but request the actual tarball.
+            archive_url = (
+                gcs_url if gcs_url.lower().endswith(".tar.gz") else f"{gcs_url}.tar.gz"
+            )
             try:
                 downloaded = tf.keras.utils.get_file(
                     fname=module_subdir + ".tar.gz",
-                    origin=gcs_url,
+                    origin=archive_url,
                     extract=True,
                     cache_dir=cache_dir,
                     cache_subdir="downloads",
                 )
-                # get_file(extract=True) extracts the tarball; the SavedModel
-                # lives either at `downloaded` (if it was a dir) or next to it.
-                extracted = (
-                    downloaded
-                    if os.path.isdir(downloaded)
-                    else os.path.splitext(downloaded)[0]
+                # ``get_file(extract=True)`` returns the archive path on some
+                # Keras versions and the extracted directory on others. Find
+                # the actual SavedModel marker instead of guessing the folder
+                # name (``os.path.splitext`` only strips ``.gz`` from .tar.gz).
+                search_root = (
+                    downloaded if os.path.isdir(downloaded) else os.path.dirname(downloaded)
                 )
-                # The tarball's top-level dir is usually the version (e.g. "2"
-                # or "1") containing saved_model.pb. Walk to find it.
-                if os.path.isdir(extracted) and not os.path.exists(
-                    os.path.join(extracted, "saved_model.pb")
-                ):
-                    for root, _dirs, files in os.walk(extracted):
+                if os.path.isdir(search_root):
+                    for root, _dirs, files in os.walk(search_root):
                         if "saved_model.pb" in files or "saved_model.pbtxt" in files:
-                            extracted = root
-                            break
-                if os.path.exists(os.path.join(extracted, "saved_model.pb")) or (
-                    os.path.isdir(extracted)
-                ):
-                    local_dir = extracted
-                if os.path.isdir(local_dir):
-                    return local_dir, True
+                            return root, True
             except Exception as exc:
                 print(
                     f"[model] Direct GCS download failed ({exc}); "
@@ -566,7 +560,7 @@ def create_efficientnet_model(
     # Load official EfficientNetLite0 from TensorFlow Hub
     # Pre-trained on ImageNet, optimized for mobile devices
     # Note: weights parameter is mostly ignored; Hub always provides pretrained ImageNet weights
-    hub_url = hub_url or "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
+    hub_url = hub_url or "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
 
     cache_dir = _resolve_tfhub_cache_dir(hub_cache_dir)
     if cache_dir:
@@ -590,9 +584,12 @@ def create_efficientnet_model(
                     f"[model] TF Hub Lite0 module failed after {attempts} attempt(s): {exc}"
                 )
                 raise RuntimeError(
-                    "The TF Hub EfficientNet-Lite0 module could not be loaded. "
-                    "Use architecture 'efficientnet_b0' for the supported Keras "
-                    "EfficientNetB0 implementation, or fix the TF Hub/network cache."
+                    "The TF Hub EfficientNet-Lite0 module could not be loaded from "
+                    f"{hub_url!r}. Cache: {cache_dir!r}. "
+                    "On Kaggle/Colab, enable Internet for the first download or "
+                    "provide a local Hub SavedModel through model.hub_url. "
+                    "If you intended the Keras implementation, use architecture "
+                    "'efficientnet_b0' instead."
                 ) from exc
             if _is_tfhub_cache_error(exc):
                 # Clear the cache so the next attempt re-downloads cleanly.

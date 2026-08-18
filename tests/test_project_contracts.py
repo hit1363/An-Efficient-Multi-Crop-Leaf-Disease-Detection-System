@@ -32,6 +32,27 @@ def test_all_model_configs_exist():
         assert f'architecture: "{architecture}"' in config_text
 
 
+def test_efficientnet_lite0_uses_the_valid_tfhub_endpoint():
+    endpoint = "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
+    stale_endpoint = "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
+    config_text = (
+        ROOT / "training" / "config_efficientnet_lite0.yaml"
+    ).read_text(encoding="utf-8")
+    model_text = (ROOT / "training" / "model.py").read_text(encoding="utf-8")
+
+    assert endpoint in config_text
+    assert endpoint in model_text
+    assert stale_endpoint not in config_text
+    assert stale_endpoint not in model_text
+
+
+def test_tfhub_gcs_download_uses_the_tarball_suffix():
+    model_text = (ROOT / "training" / "model.py").read_text(encoding="utf-8")
+    assert "archive_url" in model_text
+    assert 'f"{gcs_url}.tar.gz"' in model_text
+    assert 'origin=archive_url' in model_text
+
+
 def test_optimized_runtime_defaults_are_present():
     mobile_architectures = (
         "mobilenetv2",
@@ -91,6 +112,33 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert "--arch" in code
             assert 'cfg["dataset"]["cache_mode"] = "auto"' in code
             assert '"distribution": "auto"' in code
+
+
+def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
+    for platform in ("colab", "kaggle"):
+        for architecture in (
+            "mobilenetv2",
+            "efficientnet_b0",
+            "efficientnet_lite0",
+            "mobilenetv3_small",
+            "shufflenetv2_05",
+        ):
+            path = ROOT / "notebooks" / f"{platform}_{architecture}_training.ipynb"
+            notebook = json.loads(path.read_text(encoding="utf-8"))
+            code_cells = [
+                "".join(cell.get("source", []))
+                for cell in notebook["cells"]
+                if cell["cell_type"] == "code"
+            ]
+            clone_cells = [
+                cell for cell in code_cells if "git" in cell and "clone" in cell
+            ]
+            install_cells = [cell for cell in code_cells if "pip" in cell and "install" in cell]
+            assert len(clone_cells) == 1, path
+            assert len(install_cells) == 1, path
+            assert "pip" not in clone_cells[0]
+            assert not ("git" in install_cells[0] and "clone" in install_cells[0])
+            assert "requirements.txt" in install_cells[0]
 
 
 def test_comparison_notebooks_and_common_runner_contract():
