@@ -91,3 +91,45 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert "--arch" in code
             assert 'cfg["dataset"]["cache_mode"] = "auto"' in code
             assert '"distribution": "auto"' in code
+
+
+def test_comparison_notebooks_and_common_runner_contract():
+    architectures = (
+        "mobilenetv2",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+    )
+    common_path = ROOT / "notebooks" / "model_comparison_common.py"
+    ast.parse(common_path.read_text(encoding="utf-8"), filename=str(common_path))
+    common_code = common_path.read_text(encoding="utf-8")
+    for required in (
+        "def discover_artifacts",
+        "def evaluate_float_model",
+        "def evaluate_tflite_artifact",
+        "def run_comparison",
+        "balanced_score",
+        "best_float_accuracy",
+        "best_edge_deployment",
+    ):
+        assert required in common_code
+
+    for platform in ("colab", "kaggle"):
+        path = ROOT / "notebooks" / f"{platform}_model_comparison.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        notebook_text = "\n".join(
+            "".join(cell.get("source", [])) for cell in notebook["cells"]
+        )
+        for architecture in architectures:
+            assert architecture in common_code
+            assert architecture in notebook_text
+        assert "MAX_TEST_SAMPLES" in code
+        assert "run_comparison" in code
+        assert "MODEL_ROOT" in code
+        assert "OUTPUT_DIR" in code
