@@ -25,6 +25,8 @@ try:
         setup_logging,
         save_class_names,
         configure_runtime,
+        choose_batch_size,
+        validate_dataset_batch,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -38,6 +40,8 @@ except ImportError:
         setup_logging,
         save_class_names,
         configure_runtime,
+        choose_batch_size,
+        validate_dataset_batch,
     )
 
 
@@ -212,6 +216,9 @@ def compile_model(model, config, phase="head"):
         for key in ["beta_1", "beta_2", "epsilon"]:
             if key in optimizer_config and optimizer_config[key] is not None:
                 adam_kwargs[key] = optimizer_config[key]
+        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
+            if key in optimizer_config and optimizer_config[key] is not None:
+                adam_kwargs[key] = optimizer_config[key]
         if weight_decay is not None and optimizer_name == "adamw":
             adam_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.Adam(**adam_kwargs)
@@ -228,6 +235,9 @@ def compile_model(model, config, phase="head"):
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.9),
         }
+        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
+            if key in optimizer_config and optimizer_config[key] is not None:
+                sgd_kwargs[key] = optimizer_config[key]
         if weight_decay is not None:
             sgd_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.SGD(**sgd_kwargs)
@@ -236,6 +246,9 @@ def compile_model(model, config, phase="head"):
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.0),
         }
+        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
+            if key in optimizer_config and optimizer_config[key] is not None:
+                rmsprop_kwargs[key] = optimizer_config[key]
         if weight_decay is not None:
             rmsprop_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.RMSprop(**rmsprop_kwargs)
@@ -285,12 +298,16 @@ def train_model(config_path="config.yaml"):
     logger.info("Starting training...")
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
+    batch_size = choose_batch_size(config, runtime, logger=logger)
     logger.info(
-        "Runtime: GPUs=%d, strategy=%s, replicas=%d, global_batch_size=%d",
+        "Runtime: GPUs=%d, strategy=%s, replicas=%d, global_batch_size=%d, "
+        "per_replica_batch_size=%d, device_mode=%s",
         runtime["gpu_count"],
         runtime["strategy_name"],
         runtime["num_replicas"],
-        int(config.get("dataset", {}).get("batch_size", 32)),
+        batch_size,
+        max(1, batch_size // max(1, runtime["num_replicas"])),
+        "multi-GPU" if runtime["gpu_count"] > 1 else ("GPU" if runtime["has_gpu"] else "CPU"),
     )
 
     freeze_base = config.get("training", {}).get("freeze_base", True)
@@ -319,12 +336,15 @@ def train_model(config_path="config.yaml"):
     train_ds, val_ds, class_names = load_dataset(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
-        batch_size=config["dataset"]["batch_size"],
+        batch_size=batch_size,
         image_size=tuple(config["model"]["input_shape"][:2]),
         preprocess_fn=preprocess_fn,
         augmentation=augmentation,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
+        cache_memory_limit_gb=config.get("dataset", {}).get(
+            "cache_memory_limit_gb", 8.0
+        ),
         deterministic=config.get("performance", {}).get("deterministic", False),
     )
 
@@ -344,6 +364,10 @@ def train_model(config_path="config.yaml"):
         val_steps if val_steps >= 0 else "unknown",
     )
 
+    if config.get("performance", {}).get("finite_batch_check", True):
+        validate_dataset_batch(train_ds, logger=logger)
+        validate_dataset_batch(val_ds, logger=logger)
+
     if len(class_names) != config["model"]["num_classes"]:
         raise ValueError(
             f"Class count mismatch: dataset has {len(class_names)} classes, "
@@ -354,7 +378,15 @@ def train_model(config_path="config.yaml"):
     class_weights = None
     if config.get("class_weights", {}).get("enabled", False):
         logger.info("Computing class weights...")
-        class_weights = compute_class_weights(config["dataset"]["train_dir"])
+        max_weight = config.get("class_weights", {}).get("max_weight", 5.0)
+        class_weights = compute_class_weights(
+            config["dataset"]["train_dir"], max_weight=max_weight
+        )
+        logger.info(
+            "Class weights enabled: min=%.3f max=%.3f",
+            min(class_weights.values()) if class_weights else 0.0,
+            max(class_weights.values()) if class_weights else 0.0,
+        )
 
     # Create and compile the model inside the distribution scope. This is
     # required for MirroredStrategy to place variables on every replica.

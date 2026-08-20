@@ -13,8 +13,11 @@ dataset:
   val_dir: "../dataset/processed/val"
   test_dir: "../dataset/processed/test"
   batch_size: 64
+  batch_size_fallbacks: [64, 32, 16]
+  auto_batch_fallback: true
   shuffle_buffer: 1000
   cache_mode: "auto"
+  cache_memory_limit_gb: 8.0
 
 augmentation:
   rotation_range: 20
@@ -36,6 +39,7 @@ optimizer:
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
+  clipnorm: 1.0
   decay: 0.0
 
 lr_schedule:
@@ -51,6 +55,7 @@ loss:
 class_weights:
   enabled: true
   auto_compute: true
+  max_weight: 5.0
 
 callbacks:
   checkpoint:
@@ -114,3 +119,5 @@ performance:
   deterministic: false
   distribution: auto
   log_throughput: true
+  finite_batch_check: true
+  terminate_on_nan: true

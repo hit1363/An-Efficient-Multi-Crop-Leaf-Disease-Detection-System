@@ -127,7 +127,10 @@ def get_preprocess_fn(architecture):
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
     if arch in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
-        return tf.keras.applications.mobilenet_v3.preprocess_input
+        # MobileNetV3's Keras ``preprocess_input`` is a compatibility
+        # placeholder. Because this project disables the backbone's built-in
+        # Rescaling layer, perform the documented [-1, 1] conversion here.
+        return lambda x: tf.cast(x, tf.float32) / 127.5 - 1.0
     if arch in {
         "shufflenetv2_05",
         "shufflenet_v2_05",
@@ -177,10 +180,25 @@ def _available_host_memory_gb():
         return None
 
 
-def _resolve_cache_mode(cache_mode, train_ds, val_ds, image_size, batch_size):
+def _available_disk_gb(path):
+    """Return free disk space for ``path`` when it can be inspected."""
+    try:
+        return float(shutil.disk_usage(path).free) / (1024**3)
+    except (OSError, TypeError):
+        return None
+
+
+def _resolve_cache_mode(
+    cache_mode,
+    train_ds,
+    val_ds,
+    image_size,
+    batch_size,
+    memory_limit_gb=8.0,
+):
     """Resolve ``auto`` caching without risking an uncontrolled RAM cache."""
     requested = _normalize_cache_mode(cache_mode)
-    if requested != "auto":
+    if requested not in {"auto", "disk"}:
         return requested
 
     train_cardinality = tf.data.experimental.cardinality(train_ds)
@@ -204,7 +222,15 @@ def _resolve_cache_mode(cache_mode, train_ds, val_ds, image_size, batch_size):
         required_gb *= 1.25
 
     available_gb = _available_host_memory_gb()
-    if available_gb is not None and required_gb > 0 and available_gb >= required_gb * 1.25:
+    # Available RAM is not the same as safe cache capacity: TensorFlow,
+    # multiprocessing workers, model weights, and augmentation need the rest.
+    # Keep large hosted datasets on disk even when the VM reports abundant RAM.
+    if requested == "auto" and (
+        available_gb is not None
+        and required_gb > 0
+        and required_gb <= float(memory_limit_gb)
+        and available_gb >= required_gb * 1.5
+    ):
         return "memory"
 
     # Disk caching is slower than RAM but avoids killing hosted runtimes when
@@ -213,8 +239,10 @@ def _resolve_cache_mode(cache_mode, train_ds, val_ds, image_size, batch_size):
     for candidate in ("/kaggle/working", "/content", tempfile.gettempdir()):
         if os.path.isdir(candidate):
             try:
-                free_gb = shutil.disk_usage(candidate).free / (1024**3)
-                if required_gb <= 0 or free_gb >= required_gb * 1.25:
+                free_gb = _available_disk_gb(candidate)
+                if required_gb <= 0 or (
+                    free_gb is not None and free_gb >= required_gb * 1.25
+                ):
                     return "disk"
             except OSError:
                 continue
@@ -231,6 +259,7 @@ def load_dataset(
     augmentation=None,
     shuffle_buffer=1000,
     cache_mode="none",
+    cache_memory_limit_gb=8.0,
     deterministic=False,
 ):
     """
@@ -279,7 +308,12 @@ def load_dataset(
     options.experimental_deterministic = bool(deterministic)
 
     cache_mode = _resolve_cache_mode(
-        cache_mode, train_ds, val_ds, image_size, batch_size
+        cache_mode,
+        train_ds,
+        val_ds,
+        image_size,
+        batch_size,
+        memory_limit_gb=cache_memory_limit_gb,
     )
     logger = logging.getLogger(__name__)
 
@@ -436,7 +470,7 @@ class ThroughputCallback(keras.callbacks.Callback):
             )
 
 
-def compute_class_weights(data_dir):
+def compute_class_weights(data_dir, max_weight=5.0):
     """
     Compute class weights for imbalanced dataset
 
@@ -468,13 +502,88 @@ def compute_class_weights(data_dir):
         return {}
 
     class_weights = {}
+    max_weight = float(max_weight) if max_weight is not None else float("inf")
+    if max_weight <= 0 or (
+        not np.isfinite(max_weight) and max_weight != float("inf")
+    ):
+        raise ValueError("max_weight must be positive or None")
     for i, count in class_counts.items():
         if count > 0:
-            class_weights[i] = total / (len(nonzero) * count)
+            weight = total / (len(nonzero) * count)
+            class_weights[i] = min(float(weight), max_weight)
         else:
             class_weights[i] = 0.0
 
+    if not all(np.isfinite(weight) for weight in class_weights.values()):
+        raise ValueError("Class-weight computation produced a non-finite value")
+
     return class_weights
+
+
+def validate_dataset_batch(dataset, logger=None):
+    """Validate one preprocessed batch before allocating a training graph."""
+    logger = logger or logging.getLogger(__name__)
+    try:
+        images, labels = next(iter(dataset.take(1)))
+    except (StopIteration, tf.errors.InvalidArgumentError) as exc:
+        raise ValueError("The training dataset produced no readable batches") from exc
+
+    tf.debugging.check_numerics(images, "Non-finite image values in dataset")
+    tf.debugging.check_numerics(labels, "Non-finite labels in dataset")
+    if images.shape.rank != 4 or labels.shape.rank != 2:
+        raise ValueError(
+            f"Unexpected batch shapes: images={images.shape}, labels={labels.shape}"
+        )
+    logger.info(
+        "Finite batch check passed: images=%s dtype=%s range=[%.4f, %.4f], labels=%s",
+        tuple(images.shape),
+        images.dtype.name,
+        float(tf.reduce_min(images).numpy()),
+        float(tf.reduce_max(images).numpy()),
+        tuple(labels.shape),
+    )
+
+
+def choose_batch_size(config, runtime, logger=None):
+    """Choose a conservative global batch size before building the dataset.
+
+    A process killed by the host cannot be recovered by catching an exception.
+    Therefore the fallback is selected before ``model.fit`` based on the
+    available replica profile. Dual-GPU runs keep the tuned global batch size;
+    single-GPU/CPU runs use the first configured fallback when appropriate.
+    """
+    logger = logger or logging.getLogger(__name__)
+    dataset_cfg = config.setdefault("dataset", {})
+    requested = int(dataset_cfg.get("batch_size", 32))
+    candidates = dataset_cfg.get("batch_size_fallbacks", [])
+    if not isinstance(candidates, (list, tuple)):
+        candidates = []
+    candidates = [int(value) for value in candidates if int(value) > 0]
+    if requested not in candidates:
+        candidates.insert(0, requested)
+
+    auto_fallback = bool(dataset_cfg.get("auto_batch_fallback", True))
+    replicas = int(runtime.get("num_replicas", 1))
+    has_gpu = bool(runtime.get("has_gpu", False))
+    selected = requested
+    if auto_fallback and replicas <= 1 and candidates:
+        # The first fallback is the safe single-device profile. Do not reduce
+        # dual-T4 throughput, which is why global batch 128 remains default.
+        selected = candidates[min(1, len(candidates) - 1)]
+        if not has_gpu:
+            selected = candidates[-1]
+
+    dataset_cfg["batch_size"] = selected
+    if selected != requested:
+        logger.warning(
+            "Using conservative batch-size fallback: requested=%d, selected=%d, "
+            "replicas=%d, gpu=%s",
+            requested,
+            selected,
+            replicas,
+            has_gpu,
+        )
+    return selected
 
 
 def setup_callbacks(config, csv_append=None):
@@ -490,6 +599,9 @@ def setup_callbacks(config, csv_append=None):
     callbacks = []
     callback_config = config.get("callbacks", {})
     performance_config = config.get("performance", {})
+
+    if performance_config.get("terminate_on_nan", True):
+        callbacks.append(keras.callbacks.TerminateOnNaN())
 
     if performance_config.get("log_throughput", True):
         callbacks.append(

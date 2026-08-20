@@ -66,7 +66,12 @@ def test_optimized_runtime_defaults_are_present():
             ROOT / "training" / f"config_{architecture}.yaml"
         ).read_text(encoding="utf-8")
         assert "batch_size: 128" in config_text
+        assert "batch_size_fallbacks: [128, 64, 32]" in config_text
         assert 'cache_mode: "auto"' in config_text
+        assert "cache_memory_limit_gb: 8.0" in config_text
+        assert "max_weight: 5.0" in config_text
+        assert "finite_batch_check: true" in config_text
+        assert "terminate_on_nan: true" in config_text
         assert "distribution: auto" in config_text
         assert "log_throughput: true" in config_text
 
@@ -75,7 +80,12 @@ def test_optimized_runtime_defaults_are_present():
             ROOT / "training" / f"config_{architecture}.yaml"
         ).read_text(encoding="utf-8")
         assert "batch_size: 64" in config_text
+        assert "batch_size_fallbacks: [64, 32, 16]" in config_text
         assert 'cache_mode: "auto"' in config_text
+        assert "cache_memory_limit_gb: 8.0" in config_text
+        assert "max_weight: 5.0" in config_text
+        assert "finite_batch_check: true" in config_text
+        assert "terminate_on_nan: true" in config_text
         assert "distribution: auto" in config_text
 
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
@@ -83,7 +93,23 @@ def test_optimized_runtime_defaults_are_present():
     assert "MirroredStrategy" in utils_text
     assert "batch_size=batch_size" in utils_text
     assert "ThroughputCallback" in utils_text
+    assert "validate_dataset_batch" in utils_text
+    assert "choose_batch_size" in utils_text
+    assert "TerminateOnNaN" in utils_text
     assert "with strategy.scope()" in train_text
+
+
+def test_mobilenetv3_uses_explicit_finite_input_preprocessing():
+    utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
+    config_text = (
+        ROOT / "training" / "config_mobilenetv3_small.yaml"
+    ).read_text(encoding="utf-8")
+    assert "tf.cast(x, tf.float32) / 127.5 - 1.0" in utils_text
+    assert "include_preprocessing: false" in config_text
+    assert "clipnorm: 1.0" in config_text
+    assert "clipnorm" in (ROOT / "training" / "train.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_standalone_notebooks_have_valid_code_and_platform_paths():
@@ -110,7 +136,9 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert f'ARCH = "{architecture}"' in code
             assert "--representative_data" in code
             assert "--arch" in code
-            assert 'cfg["dataset"]["cache_mode"] = "auto"' in code
+            assert 'cfg["dataset"]["cache_mode"] = "disk"' in code
+            assert 'cfg["dataset"]["cache_memory_limit_gb"] = 8.0' in code
+            assert "capture_output=True" in code or "PYTHONUNBUFFERED" in code
             assert '"distribution": "auto"' in code
 
 
@@ -133,12 +161,30 @@ def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
             clone_cells = [
                 cell for cell in code_cells if "git" in cell and "clone" in cell
             ]
-            install_cells = [cell for cell in code_cells if "pip" in cell and "install" in cell]
+            install_cells = [
+                cell
+                for cell in code_cells
+                if "pip" in cell and "install" in cell and "requirements.txt" in cell
+            ]
             assert len(clone_cells) == 1, path
             assert len(install_cells) == 1, path
             assert "pip" not in clone_cells[0]
             assert not ("git" in install_cells[0] and "clone" in install_cells[0])
             assert "requirements.txt" in install_cells[0]
+
+
+def test_all_colab_notebooks_include_kaggle_dataset_setup():
+    for path in sorted((ROOT / "notebooks").glob("colab*.ipynb")):
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        assert "files.upload()" in code, path
+        assert "mdhasibultamim/multi-crop-leaf-disease" in code, path
+        assert "zipfile.ZipFile" in code, path
+        assert "KAGGLE_DATASET_BASE" in code, path
 
 
 def test_comparison_notebooks_and_common_runner_contract():
