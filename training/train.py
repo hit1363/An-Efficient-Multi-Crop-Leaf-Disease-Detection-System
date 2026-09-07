@@ -7,10 +7,12 @@ import os
 
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
-import yaml
 import argparse
+import json
 import numpy as np
+import subprocess
 import tensorflow as tf
+import yaml
 from tensorflow import keras
 from datetime import datetime
 
@@ -22,6 +24,7 @@ try:
         compute_class_weights,
         create_augmentation_layer,
         get_preprocess_fn,
+        save_model_checkpoint,
         setup_callbacks,
         setup_logging,
         save_class_names,
@@ -34,6 +37,7 @@ except ImportError:
         compute_class_weights,
         create_augmentation_layer,
         get_preprocess_fn,
+        save_model_checkpoint,
         setup_callbacks,
         setup_logging,
         save_class_names,
@@ -166,6 +170,153 @@ class FocalLoss(keras.losses.Loss):
         return config
 
 
+class BestValidationWeights(keras.callbacks.Callback):
+    """Keep an in-memory copy of the lowest finite validation-loss weights."""
+
+    def __init__(self):
+        super().__init__()
+        self.best = float("inf")
+        self.weights = None
+
+    def on_epoch_end(self, epoch, logs=None):
+        value = (logs or {}).get("val_loss")
+        if value is not None and np.isfinite(value) and value < self.best:
+            self.best = float(value)
+            self.weights = self.model.get_weights()
+
+
+def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
+    """Return the best weights across phases, never degrading Phase 1.
+
+    Fine-tuning is accepted only when its best finite validation loss strictly
+    improves on the best frozen-backbone validation loss.
+    """
+    if (
+        phase2_best is not None
+        and phase2_best.weights is not None
+        and np.isfinite(phase2_best.best)
+        and phase2_best.best < phase1_best.best
+    ):
+        return phase2_best.weights, "phase_2", phase2_best.best
+    return phase1_weights, "phase_1", phase1_best.best
+
+
+def _count_images_by_class(data_dir):
+    """Return deterministic image counts for reproducible run metadata."""
+    if not data_dir or not os.path.isdir(data_dir):
+        return {"total": 0, "classes": {}}
+
+    valid_extensions = {".jpg", ".jpeg", ".png"}
+    class_counts = {}
+    for class_name in sorted(os.listdir(data_dir)):
+        class_dir = os.path.join(data_dir, class_name)
+        if not os.path.isdir(class_dir):
+            continue
+        class_counts[class_name] = sum(
+            1
+            for filename in os.listdir(class_dir)
+            if os.path.splitext(filename)[1].lower() in valid_extensions
+        )
+    return {"total": sum(class_counts.values()), "classes": class_counts}
+
+
+def _git_revision(repo_dir):
+    """Return the checked-out Git revision when the runtime has Git metadata."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _model_summary_text(model):
+    """Capture the Keras summary in a file-friendly form."""
+    lines = []
+    model.summary(print_fn=lines.append)
+    return "\n".join(lines) + "\n"
+
+
+def save_run_metadata(
+    config,
+    config_path,
+    model,
+    raw_class_weights,
+    applied_class_weights,
+    run_timestamp,
+):
+    """Persist the exact pre-fit configuration and data/model context."""
+    model_config = config.get("model", {})
+    dataset_config = config.get("dataset", {})
+    weight_config = config.get("class_weights", {})
+    save_dir = config.get("export", {}).get("save_dir", "../models")
+    model_name = model_config.get("architecture", "model")
+    run_dir = os.path.join(save_dir, model_name, "runs", run_timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+
+    with open(
+        os.path.join(run_dir, "resolved_config.yaml"), "w", encoding="utf-8"
+    ) as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+    with open(
+        os.path.join(run_dir, "model_summary.txt"), "w", encoding="utf-8"
+    ) as handle:
+        handle.write(_model_summary_text(model))
+
+    raw_values = list(raw_class_weights.values())
+    applied_values = list((applied_class_weights or {}).values())
+    repo_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+    metadata = {
+        "run_timestamp": run_timestamp,
+        "source_config_path": os.path.abspath(config_path),
+        "git_revision": _git_revision(repo_dir),
+        "tensorflow_version": tf.__version__,
+        "model": {
+            "name": model.name,
+            "total_parameters": int(model.count_params()),
+            "trainable_parameters": int(
+                sum(np.prod(variable.shape) for variable in model.trainable_weights)
+            ),
+            "non_trainable_parameters": int(
+                sum(
+                    np.prod(variable.shape) for variable in model.non_trainable_weights
+                )
+            ),
+        },
+        "datasets": {
+            split: {
+                "path": dataset_config.get(f"{split}_dir"),
+                **_count_images_by_class(dataset_config.get(f"{split}_dir")),
+            }
+            for split in ("train", "val", "test")
+        },
+        "class_weights": {
+            "enabled": bool(weight_config.get("enabled", False)),
+            "configured_max_weight": weight_config.get("max_weight"),
+            "normalize": bool(weight_config.get("normalize", True)),
+            "raw_range": (
+                {"min": min(raw_values), "max": max(raw_values)} if raw_values else None
+            ),
+            "applied_range": (
+                {"min": min(applied_values), "max": max(applied_values)}
+                if applied_values
+                else None
+            ),
+        },
+    }
+    with open(
+        os.path.join(run_dir, "run_metadata.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+
+    return run_dir
+
+
 def _get_loss(config):
     """Resolve the loss function from config.
 
@@ -195,9 +346,15 @@ def compile_model(model, config):
     lr = optimizer_config.get("learning_rate", 0.001)
     decay = optimizer_config.get("decay", 0.0)
     weight_decay = decay if decay and decay > 0 else None
+    clipnorm = optimizer_config.get("clipnorm")
+    clipvalue = optimizer_config.get("clipvalue")
 
     if optimizer_name == "adam":
         adam_kwargs = {"learning_rate": lr}
+        if clipnorm:
+            adam_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            adam_kwargs["clipvalue"] = float(clipvalue)
         for key in ["beta_1", "beta_2", "epsilon"]:
             if key in optimizer_config and optimizer_config[key] is not None:
                 adam_kwargs[key] = optimizer_config[key]
@@ -209,6 +366,10 @@ def compile_model(model, config):
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.9),
         }
+        if clipnorm:
+            sgd_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            sgd_kwargs["clipvalue"] = float(clipvalue)
         if weight_decay is not None:
             sgd_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.SGD(**sgd_kwargs)
@@ -217,6 +378,10 @@ def compile_model(model, config):
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.0),
         }
+        if clipnorm:
+            rmsprop_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            rmsprop_kwargs["clipvalue"] = float(clipvalue)
         if weight_decay is not None:
             rmsprop_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.RMSprop(**rmsprop_kwargs)
@@ -235,6 +400,26 @@ def compile_model(model, config):
     model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
 
     return model
+
+
+def create_fine_tune_optimizer(config):
+    """Create a fresh, clipped Adam optimizer for backbone fine-tuning."""
+    optimizer_config = config.get("optimizer", {})
+    adam_kwargs = {
+        "learning_rate": config.get("training", {}).get(
+            "fine_tune_learning_rate", 0.0001
+        )
+    }
+    clipnorm = optimizer_config.get("clipnorm")
+    clipvalue = optimizer_config.get("clipvalue")
+    if clipnorm:
+        adam_kwargs["clipnorm"] = float(clipnorm)
+    if clipvalue:
+        adam_kwargs["clipvalue"] = float(clipvalue)
+    for key in ["beta_1", "beta_2", "epsilon"]:
+        if key in optimizer_config and optimizer_config[key] is not None:
+            adam_kwargs[key] = optimizer_config[key]
+    return keras.optimizers.Adam(**adam_kwargs)
 
 
 def train_model(config_path="config.yaml"):
@@ -298,11 +483,21 @@ def train_model(config_path="config.yaml"):
             f"but config model.num_classes={config['model']['num_classes']}"
         )
 
-    # Compute class weights if enabled
+    # Compute the raw range for run metadata even when the stability-first
+    # baseline leaves class weighting disabled.
+    weight_config = config.get("class_weights", {})
+    raw_class_weights = compute_class_weights(config["dataset"]["train_dir"])
+
+    # Compute class weights only when explicitly enabled for a later
+    # imbalance-focused experiment.
     class_weights = None
-    if config.get("class_weights", {}).get("enabled", False):
+    if weight_config.get("enabled", False):
         logger.info("Computing class weights...")
-        class_weights = compute_class_weights(config["dataset"]["train_dir"])
+        class_weights = compute_class_weights(
+            config["dataset"]["train_dir"],
+            max_weight=weight_config.get("max_weight"),
+            normalize=weight_config.get("normalize", True),
+        )
 
     # Create model
     logger.info(f"Creating {config['model']['architecture']} model...")
@@ -316,6 +511,8 @@ def train_model(config_path="config.yaml"):
         hub_cache_dir=config["model"].get("hub_cache_dir"),
         hub_download_retries=config["model"].get("hub_download_retries", 1),
         hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
+        head_units=tuple(config["model"].get("head_units", [256, 128])),
+        l2_regularization=config["model"].get("l2_regularization", 0.0),
     )
 
     if not freeze_base:
@@ -324,6 +521,17 @@ def train_model(config_path="config.yaml"):
 
     print_model_summary(model)
 
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = save_run_metadata(
+        config=config,
+        config_path=config_path,
+        model=model,
+        raw_class_weights=raw_class_weights,
+        applied_class_weights=class_weights,
+        run_timestamp=run_timestamp,
+    )
+    logger.info("Saved reproducibility metadata to: %s", run_dir)
+
     # Compile model
     logger.info("Compiling model...")
     model = compile_model(model, config)
@@ -331,6 +539,8 @@ def train_model(config_path="config.yaml"):
     # Setup callbacks
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config)
+    phase1_best = BestValidationWeights()
+    callbacks.append(phase1_best)
 
     # Phase 1: Train classifier head with frozen base
     logger.info("\n" + "=" * 50)
@@ -345,6 +555,10 @@ def train_model(config_path="config.yaml"):
         class_weight=class_weights,
     )
 
+    # The last Phase 1 epoch is not necessarily the best validation point.
+    # Keep its best restored weights as the stable starting point for Phase 2.
+    phase1_best_weights = phase1_best.weights or model.get_weights()
+
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
     if freeze_base and initial_epochs < total_epochs:
@@ -357,18 +571,24 @@ def train_model(config_path="config.yaml"):
         unfreeze_from = config.get("training", {}).get("unfreeze_from_layer") or \
                        config.get("training", {}).get("freeze_until_layer", 100)
         unfreeze_base_model(base_model, unfreeze_from)
+        model.set_weights(phase1_best_weights)
 
         # Recompile with lower learning rate
-        fine_tune_lr = config["training"].get("fine_tune_learning_rate", 0.0001)
         fine_tune_metrics = build_metrics(
             config.get("metrics", ["accuracy"]),
             config["model"]["num_classes"],
         )
         model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=fine_tune_lr),
+            optimizer=create_fine_tune_optimizer(config),
             loss=_get_loss(config),
             metrics=fine_tune_metrics,
         )
+
+        # Callbacks retain monitor/patience state. A fresh set isolates the
+        # second optimizer phase from Phase 1's plateau state.
+        phase2_callbacks = setup_callbacks(config, checkpoint_name="best_phase2_model")
+        phase2_best = BestValidationWeights()
+        phase2_callbacks.append(phase2_best)
 
         # Continue training
         history2 = model.fit(
@@ -376,9 +596,21 @@ def train_model(config_path="config.yaml"):
             validation_data=val_ds,
             initial_epoch=initial_epochs,
             epochs=total_epochs,
-            callbacks=callbacks,
+            callbacks=phase2_callbacks,
             class_weight=class_weights,
         )
+        final_weights, selected_phase, selected_loss = select_final_weights(
+            phase1_best, phase1_best_weights, phase2_best
+        )
+        model.set_weights(final_weights)
+        logger.info(
+            "Selected %s weights for export (best val_loss: %.6f)",
+            selected_phase,
+            selected_loss,
+        )
+        selected_checkpoint = save_model_checkpoint(model, config)
+        if selected_checkpoint:
+            logger.info("Saved cross-phase winner checkpoint to: %s", selected_checkpoint)
 
     # Merge phase histories so downstream consumers get one continuous record
     merged_history = {k: list(v) for k, v in history1.history.items()}
@@ -391,7 +623,7 @@ def train_model(config_path="config.yaml"):
     logger.info("Saving final model...")
     save_dir = config.get("export", {}).get("save_dir", "../models")
     model_name = config.get("model", {}).get("architecture", "model")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = run_timestamp
 
     # Save in multiple formats
     is_lite0_arch = model_name.lower() in ["efficientnet", "efficientnet_lite0"]

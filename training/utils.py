@@ -234,15 +234,19 @@ def create_augmentation_layer(config):
     return augmentation
 
 
-def compute_class_weights(data_dir):
+def compute_class_weights(data_dir, max_weight=None, normalize=True):
     """
     Compute class weights for imbalanced dataset
 
     Args:
-        data_dir: Directory containing class subdirectories
+        data_dir: Directory containing class subdirectories.
+        max_weight: Optional upper bound for any class weight. When supplied
+            with ``normalize=True``, weights are scaled before clipping so the
+            sample-weighted mean remains one.
+        normalize: Preserve a sample-weighted mean of one when clipping.
 
     Returns:
-        Dictionary of class weights
+        Dictionary of class weights.
     """
     class_counts = {}
     class_names = sorted(
@@ -272,10 +276,86 @@ def compute_class_weights(data_dir):
         else:
             class_weights[i] = 0.0
 
-    return class_weights
+    if max_weight is None:
+        return class_weights
+
+    max_weight = float(max_weight)
+    if max_weight <= 0:
+        raise ValueError("class_weights.max_weight must be greater than zero")
+    if not normalize:
+        return {
+            index: min(weight, max_weight)
+            for index, weight in class_weights.items()
+        }
+    if max_weight < 1.0:
+        raise ValueError(
+            "class_weights.max_weight must be >= 1.0 when normalize is enabled"
+        )
+
+    # Raw inverse-frequency weights have a sample-weighted mean of one. A
+    # direct clip lowers that mean, so solve for a scale that restores it
+    # without allowing any individual class weight to exceed the configured
+    # ceiling.
+    def weighted_mean(scale):
+        return sum(
+            class_counts[index] * min(weight * scale, max_weight)
+            for index, weight in class_weights.items()
+        ) / total
+
+    lower, upper = 0.0, 1.0
+    while weighted_mean(upper) < 1.0:
+        upper *= 2.0
+
+    for _ in range(60):
+        midpoint = (lower + upper) / 2.0
+        if weighted_mean(midpoint) < 1.0:
+            lower = midpoint
+        else:
+            upper = midpoint
+
+    return {
+        index: min(weight * upper, max_weight)
+        for index, weight in class_weights.items()
+    }
 
 
-def setup_callbacks(config):
+def get_checkpoint_path(config, checkpoint_name="best_model"):
+    """Return the canonical checkpoint path and its serialization mode."""
+    checkpoint_config = config.get("callbacks", {}).get("checkpoint", {})
+    architecture = config.get("model", {}).get("architecture", "").lower()
+    is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
+
+    save_weights_only = checkpoint_config.get("save_weights_only", False)
+    if is_lite0_arch and not save_weights_only:
+        # TF Hub-backed models are more reliable with weights-only checkpoints.
+        save_weights_only = True
+
+    extension = ".weights.h5" if save_weights_only else ".h5"
+    checkpoint_path = os.path.join(
+        config["export"]["save_dir"],
+        config["model"]["architecture"],
+        "checkpoints",
+        checkpoint_name + extension,
+    )
+    return checkpoint_path, save_weights_only
+
+
+def save_model_checkpoint(model, config, checkpoint_name="best_model"):
+    """Save the cross-phase winner to the configured canonical checkpoint."""
+    checkpoint_config = config.get("callbacks", {}).get("checkpoint", {})
+    if not checkpoint_config.get("enabled", True):
+        return None
+
+    checkpoint_path, save_weights_only = get_checkpoint_path(config, checkpoint_name)
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    if save_weights_only:
+        model.save_weights(checkpoint_path)
+    else:
+        model.save(checkpoint_path)
+    return checkpoint_path
+
+
+def setup_callbacks(config, checkpoint_name="best_model"):
     """
     Setup training callbacks
 
@@ -288,25 +368,15 @@ def setup_callbacks(config):
     callbacks = []
     callback_config = config.get("callbacks", {})
 
+    # Stop immediately on a numerical failure instead of exporting a degraded
+    # model after a NaN/Inf loss.
+    callbacks.append(keras.callbacks.TerminateOnNaN())
+
     # Model Checkpoint
     if callback_config.get("checkpoint", {}).get("enabled", True):
         checkpoint_config = callback_config["checkpoint"]
-        architecture = config.get("model", {}).get("architecture", "").lower()
-        is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
-
-        save_weights_only = checkpoint_config.get("save_weights_only", False)
-        if is_lite0_arch and not save_weights_only:
-            # TF Hub-backed models are more reliable with weights-only checkpoints.
-            save_weights_only = True
-
-        checkpoint_filename = (
-            "best_model.weights.h5" if save_weights_only else "best_model.h5"
-        )
-        checkpoint_path = os.path.join(
-            config["export"]["save_dir"],
-            config["model"]["architecture"],
-            "checkpoints",
-            checkpoint_filename,
+        checkpoint_path, save_weights_only = get_checkpoint_path(
+            config, checkpoint_name
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 

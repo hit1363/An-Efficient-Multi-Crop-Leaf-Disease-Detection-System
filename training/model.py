@@ -259,6 +259,8 @@ def create_efficientnet_b0_model(
     num_classes,
     dropout_rate,
     weights="imagenet",
+    head_units=(256, 128),
+    l2_regularization=0.0,
 ):
     """Build a standard Keras EfficientNetB0 classifier."""
     print(
@@ -275,9 +277,10 @@ def create_efficientnet_b0_model(
     inputs = tf.keras.Input(shape=input_shape)
     x = base_model(inputs, training=False)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.Dense(512, activation="relu")(x)
+    regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
+    x = tf.keras.layers.Dense(head_units[0], activation="relu", kernel_regularizer=regularizer)(x)
     x = tf.keras.layers.Dropout(dropout_rate)(x)
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer)(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
 
@@ -286,7 +289,8 @@ def create_efficientnet_b0_model(
 
 
 def create_mobilenetv2_model(
-    input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet"
+    input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet",
+    head_units=(256, 128), l2_regularization=0.0,
 ):
     """
     Create MobileNetV2-based model for leaf disease classification
@@ -317,9 +321,10 @@ def create_mobilenetv2_model(
     x = tf.keras.layers.GlobalAveragePooling2D()(
         x
     )  # Converts (batch, H, W, C) -> (batch, C)
-    x = tf.keras.layers.Dense(512, activation="relu", name="fc1")(x)
+    regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
+    x = tf.keras.layers.Dense(head_units[0], activation="relu", kernel_regularizer=regularizer, name="fc1")(x)
     x = tf.keras.layers.Dropout(dropout_rate)(x)
-    x = tf.keras.layers.Dense(256, activation="relu", name="fc2")(x)
+    x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer, name="fc2")(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
     outputs = tf.keras.layers.Dense(
         num_classes, activation="softmax", name="predictions"
@@ -339,6 +344,8 @@ def create_efficientnet_model(
     hub_cache_dir=None,
     hub_download_retries=1,
     hub_download_delay_sec=5,
+    head_units=(256, 128),
+    l2_regularization=0.0,
 ):
     """
     Create EfficientNet-Lite0 based model for leaf disease classification
@@ -410,11 +417,12 @@ def create_efficientnet_model(
     # So we do NOT use GlobalAveragePooling2D (expects 4D input, we have 1D)
     inputs = tf.keras.Input(shape=input_shape)
     x = base_model(inputs, training=False)  # Output: (batch, 1280)
-    x = tf.keras.layers.Dense(512, activation="relu")(
+    regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
+    x = tf.keras.layers.Dense(head_units[0], activation="relu", kernel_regularizer=regularizer)(
         x
     )  # Feed 1D output directly to Dense
     x = tf.keras.layers.Dropout(dropout_rate)(x)
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer)(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
 

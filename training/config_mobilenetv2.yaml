@@ -4,9 +4,11 @@
 model:
   architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0
   input_shape: [224, 224, 3]
-  num_classes: 45
+  num_classes: 72
   weights: "imagenet" # Use ImageNet pre-trained weights
   dropout_rate: 0.5
+  head_units: [256, 128]
+  l2_regularization: 0.0001
 
 # Dataset Settings
 dataset:
@@ -20,28 +22,29 @@ dataset:
 
 # Data Augmentation
 augmentation:
-  rotation_range: 45
-  zoom_range: [0.8, 1.2]
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
-  brightness_range: [0.8, 1.2]
+  brightness_range: [0.9, 1.1]
 
 # Training Settings
 training:
-  epochs: 50
+  epochs: 10
   freeze_base: true
-  unfreeze_from_layer: 100 # Layer index to start unfreezing from
-  unfreeze_epoch: 10 # Unfreeze after this epoch
-  fine_tune_learning_rate: 0.0001
+  unfreeze_from_layer: 130 # Fine-tune only the final MobileNetV2 tail
+  unfreeze_epoch: 6 # Stop Phase 1 early if validation loss plateaus
+  fine_tune_learning_rate: 0.000005
 
 # Optimizer Settings
 optimizer:
   name: "adam" # Options: adam, sgd, rmsprop
-  learning_rate: 0.001
+  learning_rate: 0.0003
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
   decay: 0.0
+  clipnorm: 1.0
 
 # Learning Rate Schedule
 # type: reduce_on_plateau (default) | exponential_decay | cosine_decay
@@ -51,8 +54,8 @@ optimizer:
 lr_schedule:
   type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
   monitor: "val_loss"
-  factor: 0.5
-  patience: 5
+  factor: 0.2
+  patience: 1
   min_lr: 1.0e-7
   # For exponential_decay:
   # decay_steps: 1000
@@ -72,25 +75,27 @@ loss:
 
 # Class Weights (for imbalanced dataset)
 class_weights:
-  enabled: true
+  enabled: false # Stability-first baseline; enable only after per-class review
   auto_compute: true # Automatically compute from dataset
+  max_weight: 3.0 # Used only when class weights are enabled
+  normalize: true # Keep the sample-weighted mean at one after clipping
 
 # Callbacks
 callbacks:
   # Model Checkpoint
   checkpoint:
     enabled: true
-    monitor: "val_accuracy"
+    monitor: "val_loss"
     save_best_only: true
     save_weights_only: false
-    mode: "max"
+    mode: "min"
     save_freq: "epoch"
 
   # Early Stopping
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 10
+    patience: 2
     restore_best_weights: true
     mode: "min"
 
