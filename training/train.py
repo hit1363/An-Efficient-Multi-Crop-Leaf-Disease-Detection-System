@@ -419,6 +419,9 @@ def create_fine_tune_optimizer(config):
     for key in ["beta_1", "beta_2", "epsilon"]:
         if key in optimizer_config and optimizer_config[key] is not None:
             adam_kwargs[key] = optimizer_config[key]
+    weight_decay = optimizer_config.get("decay", 0.0)
+    if weight_decay and weight_decay > 0:
+        adam_kwargs["weight_decay"] = weight_decay
     return keras.optimizers.Adam(**adam_kwargs)
 
 
