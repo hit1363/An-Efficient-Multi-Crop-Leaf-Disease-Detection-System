@@ -171,12 +171,18 @@ class FocalLoss(keras.losses.Loss):
 
 
 class BestValidationWeights(keras.callbacks.Callback):
-    """Keep an in-memory copy of the lowest finite validation-loss weights."""
+    """Keep an in-memory copy of the lowest finite validation-loss weights.
 
-    def __init__(self):
+    ``initial_best`` and ``initial_weights`` let a later training phase use the
+    preceding phase's best validation point as its acceptance baseline. This
+    guarantees that a harmful fine-tuning phase cannot replace a stronger
+    frozen-backbone model merely because it completed an epoch.
+    """
+
+    def __init__(self, initial_best=float("inf"), initial_weights=None):
         super().__init__()
-        self.best = float("inf")
-        self.weights = None
+        self.best = float(initial_best)
+        self.weights = initial_weights
 
     def on_epoch_end(self, epoch, logs=None):
         value = (logs or {}).get("val_loss")
@@ -558,9 +564,25 @@ def train_model(config_path="config.yaml"):
         class_weight=class_weights,
     )
 
+    # Never export a model that has not completed at least one finite
+    # validation measurement. TerminateOnNaN stops the fit loop, but without
+    # this guard its last (possibly corrupted) weights could otherwise be
+    # exported as a fallback.
+    if phase1_best.weights is None:
+        raise RuntimeError(
+            "Phase 1 produced no finite validation loss; refusing to fine-tune "
+            "or export potentially corrupted weights. Check data, learning rate, "
+            "and accelerator numerical precision."
+        )
+
     # The last Phase 1 epoch is not necessarily the best validation point.
     # Keep its best restored weights as the stable starting point for Phase 2.
-    phase1_best_weights = phase1_best.weights or model.get_weights()
+    phase1_best_weights = phase1_best.weights
+    # This restoration is required even when Phase 2 is skipped (for example,
+    # a head-only baseline where epochs == unfreeze_epoch). Otherwise the
+    # subsequent export would silently use the final, potentially overfit
+    # Phase 1 epoch instead of the validated winner.
+    model.set_weights(phase1_best_weights)
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
@@ -590,7 +612,12 @@ def train_model(config_path="config.yaml"):
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.
         phase2_callbacks = setup_callbacks(config, checkpoint_name="best_phase2_model")
-        phase2_best = BestValidationWeights()
+        # Seed Phase 2 with the best Phase 1 validation point. If fine-tuning
+        # never beats it, final export intentionally remains the Phase 1 model.
+        phase2_best = BestValidationWeights(
+            initial_best=phase1_best.best,
+            initial_weights=phase1_best_weights,
+        )
         phase2_callbacks.append(phase2_best)
 
         # Continue training

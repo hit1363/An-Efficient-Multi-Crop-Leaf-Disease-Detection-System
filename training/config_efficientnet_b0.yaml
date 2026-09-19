@@ -26,15 +26,15 @@ augmentation:
   brightness_range: [0.9, 1.1]
 
 training:
-  epochs: 16
+  epochs: 10
   freeze_base: true
-  unfreeze_from_layer: 180
+  unfreeze_from_layer: 220
   unfreeze_epoch: 6
-  fine_tune_learning_rate: 0.00001
+  fine_tune_learning_rate: 0.000005
 
 optimizer:
   name: "adam"
-  learning_rate: 0.001
+  learning_rate: 0.0003
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
@@ -44,29 +44,31 @@ optimizer:
 lr_schedule:
   type: "reduce_on_plateau"
   monitor: "val_loss"
-  factor: 0.5
-  patience: 2
+  factor: 0.2
+  patience: 1
   min_lr: 1.0e-7
 
 loss:
   name: "categorical_crossentropy"
 
 class_weights:
-  enabled: true
+  enabled: false # Stability-first baseline; enable only after per-class review
   auto_compute: true
+  max_weight: 3.0
+  normalize: true
 
 callbacks:
   checkpoint:
     enabled: true
-    monitor: "val_accuracy"
+    monitor: "val_loss"
     save_best_only: true
     save_weights_only: true
-    mode: "max"
+    mode: "min"
     save_freq: "epoch"
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 3
+    patience: 2
     restore_best_weights: true
     mode: "min"
   tensorboard:
