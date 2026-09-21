@@ -355,7 +355,7 @@ def save_model_checkpoint(model, config, checkpoint_name="best_model"):
     return checkpoint_path
 
 
-def setup_callbacks(config, checkpoint_name="best_model"):
+def setup_callbacks(config, checkpoint_name="best_model", csv_append=None):
     """
     Setup training callbacks
 
@@ -463,7 +463,8 @@ def setup_callbacks(config, checkpoint_name="best_model"):
         csv_config = callback_config["csv_logger"]
         csv_path = csv_config.get("filename", "../results/training_log.csv")
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        callbacks.append(keras.callbacks.CSVLogger(csv_path))
+        append = csv_config.get("append", False) if csv_append is None else csv_append
+        callbacks.append(keras.callbacks.CSVLogger(csv_path, append=append))
 
     return callbacks
 

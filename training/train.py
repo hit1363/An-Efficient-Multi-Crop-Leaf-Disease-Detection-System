@@ -19,6 +19,7 @@ from datetime import datetime
 try:
     # Support module execution: python -m training.train
     from .model import get_model, unfreeze_base_model, print_model_summary
+    from .dataset_audit import audit_dataset_splits
     from .utils import (
         load_dataset,
         compute_class_weights,
@@ -32,6 +33,7 @@ try:
 except ImportError:
     # Fallback for script execution: python training/train.py
     from model import get_model, unfreeze_base_model, print_model_summary
+    from dataset_audit import audit_dataset_splits
     from utils import (
         load_dataset,
         compute_class_weights,
@@ -91,6 +93,12 @@ def resolve_config_paths(config, config_path):
     if "filename" in csv_logger_cfg:
         csv_logger_cfg["filename"] = _resolve_path(
             csv_logger_cfg["filename"], config_dir
+        )
+
+    evaluation_cfg = config.get("evaluation", {})
+    if "results_dir" in evaluation_cfg:
+        evaluation_cfg["results_dir"] = _resolve_path(
+            evaluation_cfg["results_dir"], config_dir
         )
 
     return config
@@ -255,6 +263,7 @@ def save_run_metadata(
     raw_class_weights,
     applied_class_weights,
     run_timestamp,
+    dataset_audit=None,
 ):
     """Persist the exact pre-fit configuration and data/model context."""
     model_config = config.get("model", {})
@@ -301,6 +310,7 @@ def save_run_metadata(
             }
             for split in ("train", "val", "test")
         },
+        "dataset_audit": dataset_audit,
         "class_weights": {
             "enabled": bool(weight_config.get("enabled", False)),
             "configured_max_weight": weight_config.get("max_weight"),
@@ -444,6 +454,27 @@ def train_model(config_path="config.yaml"):
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
 
+    dataset_config = config["dataset"]
+    audit_config = dataset_config.get("audit", {})
+    dataset_audit = None
+    if audit_config.get("enabled", True):
+        logger.info("Auditing dataset class alignment and cross-split duplicates...")
+        dataset_audit = audit_dataset_splits(
+            {
+                "train": dataset_config["train_dir"],
+                "val": dataset_config["val_dir"],
+                "test": dataset_config["test_dir"],
+            }
+        )
+        for split, summary in dataset_audit["splits"].items():
+            logger.info(
+                "Dataset audit %s: %d images across %d classes (%d within-split duplicate files)",
+                split,
+                summary["total"],
+                len(summary["classes"]),
+                summary["within_split_duplicate_files"],
+            )
+
     freeze_base = config.get("training", {}).get("freeze_base", True)
     total_epochs = int(config.get("training", {}).get("epochs", 50))
     unfreeze_epoch = int(config.get("training", {}).get("unfreeze_epoch", 10))
@@ -538,6 +569,7 @@ def train_model(config_path="config.yaml"):
         raw_class_weights=raw_class_weights,
         applied_class_weights=class_weights,
         run_timestamp=run_timestamp,
+        dataset_audit=dataset_audit,
     )
     logger.info("Saved reproducibility metadata to: %s", run_dir)
 
@@ -547,7 +579,7 @@ def train_model(config_path="config.yaml"):
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
-    callbacks = setup_callbacks(config)
+    callbacks = setup_callbacks(config, csv_append=False)
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
 
@@ -586,6 +618,7 @@ def train_model(config_path="config.yaml"):
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
+    selected_checkpoint = None
     if freeze_base and initial_epochs < total_epochs:
         logger.info("\n" + "=" * 50)
         logger.info("Phase 2: Fine-tuning (unfreezing base layers)")
@@ -611,7 +644,9 @@ def train_model(config_path="config.yaml"):
 
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.
-        phase2_callbacks = setup_callbacks(config, checkpoint_name="best_phase2_model")
+        phase2_callbacks = setup_callbacks(
+            config, checkpoint_name="best_phase2_model", csv_append=True
+        )
         # Seed Phase 2 with the best Phase 1 validation point. If fine-tuning
         # never beats it, final export intentionally remains the Phase 1 model.
         phase2_best = BestValidationWeights(
@@ -638,16 +673,19 @@ def train_model(config_path="config.yaml"):
             selected_phase,
             selected_loss,
         )
-        selected_checkpoint = save_model_checkpoint(model, config)
-        if selected_checkpoint:
-            logger.info("Saved cross-phase winner checkpoint to: %s", selected_checkpoint)
-
     # Merge phase histories so downstream consumers get one continuous record
     merged_history = {k: list(v) for k, v in history1.history.items()}
     if history2 is not None:
         for key, values in history2.history.items():
             merged_history.setdefault(key, []).extend(values)
     history1.history = merged_history
+
+    # Persist the actual selected in-memory winner in both the head-only and
+    # two-phase paths. This is also the artifact evaluated on the untouched test
+    # split, so test metrics always match the model chosen by validation loss.
+    selected_checkpoint = save_model_checkpoint(model, config)
+    if selected_checkpoint:
+        logger.info("Saved selected validation winner checkpoint to: %s", selected_checkpoint)
 
     # Save final model
     logger.info("Saving final model...")
@@ -695,6 +733,23 @@ def train_model(config_path="config.yaml"):
     class_names_path = os.path.join(save_dir, model_name, "class_names.txt")
     save_class_names(class_names, class_names_path)
     logger.info(f"Saved class names: {class_names_path}")
+
+    evaluation_config = config.get("evaluation", {})
+    if evaluation_config.get("run_after_training", False):
+        if not selected_checkpoint:
+            raise RuntimeError(
+                "Post-training evaluation requires an enabled full-model checkpoint."
+            )
+        logger.info("Evaluating selected checkpoint on the untouched test split...")
+        try:
+            from .evaluate import evaluate_model
+        except ImportError:
+            from evaluate import evaluate_model
+        evaluate_model(
+            selected_checkpoint,
+            config_path,
+            results_dir=evaluation_config.get("results_dir"),
+        )
 
     if config.get("export", {}).get("sync_flutter_labels", False):
         flutter_labels_path = os.path.normpath(

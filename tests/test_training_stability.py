@@ -10,7 +10,7 @@ from training.train import (
     create_fine_tune_optimizer,
     select_final_weights,
 )
-from training.utils import compute_class_weights
+from training.utils import compute_class_weights, setup_callbacks
 
 
 def _config():
@@ -98,3 +98,24 @@ def test_capped_class_weights_are_bounded_and_sample_normalized(tmp_path):
 
     assert max(weights.values()) <= 3.0
     assert sample_weighted_mean == pytest.approx(1.0)
+
+
+def test_phase_two_csv_logger_appends_to_phase_one_log(tmp_path):
+    config = {"callbacks": {"csv_logger": {"enabled": True, "filename": str(tmp_path / "run.csv")}}}
+
+    phase_one = setup_callbacks(config, csv_append=False)
+    phase_two = setup_callbacks(config, csv_append=True)
+    phase_one_logger = next(callback for callback in phase_one if isinstance(callback, tf.keras.callbacks.CSVLogger))
+    phase_two_logger = next(callback for callback in phase_two if isinstance(callback, tf.keras.callbacks.CSVLogger))
+
+    assert phase_one_logger.append is False
+    assert phase_two_logger.append is True
+
+
+def test_csv_logger_uses_the_configured_append_default(tmp_path):
+    config = {"callbacks": {"csv_logger": {"enabled": True, "filename": str(tmp_path / "run.csv"), "append": True}}}
+
+    callbacks = setup_callbacks(config)
+    csv_logger = next(callback for callback in callbacks if isinstance(callback, tf.keras.callbacks.CSVLogger))
+
+    assert csv_logger.append is True
