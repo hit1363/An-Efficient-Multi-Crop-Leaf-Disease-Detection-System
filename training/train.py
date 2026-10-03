@@ -29,6 +29,8 @@ try:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        dataset_batch_count,
+        per_replica_batch_size,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -43,6 +45,8 @@ except ImportError:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        dataset_batch_count,
+        per_replica_batch_size,
     )
 
 
@@ -454,6 +458,18 @@ def train_model(config_path="config.yaml"):
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
 
+    physical_gpus = tf.config.list_physical_devices("GPU")
+    strategy = (
+        tf.distribute.MirroredStrategy()
+        if len(physical_gpus) > 1
+        else tf.distribute.get_strategy()
+    )
+    logger.info(
+        "Distribution strategy: %s (%d replica(s))",
+        type(strategy).__name__,
+        strategy.num_replicas_in_sync,
+    )
+
     dataset_config = config["dataset"]
     audit_config = dataset_config.get("audit", {})
     dataset_audit = None
@@ -513,6 +529,20 @@ def train_model(config_path="config.yaml"):
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
     )
+    global_batch_size = int(config["dataset"]["batch_size"])
+    replica_batch_size = per_replica_batch_size(
+        global_batch_size, strategy.num_replicas_in_sync
+    )
+    train_steps = dataset_batch_count(train_ds, "training")
+    val_steps = dataset_batch_count(val_ds, "validation")
+    logger.info(
+        "Dataset batches: train=%d, validation=%d, global_batch_size=%d, "
+        "per_replica_batch_size=%d",
+        train_steps,
+        val_steps,
+        global_batch_size,
+        replica_batch_size,
+    )
 
     logger.info(f"Found {len(class_names)} classes")
     logger.info(f"Classes: {class_names}")
@@ -541,19 +571,20 @@ def train_model(config_path="config.yaml"):
 
     # Create model
     logger.info(f"Creating {config['model']['architecture']} model...")
-    model, base_model = get_model(
-        architecture=config["model"]["architecture"],
-        input_shape=tuple(config["model"]["input_shape"]),
-        num_classes=config["model"]["num_classes"],
-        dropout_rate=config["model"]["dropout_rate"],
-        weights=config["model"]["weights"],
-        hub_url=config["model"].get("hub_url"),
-        hub_cache_dir=config["model"].get("hub_cache_dir"),
-        hub_download_retries=config["model"].get("hub_download_retries", 1),
-        hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
-        head_units=tuple(config["model"].get("head_units", [256, 128])),
-        l2_regularization=config["model"].get("l2_regularization", 0.0),
-    )
+    with strategy.scope():
+        model, base_model = get_model(
+            architecture=config["model"]["architecture"],
+            input_shape=tuple(config["model"]["input_shape"]),
+            num_classes=config["model"]["num_classes"],
+            dropout_rate=config["model"]["dropout_rate"],
+            weights=config["model"]["weights"],
+            hub_url=config["model"].get("hub_url"),
+            hub_cache_dir=config["model"].get("hub_cache_dir"),
+            hub_download_retries=config["model"].get("hub_download_retries", 1),
+            hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
+            head_units=tuple(config["model"].get("head_units", [256, 128])),
+            l2_regularization=config["model"].get("l2_regularization", 0.0),
+        )
 
     if not freeze_base:
         logger.info("freeze_base is False: training backbone from the first epoch")
@@ -575,7 +606,13 @@ def train_model(config_path="config.yaml"):
 
     # Compile model
     logger.info("Compiling model...")
-    model = compile_model(model, config)
+    with strategy.scope():
+        model = compile_model(model, config)
+
+    # Repeat only the training stream and set its exact finite epoch length.
+    # This prevents a distributed iterator from exhausting across consecutive
+    # epochs while keeping validation bounded and repeatable.
+    train_ds = train_ds.repeat()
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
@@ -591,6 +628,8 @@ def train_model(config_path="config.yaml"):
     history1 = model.fit(
         train_ds,
         validation_data=val_ds,
+        steps_per_epoch=train_steps,
+        validation_steps=val_steps,
         epochs=initial_epochs,
         callbacks=callbacks,
         class_weight=class_weights,
@@ -636,11 +675,12 @@ def train_model(config_path="config.yaml"):
             config.get("metrics", ["accuracy"]),
             config["model"]["num_classes"],
         )
-        model.compile(
-            optimizer=create_fine_tune_optimizer(config),
-            loss=_get_loss(config),
-            metrics=fine_tune_metrics,
-        )
+        with strategy.scope():
+            model.compile(
+                optimizer=create_fine_tune_optimizer(config),
+                loss=_get_loss(config),
+                metrics=fine_tune_metrics,
+            )
 
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.
@@ -659,6 +699,8 @@ def train_model(config_path="config.yaml"):
         history2 = model.fit(
             train_ds,
             validation_data=val_ds,
+            steps_per_epoch=train_steps,
+            validation_steps=val_steps,
             initial_epoch=initial_epochs,
             epochs=total_epochs,
             callbacks=phase2_callbacks,

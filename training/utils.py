@@ -25,6 +25,42 @@ def _normalize_cache_mode(cache_mode):
     raise ValueError("dataset.cache_mode must be one of: none, memory, disk")
 
 
+def dataset_batch_count(dataset, split_name):
+    """Return the finite number of batches, failing clearly for unknown input."""
+    cardinality = tf.data.experimental.cardinality(dataset)
+    batch_count = int(cardinality.numpy())
+    if batch_count == int(tf.data.experimental.UNKNOWN_CARDINALITY):
+        raise ValueError(
+            f"Cannot determine the number of {split_name} batches. "
+            "Use a finite directory-backed dataset so training can set explicit steps."
+        )
+    if batch_count == int(tf.data.experimental.INFINITE_CARDINALITY):
+        raise ValueError(
+            f"The {split_name} dataset is already infinite; pass a finite dataset "
+            "and let the training loop control repetition."
+        )
+    if batch_count < 1:
+        raise ValueError(
+            f"The {split_name} dataset contains no batches. Check the dataset "
+            "directory and batch size."
+        )
+    return batch_count
+
+
+def per_replica_batch_size(global_batch_size, replica_count):
+    """Validate a global batch and return the size handled by each replica."""
+    global_batch_size = int(global_batch_size)
+    replica_count = int(replica_count)
+    if global_batch_size < 1 or replica_count < 1:
+        raise ValueError("Batch size and replica count must both be positive.")
+    if global_batch_size % replica_count:
+        raise ValueError(
+            "dataset.batch_size must be divisible by the number of training "
+            f"replicas ({replica_count}); got {global_batch_size}."
+        )
+    return global_batch_size // replica_count
+
+
 def setup_logging(config):
     """Setup logging configuration"""
     log_config = config.get("logging", {})
