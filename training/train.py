@@ -108,6 +108,14 @@ def resolve_config_paths(config, config_path):
     return config
 
 
+def _is_kaggle_runtime():
+    """Detect Kaggle notebooks without affecting local or Colab training."""
+    kaggle_markers = ("KAGGLE_KERNEL_RUN_TYPE", "KAGGLE_URL_BASE")
+    return any(os.environ.get(marker) for marker in kaggle_markers) or os.path.isdir(
+        "/kaggle/working"
+    )
+
+
 def build_metrics(metric_names, num_classes):
     """Build Keras metrics for multiclass classification."""
     built_metrics = []
@@ -451,6 +459,18 @@ def train_model(config_path="config.yaml"):
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
+
+    cache_mode = str(
+        config.get("dataset", {}).get("cache_mode", "none")
+    ).strip().lower()
+    if _is_kaggle_runtime() and cache_mode != "none":
+        raise ValueError(
+            "Kaggle training requires dataset.cache_mode=none to avoid exhausting "
+            "/kaggle/working; found dataset.cache_mode={!r} in {}. Rerun the "
+            "Kaggle configuration cell and verify the saved config before training.".format(
+                cache_mode, os.path.abspath(config_path)
+            )
+        )
 
     # Setup logging
     logger = setup_logging(config)
