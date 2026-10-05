@@ -485,6 +485,9 @@ def main():
 
     args = parser.parse_args()
 
+    if args.evaluate and not args.test_data:
+        parser.error("--test_data is required when --evaluate is set.")
+
     # Convert model
     tflite_path = convert_to_tflite(
         args.model_path,

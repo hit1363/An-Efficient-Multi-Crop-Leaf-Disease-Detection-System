@@ -4,7 +4,7 @@ Lightweight, offline-capable multi-crop leaf disease detection optimized for mob
 
 ## Overview
 
-- 45 classes (diseases + healthy + invalid) across 15+ crops
+- 72 classes (diseases + healthy + invalid) across 15+ crops
 - MobileNetV2 and EfficientNet-Lite0 with ImageNet pretraining
 - Post-training quantization (dynamic range and full INT8)
 - Flutter app with camera/gallery input and offline inference
@@ -52,7 +52,7 @@ Lightweight, offline-capable multi-crop leaf disease detection optimized for mob
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12
 - TensorFlow (from requirements.txt)
 - Flutter 3.x (for the mobile app)
 - CUDA-enabled GPU recommended
@@ -107,6 +107,10 @@ python quantization/post_training_quant.py \
 
 Use the notebook at notebooks/colab_training_notebook.ipynb. It reads the dataset from Drive, trains both models, evaluates, quantizes (dynamic + full INT8), and benchmarks TFLite on Colab CPU.
 
+Quantization-aware training (QAT) requires TensorFlow Model Optimization, which
+is only included by `requirements.txt` on Python versions below 3.12. On Python
+3.12, use post-training quantization instead.
+
 ## Preprocessing Alignment
 
 Training and quantization use TensorFlow preprocess_input for the selected architecture. The Flutter app must match the same normalization:
@@ -137,7 +141,7 @@ Place your deployed model and labels here:
 
 - Total images: ~67k
 - Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
-- Classes: 45
+- Classes: 72
 - Split: 70% train, 15% val, 15% test
 
 ## License

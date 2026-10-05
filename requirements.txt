@@ -1,4 +1,4 @@
-# Core Deep Learning (Python 3.12 compatible)
+# Core Deep Learning (Python 3.12 target)
 tensorflow>=2.16,<2.20
 tensorflow-hub>=0.16,<1.0
 tf-keras>=2.16,<2.20
@@ -7,7 +7,7 @@ keras>=3.0,<4.0
 # Data Processing
 numpy>=1.26,<3.0
 pandas>=2.2,<3.0
-pillow>=10.0,<12.0
+pillow>=10.0,<13.0
 opencv-python>=4.10,<5.0
 scikit-learn>=1.5,<2.0
 scikit-image>=0.24,<1.0
@@ -24,9 +24,6 @@ plotly>=5.20,<7.0
 tensorboard>=2.16,<3.0
 keras-tuner>=1.4,<2.0
 
-# Metrics & Evaluation
-scikit-learn>=1.5,<2.0
-
 # Configuration
 pyyaml>=6.0,<7.0
 omegaconf>=2.3,<3.0
@@ -41,7 +38,7 @@ jupyter>=1.0,<2.0
 ipykernel>=6.29,<7.0
 ipywidgets>=8.1,<9.0
 
-# Model Optimization (optional, best support on Python <=3.11)
+# Model Optimization (optional; QAT is available only below Python 3.12)
 tensorflow-model-optimization>=0.8,<1.0 ; python_version < "3.12"
 
 # Image Processing

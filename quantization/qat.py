@@ -37,9 +37,10 @@ def _load_tfmot():
         import tensorflow_model_optimization as tfmot
     except Exception as exc:
         raise RuntimeError(
-            "QAT requires tensorflow-model-optimization. Install it in Kaggle "
-            "with `%pip install -q tensorflow-model-optimization`, then restart "
-            "the kernel if the import still fails."
+            "QAT requires tensorflow-model-optimization, which this project "
+            "only supports on Python versions below 3.12. Use Python <3.12 "
+            "with the optional dependency installed, or use post-training "
+            "quantization on Python 3.12."
         ) from exc
 
     if not hasattr(tfmot, "quantization") or not hasattr(

@@ -4,7 +4,7 @@
 model:
   architecture: "efficientnet_lite0" # Options: mobilenetv2, efficientnet_b0, efficientnet_lite0
   input_shape: [224, 224, 3]
-  num_classes: 45
+  num_classes: 72
   weights: "imagenet" # Use ImageNet pre-trained weights
   dropout_rate: 0.5
   # Optional TF Hub overrides
