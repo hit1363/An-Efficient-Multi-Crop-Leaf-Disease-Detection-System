@@ -1,101 +1,102 @@
 # Multi-Crop Leaf Disease Detection System
 
-Lightweight, offline-capable multi-crop leaf disease detection optimized for mobile deployment. The system trains MobileNetV2 and EfficientNet-Lite0, exports TensorFlow Lite models, and ships a Flutter app for on-device inference.
+Training and export pipeline for multi-crop leaf disease classification. The project trains MobileNetV2, EfficientNetB0, and EfficientNet-Lite0 models and exports TensorFlow Lite models for mobile integration. This repository does not include a Flutter application.
 
 ## Overview
 
-- 45 classes (diseases + healthy + invalid) across 15+ crops
-- MobileNetV2 and EfficientNet-Lite0 with ImageNet pretraining
-- Post-training quantization (dynamic range and full INT8)
-- Flutter app with camera/gallery input and offline inference
-
-## Goals
-
-1. Unified multi-crop classifier with test accuracy >= 90% and macro F1 >= 0.80
-2. Compare MobileNetV2 vs EfficientNet-Lite0 on accuracy, size, and speed
-3. Achieve ~4x size reduction via INT8 quantization with < 2% accuracy loss
-4. Benchmark latency, memory, CPU, and battery on low-end and mid-range devices
-5. Deliver an offline Android app for field testing
+- 72 classes (diseases, healthy leaves, and invalid images) across 15+ crops
+- MobileNetV2, EfficientNetB0, and EfficientNet-Lite0 transfer-learning configurations
+- Dynamic-range and full INT8 TensorFlow Lite export tools
+- Model, label, and evaluation artifacts for offline inference integration
 
 ## Repository Structure
 
 ```
 .
-├── README.md
-├── requirements.txt
 ├── dataset/
-│   ├── raw/
-│   ├── processed/
-│   └── prepare_data.py
+│   ├── prepare_data.py
+│   └── processed/
 ├── notebooks/
 │   ├── colab_training_notebook.ipynb
 │   ├── data_exploration.ipynb
-│   └── evaluation.ipynb
+│   ├── evaluation.ipynb
+│   └── kaggle_training_notebook.ipynb
 ├── training/
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── model.py
 │   ├── utils.py
 │   ├── config_mobilenetv2.yaml
+│   ├── config_efficientnet_b0.yaml
 │   └── config_efficientnet_lite0.yaml
 ├── quantization/
-│   └── post_training_quant.py
+│   ├── post_training_quant.py
+│   ├── evaluate_tflite.py
+│   └── qat.py
 ├── models/
-├── flutter_app/
-│   ├── lib/
-│   ├── assets/
-│   └── pubspec.yaml
-└── results/
+├── results/
+├── pyproject.toml
+├── uv.lock
+└── requirements.txt  # Generated install file used by hosted notebooks
 ```
 
-## Quick Start (Local)
+## Setup
 
 ### Prerequisites
 
-- Python 3.10+
-- TensorFlow (from requirements.txt)
-- Flutter 3.x (for the mobile app)
-- CUDA-enabled GPU recommended
+- Python 3.12
+- uv for dependency and environment management
+- CUDA-enabled GPU recommended for full training
 
-### Setup
+Install runtime and development dependencies:
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+uv sync --group dev --group docs
 ```
 
-### Dataset Preparation
-
-1. Download PlantVillage (or your dataset) and place images in dataset/raw/
-2. Split into train/val/test:
+The hosted notebooks install from `requirements.txt`, which is exported from `pyproject.toml` and `uv.lock`:
 
 ```bash
-python dataset/prepare_data.py
+uv export --format requirements-txt --all-extras --no-dev --no-hashes --output-file requirements.txt
 ```
 
-### Training
+## Dataset Preparation
+
+Place class-organized images under `dataset/raw/`, then create the train, validation, and test splits:
 
 ```bash
-python training/train.py --config training/config_mobilenetv2.yaml
-python training/train.py --config training/config_efficientnet_lite0.yaml
+uv run python dataset/prepare_data.py
 ```
 
-### Evaluation
+## Training
 
 ```bash
-python training/evaluate.py --model <path-to-model> --config training/config_mobilenetv2.yaml
+uv run python training/train.py --config training/config_mobilenetv2.yaml
+uv run python training/train.py --config training/config_efficientnet_b0.yaml
+uv run python training/train.py --config training/config_efficientnet_lite0.yaml
 ```
 
-### Quantization (Dynamic + INT8)
+## Evaluation
 
 ```bash
-python quantization/post_training_quant.py \
+uv run python training/evaluate.py --model <path-to-model> --config training/config_mobilenetv2.yaml
+```
+
+## Quantization
+
+Dynamic-range conversion:
+
+```bash
+uv run python quantization/post_training_quant.py \
   --model_path <path-to-model> \
   --output_path models/exported_tflite/mobilenetv2_dynamic.tflite \
   --arch mobilenetv2
+```
 
-python quantization/post_training_quant.py \
+Full INT8 conversion and evaluation:
+
+```bash
+uv run python quantization/post_training_quant.py \
   --model_path <path-to-model> \
   --output_path models/exported_tflite/mobilenetv2_int8.tflite \
   --representative_data dataset/processed/train \
@@ -103,46 +104,27 @@ python quantization/post_training_quant.py \
   --arch mobilenetv2
 ```
 
-## Google Colab Workflow
+## Google Colab and Kaggle
 
-Use the notebook at notebooks/colab_training_notebook.ipynb. It reads the dataset from Drive, trains both models, evaluates, quantizes (dynamic + full INT8), and benchmarks TFLite on Colab CPU.
+Use `notebooks/colab_training_notebook.ipynb` or `notebooks/kaggle_training_notebook.ipynb`. They install from the generated `requirements.txt` and configure dataset and output paths for their hosted environments.
 
-## Preprocessing Alignment
+## Preprocessing and Mobile Integration
 
-Training and quantization use TensorFlow preprocess_input for the selected architecture. The Flutter app must match the same normalization:
+Training and quantization use the preprocessing expected by each backbone. A deployment client must use the same input contract and class-label order:
 
-- MobileNetV2: input range [-1, 1]
-- EfficientNet: input range [0, 1]
+- MobileNetV2: pixel values scaled to `[-1, 1]`
+- EfficientNetB0: raw pixel values in `[0, 255]`; the Keras model includes rescaling
+- EfficientNet-Lite0: pixel values scaled to `[0, 1]`
 
-Set flutter_app/lib/utils/constants.dart -> AppConstants.preprocessType to mobilenet_v2 or efficientnet to match the deployed model.
-
-## Labels and Healthy Classes
-
-Labels follow Crop___Disease formatting. Healthy classes are per-crop (e.g., Tomato___healthy -> tomato_healthy) so crop-specific healthy predictions are preserved.
-
-## Mobile App
-
-```bash
-cd flutter_app
-flutter pub get
-flutter run
-```
-
-Place your deployed model and labels here:
-
-- flutter_app/assets/models/model.tflite
-- flutter_app/assets/labels/labels.txt
+This checkout does not contain a mobile application. The generated TFLite models and labels can be integrated into a separate Android or iOS application. Configure `export.save_dir` in the selected training YAML file to choose the output directory.
 
 ## Dataset Summary
 
-- Total images: ~67k
-- Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
-- Classes: 45
-- Split: 70% train, 15% val, 15% test
+The checked-in dataset metadata describes 115,382 processed images across 72 classes, split 70%/15%/15% between training, validation, and testing.
 
 ## License
 
-MIT License. See LICENSE.
+MIT License. See [LICENSE](LICENSE).
 
 ## Citation
 
@@ -165,6 +147,3 @@ MIT License. See LICENSE.
 
 - PlantVillage Dataset
 - TensorFlow Team
-- Flutter Community
-
-Status: Active Development (Last updated: May 2026)

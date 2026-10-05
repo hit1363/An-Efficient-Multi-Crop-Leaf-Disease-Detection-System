@@ -20,6 +20,8 @@ try:
     # Support module execution: python -m training.train
     from .model import get_model, unfreeze_base_model, print_model_summary
     from .dataset_audit import audit_dataset_splits
+    from .losses import FocalLoss
+    from .metrics import MacroPrecisionRecall
     from .utils import (
         load_dataset,
         compute_class_weights,
@@ -36,6 +38,8 @@ except ImportError:
     # Fallback for script execution: python training/train.py
     from model import get_model, unfreeze_base_model, print_model_summary
     from dataset_audit import audit_dataset_splits
+    from losses import FocalLoss
+    from metrics import MacroPrecisionRecall
     from utils import (
         load_dataset,
         compute_class_weights,
@@ -129,65 +133,27 @@ def build_metrics(metric_names, num_classes):
         if metric_key == "accuracy":
             built_metrics.append(keras.metrics.CategoricalAccuracy(name="accuracy"))
         elif metric_key == "precision":
-            built_metrics.append(keras.metrics.Precision(name="precision", top_k=1))
+            built_metrics.append(
+                MacroPrecisionRecall(
+                    num_classes, metric="precision", name="precision"
+                )
+            )
         elif metric_key == "recall":
-            built_metrics.append(keras.metrics.Recall(name="recall", top_k=1))
+            built_metrics.append(
+                MacroPrecisionRecall(num_classes, metric="recall", name="recall")
+            )
         elif metric_key == "auc":
-            # Single-label softmax classifier: macro AUC over the 1-hot labels.
-            # multi_label=True would misreport AUC for this task.
-            built_metrics.append(keras.metrics.AUC(name="auc"))
+            # Treat each class as a one-vs-rest label and average class AUCs.
+            built_metrics.append(
+                keras.metrics.AUC(
+                    name="auc", multi_label=True, num_labels=num_classes
+                )
+            )
         else:
             # Keep custom/unknown metric names to avoid breaking user-provided settings.
             built_metrics.append(metric_name)
 
     return built_metrics
-
-
-class FocalLoss(keras.losses.Loss):
-    """Focal Loss for addressing class imbalance.
-
-    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
-
-    Configurable via ``loss.gamma`` (default 2.0) and ``loss.alpha`` (default 0.25)
-    in the YAML. Set ``loss.name: focal_loss`` to activate.
-    """
-
-    def __init__(self, gamma=2.0, alpha=0.25, label_smoothing=0.0, **kwargs):
-        super().__init__(**kwargs)
-        self.gamma = float(gamma)
-        self.alpha = float(alpha)
-        self.label_smoothing = float(label_smoothing)
-
-    def call(self, y_true, y_pred):
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-
-        # Label smoothing
-        if self.label_smoothing > 0:
-            num_classes = tf.cast(tf.shape(y_true)[-1], tf.float32)
-            y_true = y_true * (1.0 - self.label_smoothing) + self.label_smoothing / num_classes
-
-        # Clip predictions for numerical stability
-        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
-
-        # Compute focal loss
-        cross_entropy = -y_true * tf.math.log(y_pred)
-        p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
-        modulating_factor = tf.pow(1.0 - p_t, self.gamma)
-        focal_loss = modulating_factor * tf.reduce_sum(cross_entropy, axis=-1)
-
-        # Apply alpha weighting
-        alpha_weight = y_true * self.alpha + (1.0 - y_true) * (1.0 - self.alpha)
-        alpha_weight = tf.reduce_sum(alpha_weight, axis=-1)
-        focal_loss = alpha_weight * focal_loss
-
-        return tf.reduce_mean(focal_loss)
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({"gamma": self.gamma, "alpha": self.alpha,
-                        "label_smoothing": self.label_smoothing})
-        return config
 
 
 class BestValidationWeights(keras.callbacks.Callback):

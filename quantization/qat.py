@@ -20,6 +20,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from training.model import get_model
+from training.serialization import get_custom_objects
 from training.train import _get_loss, build_metrics, resolve_config_paths
 from training.utils import (
     compute_class_weights,
@@ -76,7 +77,9 @@ def _load_float_model(model_path, config):
         return model
 
     try:
-        return keras.models.load_model(model_path)
+        return keras.models.load_model(
+            model_path, custom_objects=get_custom_objects()
+        )
     except Exception as exc:
         if os.path.isdir(model_path):
             raise RuntimeError(

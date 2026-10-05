@@ -289,7 +289,7 @@ def create_efficientnet_b0_model(
 
 
 def create_mobilenetv2_model(
-    input_shape=(224, 224, 3), num_classes=45, dropout_rate=0.5, weights="imagenet",
+    input_shape=(224, 224, 3), num_classes=72, dropout_rate=0.5, weights="imagenet",
     head_units=(256, 128), l2_regularization=0.0,
 ):
     """
@@ -297,7 +297,7 @@ def create_mobilenetv2_model(
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of disease classes (default 45 for multi-crop dataset)
+        num_classes: Number of disease classes (default 72 for the current multi-crop dataset)
         dropout_rate: Dropout rate for regularization
         weights: Pre-trained weights ('imagenet' for ImageNet pretrained, None for random init)
 
@@ -337,7 +337,7 @@ def create_mobilenetv2_model(
 
 def create_efficientnet_model(
     input_shape=(224, 224, 3),
-    num_classes=45,
+    num_classes=72,
     dropout_rate=0.5,
     weights="imagenet",
     hub_url=None,
@@ -352,7 +352,7 @@ def create_efficientnet_model(
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of disease classes (default 45 for multi-crop dataset)
+        num_classes: Number of disease classes (default 72 for the current multi-crop dataset)
         dropout_rate: Dropout rate for regularization
         weights: Pre-trained weights (note: Lite0 always uses TensorFlow Hub pretrained;
              parameter provided for API compatibility but is ignored)
@@ -489,7 +489,7 @@ def get_model(architecture="mobilenetv2", **kwargs):
             - 'efficientnet' or 'efficientnet_lite0': EfficientNet-Lite0 from TF Hub
         **kwargs: Additional arguments passed to model creation functions:
             - input_shape: tuple (default (224, 224, 3))
-            - num_classes: int (default 45)
+            - num_classes: int (default 72 for the current dataset)
             - dropout_rate: float (default 0.5)
             - weights: str (default 'imagenet', ignored for Lite0)
             - hub_url: str (optional TF Hub URL override)
@@ -536,11 +536,11 @@ def get_model(architecture="mobilenetv2", **kwargs):
 if __name__ == "__main__":
     # Test model creation
     print("Creating MobileNetV2 model...")
-    model, base = create_mobilenetv2_model(num_classes=45)
+    model, base = create_mobilenetv2_model()
     print_model_summary(model)
 
     print("\n" + "=" * 50 + "\n")
 
     print("Creating EfficientNet-Lite0 model...")
-    model2, base2 = create_efficientnet_model(num_classes=45)
+    model2, base2 = create_efficientnet_model()
     print_model_summary(model2)

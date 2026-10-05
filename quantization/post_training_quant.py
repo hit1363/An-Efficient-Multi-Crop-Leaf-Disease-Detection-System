@@ -16,11 +16,13 @@ from tensorflow import keras
 
 # Import shared utilities from the training package, with sys.path fallback.
 try:
+    from training.serialization import get_custom_objects
     from training.utils import get_preprocess_fn
 except ImportError:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
+    from training.serialization import get_custom_objects
     try:
         from training.utils import get_preprocess_fn
     except ImportError:
@@ -126,7 +128,9 @@ def _load_keras_model(model_path, config_path=None, architecture=None):
         model.load_weights(model_path)
         return model
 
-    return keras.models.load_model(model_path)
+    return keras.models.load_model(
+        model_path, custom_objects=get_custom_objects()
+    )
 
 
 def _get_dir_size(path):

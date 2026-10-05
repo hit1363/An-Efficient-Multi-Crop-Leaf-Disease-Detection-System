@@ -26,9 +26,11 @@ from sklearn.metrics import (
 try:
     # Support module execution: python -m training.evaluate
     from .utils import get_preprocess_fn
+    from .serialization import get_custom_objects
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
     from utils import get_preprocess_fn
+    from serialization import get_custom_objects
 
 
 def _is_saved_model_dir(model_path):
@@ -92,7 +94,9 @@ class _SavedModelPredictor:
 
 def _load_model(model_path, input_shape):
     try:
-        return keras.models.load_model(model_path)
+        return keras.models.load_model(
+            model_path, custom_objects=get_custom_objects()
+        )
     except (ValueError, OSError):
         if _is_saved_model_dir(model_path):
             if hasattr(keras.layers, "TFSMLayer"):
