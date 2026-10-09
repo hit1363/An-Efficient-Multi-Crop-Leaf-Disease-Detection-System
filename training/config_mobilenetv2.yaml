@@ -30,7 +30,7 @@ augmentation:
 
 # Training Settings
 training:
-  epochs: 10
+  epochs: 14
   freeze_base: true
   unfreeze_from_layer: 130 # Fine-tune only the final MobileNetV2 tail
   unfreeze_epoch: 6 # Stop Phase 1 early if validation loss plateaus

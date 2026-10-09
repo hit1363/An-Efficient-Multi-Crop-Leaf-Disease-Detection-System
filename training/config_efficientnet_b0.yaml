@@ -26,7 +26,7 @@ augmentation:
   brightness_range: [0.9, 1.1]
 
 training:
-  epochs: 16
+  epochs: 20
   freeze_base: true
   unfreeze_from_layer: 180
   unfreeze_epoch: 6
