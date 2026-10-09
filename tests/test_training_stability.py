@@ -8,6 +8,8 @@ from training.model import unfreeze_base_model
 from training.train import (
     compile_model,
     create_fine_tune_optimizer,
+    initialize_training_strategy,
+    requires_fixed_batch_size,
     select_final_weights,
 )
 from training.utils import compute_class_weights
@@ -80,6 +82,56 @@ def test_gradient_clipping_is_applied_in_both_training_phases():
 
     assert model.optimizer.clipnorm == pytest.approx(1.0)
     assert fine_tune_optimizer.clipnorm == pytest.approx(1.0)
+
+
+def test_initialize_training_strategy_uses_tpu_when_available(monkeypatch):
+    resolver = SimpleNamespace(master=lambda: "grpc://tpu-worker")
+    strategy = SimpleNamespace(num_replicas_in_sync=8)
+    calls = []
+
+    monkeypatch.setattr(
+        tf.distribute.cluster_resolver, "TPUClusterResolver", lambda: resolver
+    )
+    monkeypatch.setattr(
+        tf.config, "experimental_connect_to_cluster", lambda value: calls.append(value)
+    )
+    monkeypatch.setattr(
+        tf.tpu.experimental, "initialize_tpu_system", lambda value: calls.append(value)
+    )
+    monkeypatch.setattr(tf.distribute, "TPUStrategy", lambda value: strategy)
+
+    logger = SimpleNamespace(info=lambda *args: None)
+
+    assert initialize_training_strategy(logger) is strategy
+    assert calls == [resolver, resolver]
+
+
+def test_initialize_training_strategy_falls_back_without_tpu(monkeypatch):
+    fallback_strategy = SimpleNamespace(num_replicas_in_sync=1)
+
+    def unavailable_tpu():
+        raise ValueError("No TPU configured")
+
+    monkeypatch.setattr(
+        tf.distribute.cluster_resolver, "TPUClusterResolver", unavailable_tpu
+    )
+    monkeypatch.setattr(
+        tf.distribute, "get_strategy", lambda: fallback_strategy
+    )
+
+    logger = SimpleNamespace(info=lambda *args: None)
+
+    assert initialize_training_strategy(logger) is fallback_strategy
+
+
+def test_only_tpu_strategies_require_fixed_batches(monkeypatch):
+    class FakeTPUStrategy:
+        pass
+
+    monkeypatch.setattr(tf.distribute, "TPUStrategy", FakeTPUStrategy)
+
+    assert requires_fixed_batch_size(FakeTPUStrategy()) is True
+    assert requires_fixed_batch_size(SimpleNamespace()) is False
 
 
 def test_capped_class_weights_are_bounded_and_sample_normalized(tmp_path):
