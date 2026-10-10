@@ -425,29 +425,6 @@ def create_fine_tune_optimizer(config):
     return keras.optimizers.Adam(**adam_kwargs)
 
 
-def initialize_training_strategy(logger):
-    """Return a TPU strategy when available, otherwise the default strategy."""
-    try:
-        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
-        tf.config.experimental_connect_to_cluster(resolver)
-        tf.tpu.experimental.initialize_tpu_system(resolver)
-        strategy = tf.distribute.TPUStrategy(resolver)
-        logger.info("Running on TPU: %s", resolver.master())
-    except (ValueError, RuntimeError) as error:
-        logger.info(
-            "TPU not found. Falling back to the default GPU/CPU strategy: %s", error
-        )
-        strategy = tf.distribute.get_strategy()
-
-    logger.info("Number of accelerator devices: %d", strategy.num_replicas_in_sync)
-    return strategy
-
-
-def requires_fixed_batch_size(strategy):
-    """Return whether a strategy requires complete global batches."""
-    return isinstance(strategy, tf.distribute.TPUStrategy)
-
-
 def train_model(config_path="config.yaml"):
     """Main training function"""
 
@@ -483,11 +460,6 @@ def train_model(config_path="config.yaml"):
     tf.random.set_seed(seed)
     np.random.seed(seed)
 
-    strategy = initialize_training_strategy(logger)
-    use_fixed_batches = requires_fixed_batch_size(strategy)
-    if use_fixed_batches:
-        logger.info("TPU detected: dropping incomplete final batches for fixed shapes")
-
     # Load datasets
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
@@ -503,7 +475,6 @@ def train_model(config_path="config.yaml"):
         augmentation=augmentation,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
-        drop_remainder=use_fixed_batches,
     )
 
     logger.info(f"Found {len(class_names)} classes")
@@ -533,20 +504,19 @@ def train_model(config_path="config.yaml"):
 
     # Create model
     logger.info(f"Creating {config['model']['architecture']} model...")
-    with strategy.scope():
-        model, base_model = get_model(
-            architecture=config["model"]["architecture"],
-            input_shape=tuple(config["model"]["input_shape"]),
-            num_classes=config["model"]["num_classes"],
-            dropout_rate=config["model"]["dropout_rate"],
-            weights=config["model"]["weights"],
-            hub_url=config["model"].get("hub_url"),
-            hub_cache_dir=config["model"].get("hub_cache_dir"),
-            hub_download_retries=config["model"].get("hub_download_retries", 1),
-            hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
-            head_units=tuple(config["model"].get("head_units", [256, 128])),
-            l2_regularization=config["model"].get("l2_regularization", 0.0),
-        )
+    model, base_model = get_model(
+        architecture=config["model"]["architecture"],
+        input_shape=tuple(config["model"]["input_shape"]),
+        num_classes=config["model"]["num_classes"],
+        dropout_rate=config["model"]["dropout_rate"],
+        weights=config["model"]["weights"],
+        hub_url=config["model"].get("hub_url"),
+        hub_cache_dir=config["model"].get("hub_cache_dir"),
+        hub_download_retries=config["model"].get("hub_download_retries", 1),
+        hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
+        head_units=tuple(config["model"].get("head_units", [256, 128])),
+        l2_regularization=config["model"].get("l2_regularization", 0.0),
+    )
 
     if not freeze_base:
         logger.info("freeze_base is False: training backbone from the first epoch")
@@ -567,8 +537,7 @@ def train_model(config_path="config.yaml"):
 
     # Compile model
     logger.info("Compiling model...")
-    with strategy.scope():
-        model = compile_model(model, config)
+    model = compile_model(model, config)
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
@@ -612,12 +581,11 @@ def train_model(config_path="config.yaml"):
             config.get("metrics", ["accuracy"]),
             config["model"]["num_classes"],
         )
-        with strategy.scope():
-            model.compile(
-                optimizer=create_fine_tune_optimizer(config),
-                loss=_get_loss(config),
-                metrics=fine_tune_metrics,
-            )
+        model.compile(
+            optimizer=create_fine_tune_optimizer(config),
+            loss=_get_loss(config),
+            metrics=fine_tune_metrics,
+        )
 
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.

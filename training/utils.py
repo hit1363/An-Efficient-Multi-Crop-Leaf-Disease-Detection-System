@@ -98,7 +98,6 @@ def load_dataset(
     augmentation=None,
     shuffle_buffer=1000,
     cache_mode="none",
-    drop_remainder=False,
 ):
     """
     Load training and validation datasets
@@ -116,8 +115,6 @@ def load_dataset(
         cache_mode: Dataset cache strategy. Use "none" to disable caching,
             "memory" to keep cached batches in RAM, or "disk" to cache to a
             writable filesystem path.
-        drop_remainder: Drop incomplete final batches. Required for TPU
-            training, where every replica needs an equally sized batch.
 
     Returns:
         train_ds, val_ds, class_names
@@ -165,8 +162,8 @@ def load_dataset(
         )
 
     # Batch after shuffling so the shuffle buffer stays small.
-    train_ds = train_ds.batch(batch_size, drop_remainder=drop_remainder)
-    val_ds = val_ds.batch(batch_size, drop_remainder=drop_remainder)
+    train_ds = train_ds.batch(batch_size)
+    val_ds = val_ds.batch(batch_size)
 
     # Augmentation only on training data. Runs each epoch because it sits
     # after the cache.
