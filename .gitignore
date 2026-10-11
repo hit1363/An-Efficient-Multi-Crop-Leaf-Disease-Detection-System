@@ -121,5 +121,6 @@ temp/
 !models/mobilenetv2/.gitkeep
 !models/efficientnet_lite0/.gitkeep
 !models/exported_tflite/.gitkeep
+docs/~$multi_crop_leaf_disease_development_progress_presentation.pptx
 docs/~$lti_crop_leaf_disease_development_progress_report.docx
 docs/~$development_progress_presentation.pptx
