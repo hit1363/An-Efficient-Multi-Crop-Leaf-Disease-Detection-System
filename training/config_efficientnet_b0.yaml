@@ -10,10 +10,10 @@ model:
   l2_regularization: 0.0001
 
 dataset:
-  data_dir: "../dataset/processed"
-  train_dir: "../dataset/processed/train"
-  val_dir: "../dataset/processed/val"
-  test_dir: "../dataset/processed/test"
+  data_dir: "../dataset/processed_deduplicated"
+  train_dir: "../dataset/processed_deduplicated/train"
+  val_dir: "../dataset/processed_deduplicated/val"
+  test_dir: "../dataset/processed_deduplicated/test"
   batch_size: 32
   shuffle_buffer: 1000
   cache_mode: "none"

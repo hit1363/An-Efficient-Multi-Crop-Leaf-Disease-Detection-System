@@ -25,10 +25,10 @@ from sklearn.metrics import (
 
 try:
     # Support module execution: python -m training.evaluate
-    from .utils import get_preprocess_fn
+    from .utils import get_preprocess_fn, validate_dataset_splits
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
-    from utils import get_preprocess_fn
+    from utils import get_preprocess_fn, validate_dataset_splits
 
 
 def _is_saved_model_dir(model_path):
@@ -186,6 +186,18 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     # Load test dataset
     print("Loading test dataset...")
     test_dir = config["dataset"]["test_dir"]
+    split_counts = validate_dataset_splits(
+        config["dataset"]["train_dir"],
+        config["dataset"]["val_dir"],
+        test_dir,
+    )
+    print(
+        "Validated split classes and counts: "
+        + json.dumps(
+            {split: values["total"] for split, values in split_counts.items()},
+            sort_keys=True,
+        )
+    )
     batch_size = config["dataset"]["batch_size"]
     input_shape = tuple(config["model"]["input_shape"])
     image_size = input_shape[:2]
@@ -199,6 +211,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
         test_dir, batch_size, image_size, preprocess_fn=preprocess_fn
     )
     print(f"Found {len(class_names)} classes")
+    if len(class_names) != int(config["model"]["num_classes"]):
+        raise ValueError(
+            f"Test set has {len(class_names)} classes, but the configured model "
+            f"expects {config['model']['num_classes']}"
+        )
 
     # Get predictions
     print("Generating predictions...")
@@ -207,6 +224,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     for images, labels in test_ds:
         predictions = model.predict(images, verbose=0)
+        if predictions.shape[-1] != len(class_names):
+            raise ValueError(
+                f"Model returned {predictions.shape[-1]} outputs, but the test set "
+                f"has {len(class_names)} classes"
+            )
         y_pred.extend(np.argmax(predictions, axis=1))
         y_true.extend(np.argmax(labels.numpy(), axis=1))
 
@@ -232,7 +254,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     # Macro and weighted averages
     precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
-        y_true, y_pred, average="macro", zero_division=0
+        y_true,
+        y_pred,
+        average="macro",
+        labels=range(len(class_names)),
+        zero_division=0,
     )
     precision_weighted, recall_weighted, f1_weighted, _ = (
         precision_recall_fscore_support(
@@ -281,7 +307,7 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     print(f"\nSaved metrics to {results_dir}/f1_scores.csv")
 
     # Generate confusion matrix
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
     plot_confusion_matrix(
         cm, class_names, save_path=f"{results_dir}/confusion_matrix.png"
     )
@@ -295,6 +321,19 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
         "model_path": os.path.abspath(model_path),
         "model_size_mb": round(_get_model_size_mb(model_path), 4),
         "samples": int(len(y_true)),
+        "class_names": class_names,
+        "classes_without_test_support": [
+            class_names[index] for index, count in enumerate(support) if count == 0
+        ],
+        "per_class": {
+            class_name: {
+                "precision": float(precision[index]),
+                "recall": float(recall[index]),
+                "f1": float(f1[index]),
+                "support": int(support[index]),
+            }
+            for index, class_name in enumerate(class_names)
+        },
         "accuracy": float(accuracy),
         "macro_precision": float(precision_macro),
         "macro_recall": float(recall_macro),

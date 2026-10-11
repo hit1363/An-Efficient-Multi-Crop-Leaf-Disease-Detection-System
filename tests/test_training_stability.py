@@ -6,11 +6,17 @@ tf = pytest.importorskip("tensorflow")
 
 from training.model import unfreeze_base_model
 from training.train import (
+    build_metrics,
     compile_model,
     create_fine_tune_optimizer,
     select_final_weights,
 )
-from training.utils import compute_class_weights
+from training.utils import (
+    compute_class_weights,
+    create_augmentation_layer,
+    get_checkpoint_path,
+    validate_dataset_splits,
+)
 
 
 def _config():
@@ -98,3 +104,73 @@ def test_capped_class_weights_are_bounded_and_sample_normalized(tmp_path):
 
     assert max(weights.values()) <= 3.0
     assert sample_weighted_mean == pytest.approx(1.0)
+
+
+def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():
+    with pytest.warns(UserWarning, match="duplicates accuracy"):
+        metrics = build_metrics(["accuracy", "precision", "recall"], 3)
+
+    assert [metric.name for metric in metrics] == ["accuracy"]
+
+
+def test_split_validation_requires_matching_classes_and_train_support(tmp_path):
+    for split in ("train", "val", "test"):
+        for class_name in ("healthy", "disease"):
+            class_dir = tmp_path / split / class_name
+            class_dir.mkdir(parents=True)
+            (class_dir / "sample.jpg").write_bytes(b"image")
+
+    counts = validate_dataset_splits(
+        tmp_path / "train", tmp_path / "val", tmp_path / "test"
+    )
+    assert counts["train"]["total"] == 2
+    assert counts["test"]["classes"] == {"disease": 1, "healthy": 1}
+
+    (tmp_path / "val" / "disease" / "sample.jpg").unlink()
+    counts = validate_dataset_splits(
+        tmp_path / "train", tmp_path / "val", tmp_path / "test"
+    )
+    assert counts["val"]["classes"]["disease"] == 0
+
+    (tmp_path / "train" / "disease" / "sample.jpg").unlink()
+    with pytest.raises(ValueError, match="no supported images"):
+        validate_dataset_splits(
+            tmp_path / "train", tmp_path / "val", tmp_path / "test"
+        )
+
+
+def test_augmentation_respects_configured_flips_and_ranges():
+    config = {
+        "augmentation": {
+            "horizontal_flip": True,
+            "vertical_flip": False,
+            "rotation_range": 0,
+            "zoom_range": [1.0, 1.0],
+            "contrast_range": 0,
+        }
+    }
+    augmentation = create_augmentation_layer(config)
+
+    assert [layer.__class__.__name__ for layer in augmentation.layers] == [
+        "RandomFlip"
+    ]
+    assert augmentation.layers[0].mode == "horizontal"
+
+
+def test_checkpoint_can_be_scoped_to_a_run_directory(tmp_path):
+    config = {
+        "model": {"architecture": "mobilenetv2"},
+        "export": {"save_dir": str(tmp_path)},
+        "callbacks": {
+            "checkpoint": {
+                "directory": str(tmp_path / "runs" / "run-1" / "checkpoints")
+            }
+        },
+    }
+
+    checkpoint_path, weights_only = get_checkpoint_path(config)
+
+    assert checkpoint_path == str(
+        tmp_path / "runs" / "run-1" / "checkpoints" / "best_model.h5"
+    )
+    assert weights_only is False

@@ -190,6 +190,59 @@ def load_dataset(
     return train_ds, val_ds, class_names
 
 
+def validate_dataset_splits(train_dir, val_dir, test_dir=None):
+    """Validate split class parity and return per-class image counts."""
+    valid_extensions = {".jpg", ".jpeg", ".png"}
+    split_paths = {"train": train_dir, "val": val_dir}
+    if test_dir:
+        split_paths["test"] = test_dir
+
+    split_classes = {}
+    split_counts = {}
+    for split_name, split_path in split_paths.items():
+        if not os.path.isdir(split_path):
+            raise FileNotFoundError(
+                f"Dataset {split_name} directory does not exist: {split_path}"
+            )
+        classes = sorted(
+            name
+            for name in os.listdir(split_path)
+            if os.path.isdir(os.path.join(split_path, name))
+        )
+        if not classes:
+            raise ValueError(f"Dataset {split_name} has no class directories: {split_path}")
+        split_classes[split_name] = classes
+        counts = {}
+        for class_name in classes:
+            class_path = os.path.join(split_path, class_name)
+            count = sum(
+                1
+                for filename in os.listdir(class_path)
+                if os.path.splitext(filename)[1].lower() in valid_extensions
+            )
+            if count == 0 and split_name == "train":
+                raise ValueError(
+                    f"Dataset {split_name} class '{class_name}' has no supported images"
+                )
+            counts[class_name] = count
+        split_counts[split_name] = {
+            "total": sum(counts.values()),
+            "classes": counts,
+        }
+
+    reference_name = "train"
+    reference_classes = split_classes[reference_name]
+    for split_name, classes in split_classes.items():
+        if classes != reference_classes:
+            missing = sorted(set(reference_classes) - set(classes))
+            extra = sorted(set(classes) - set(reference_classes))
+            raise ValueError(
+                f"Dataset class folders differ between {reference_name} and "
+                f"{split_name}; missing={missing}, extra={extra}"
+            )
+    return split_counts
+
+
 def create_augmentation_layer(config):
     """
     Create data augmentation layer
@@ -208,14 +261,29 @@ def create_augmentation_layer(config):
     else:
         zoom_factor = zoom_range
 
-    augmentation = keras.Sequential(
-        [
-            keras.layers.RandomFlip("horizontal_and_vertical"),
-            keras.layers.RandomRotation(aug_config.get("rotation_range", 45) / 360),
-            keras.layers.RandomZoom(zoom_factor),
-            keras.layers.RandomContrast(0.2),
-        ]
-    )
+    flip_mode = {
+        (True, True): "horizontal_and_vertical",
+        (True, False): "horizontal",
+        (False, True): "vertical",
+        (False, False): "none",
+    }[(bool(aug_config.get("horizontal_flip", True)),
+       bool(aug_config.get("vertical_flip", False)))]
+
+    layers = []
+    if flip_mode != "none":
+        layers.append(keras.layers.RandomFlip(flip_mode))
+    rotation_range = float(aug_config.get("rotation_range", 15))
+    if rotation_range > 0:
+        layers.append(keras.layers.RandomRotation(rotation_range / 360))
+    if zoom_factor != (0.0, 0.0):
+        layers.append(keras.layers.RandomZoom(zoom_factor))
+    contrast_range = aug_config.get("contrast_range", 0.1)
+    if contrast_range and contrast_range > 0:
+        layers.append(keras.layers.RandomContrast(contrast_range))
+
+    if not layers:
+        layers.append(keras.layers.Identity())
+    augmentation = keras.Sequential(layers, name="training_augmentation")
 
     brightness_range = aug_config.get("brightness_range")
     random_brightness = getattr(keras.layers, "RandomBrightness", None)
@@ -331,12 +399,12 @@ def get_checkpoint_path(config, checkpoint_name="best_model"):
         save_weights_only = True
 
     extension = ".weights.h5" if save_weights_only else ".h5"
-    checkpoint_path = os.path.join(
+    checkpoint_dir = checkpoint_config.get("directory") or os.path.join(
         config["export"]["save_dir"],
         config["model"]["architecture"],
         "checkpoints",
-        checkpoint_name + extension,
     )
+    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name + extension)
     return checkpoint_path, save_weights_only
 
 

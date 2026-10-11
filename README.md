@@ -83,7 +83,23 @@ On Windows PowerShell:
 python -m pip install -r requirements.txt
 ```
 
-Prepare the dataset so it contains `dataset/processed/train`, `dataset/processed/val`, and `dataset/processed/test`, organized by class directory.
+Prepare the dataset so it contains `dataset/processed/train`, `dataset/processed/val`, and `dataset/processed/test`, organized by class directory. The training configurations use `dataset/processed_deduplicated` so exact duplicates stay within one split.
+
+Audit an existing split without modifying it:
+
+```bash
+python dataset/audit_splits.py --data-dir dataset/processed --output results/split_audit.json
+```
+
+To create a separate exact-deduplicated split from another source dataset:
+
+```bash
+python dataset/create_deduplicated_split.py \
+  --data-dir dataset/processed \
+  --output-dir dataset/processed_deduplicated
+```
+
+The deduplicated splitter refuses to overwrite an existing output directory. It retains one exact image per class label, keeps identical image bytes in one split, and records any classes that lack independent examples in validation or test.
 
 ## Training
 
@@ -93,6 +109,8 @@ To run training locally with the repository configurations:
 python training/train.py --config training/config_mobilenetv2.yaml
 python training/train.py --config training/config_efficientnet_b0.yaml
 ```
+
+Set `training.fine_tuning.enabled: false` in a separate config copy to compare against a frozen-backbone baseline. Mixed precision and mirrored multi-GPU training are enabled in the MobileNetV2 config when compatible GPUs are available; CPU and single-GPU fallbacks are automatic.
 
 For the completed Kaggle workflow, use `notebooks/kaggle_training_notebook.ipynb`. The Colab workflow is in `notebooks/colab_training_notebook.ipynb`; check that notebook's model configuration before running it.
 

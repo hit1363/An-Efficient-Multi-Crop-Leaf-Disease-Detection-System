@@ -11,6 +11,7 @@ import argparse
 import json
 import numpy as np
 import subprocess
+import time
 import tensorflow as tf
 import yaml
 from tensorflow import keras
@@ -28,6 +29,7 @@ try:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        validate_dataset_splits,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -41,6 +43,7 @@ except ImportError:
         setup_callbacks,
         setup_logging,
         save_class_names,
+        validate_dataset_splits,
     )
 
 
@@ -86,6 +89,11 @@ def resolve_config_paths(config, config_path):
         tensorboard_cfg["log_dir"] = _resolve_path(
             tensorboard_cfg["log_dir"], config_dir
         )
+    checkpoint_cfg = callbacks_cfg.get("checkpoint", {})
+    if checkpoint_cfg.get("directory"):
+        checkpoint_cfg["directory"] = _resolve_path(
+            checkpoint_cfg["directory"], config_dir
+        )
 
     csv_logger_cfg = callbacks_cfg.get("csv_logger", {})
     if "filename" in csv_logger_cfg:
@@ -108,10 +116,18 @@ def build_metrics(metric_names, num_classes):
         metric_key = metric_name.lower()
         if metric_key == "accuracy":
             built_metrics.append(keras.metrics.CategoricalAccuracy(name="accuracy"))
-        elif metric_key == "precision":
-            built_metrics.append(keras.metrics.Precision(name="precision", top_k=1))
-        elif metric_key == "recall":
-            built_metrics.append(keras.metrics.Recall(name="recall", top_k=1))
+        elif metric_key in {"precision", "recall"}:
+            # For a single-label multiclass problem, top-k precision/recall
+            # collapse to accuracy. Per-class metrics are computed by evaluate.py.
+            import warnings
+
+            warnings.warn(
+                f"Ignoring training metric '{metric_key}': top-1 multiclass "
+                "precision/recall duplicates accuracy. Use the evaluator for "
+                "macro and per-class metrics.",
+                UserWarning,
+                stacklevel=2,
+            )
         elif metric_key == "auc":
             # Single-label softmax classifier: macro AUC over the 1-hot labels.
             # multi_label=True would misreport AUC for this task.
@@ -397,6 +413,7 @@ def compile_model(model, config):
     metric_names = config.get("metrics", ["accuracy"])
     metrics = build_metrics(metric_names, config["model"]["num_classes"])
 
+    optimizer = _maybe_loss_scale_optimizer(optimizer)
     model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
 
     return model
@@ -425,6 +442,86 @@ def create_fine_tune_optimizer(config):
     return keras.optimizers.Adam(**adam_kwargs)
 
 
+class EpochThroughputLogger(keras.callbacks.Callback):
+    """Log training examples per second for runtime comparisons."""
+
+    def __init__(self, samples):
+        super().__init__()
+        self.samples = max(0, int(samples))
+        self.epoch_started = None
+        self.train_elapsed = None
+
+    def on_epoch_begin(self, epoch, logs=None):
+        del epoch, logs
+        self.epoch_started = time.perf_counter()
+        self.train_elapsed = None
+
+    def on_test_begin(self, logs=None):
+        del logs
+        if self.epoch_started is not None:
+            self.train_elapsed = max(time.perf_counter() - self.epoch_started, 1e-9)
+
+    def on_epoch_end(self, epoch, logs=None):
+        del epoch
+        elapsed = self.train_elapsed or max(
+            time.perf_counter() - self.epoch_started, 1e-9
+        )
+        throughput = self.samples / elapsed
+        if logs is not None:
+            logs["examples_per_second"] = throughput
+        print(f" - examples_per_second: {throughput:.1f}")
+
+
+def _add_throughput_callback(callbacks, sample_count):
+    """Place throughput before CSVLogger so the rate is persisted in history."""
+    throughput_callback = EpochThroughputLogger(sample_count)
+    csv_logger_index = next(
+        (
+            index
+            for index, callback in enumerate(callbacks)
+            if isinstance(callback, keras.callbacks.CSVLogger)
+        ),
+        len(callbacks),
+    )
+    callbacks.insert(csv_logger_index, throughput_callback)
+    return callbacks
+
+
+def configure_runtime(config, logger):
+    """Enable optional mixed precision and mirrored multi-GPU training."""
+    runtime_config = config.get("runtime", {})
+    physical_gpus = tf.config.list_physical_devices("GPU")
+    use_mixed_precision = bool(
+        runtime_config.get("mixed_precision", False) and physical_gpus
+    )
+    if runtime_config.get("mixed_precision", False) and not physical_gpus:
+        logger.info("Mixed precision requested but no GPU is available; using float32")
+    policy_name = "mixed_float16" if use_mixed_precision else "float32"
+    keras.mixed_precision.set_global_policy(policy_name)
+
+    if runtime_config.get("multi_gpu", True) and len(physical_gpus) > 1:
+        strategy = tf.distribute.MirroredStrategy()
+    else:
+        strategy = tf.distribute.get_strategy()
+    logger.info(
+        "Runtime: policy=%s, replicas=%d, GPUs=%d",
+        policy_name,
+        strategy.num_replicas_in_sync,
+        len(physical_gpus),
+    )
+    return strategy
+
+
+def _maybe_loss_scale_optimizer(optimizer):
+    """Use dynamic loss scaling for optional mixed_float16 training."""
+    policy = keras.mixed_precision.global_policy().name
+    if policy == "mixed_float16":
+        loss_scale_optimizer = keras.mixed_precision.LossScaleOptimizer
+        if not isinstance(optimizer, loss_scale_optimizer):
+            optimizer = loss_scale_optimizer(optimizer)
+    return optimizer
+
+
 def train_model(config_path="config.yaml"):
     """Main training function"""
 
@@ -438,13 +535,17 @@ def train_model(config_path="config.yaml"):
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
 
+    runtime_strategy = configure_runtime(config, logger)
     freeze_base = config.get("training", {}).get("freeze_base", True)
+    fine_tuning_enabled = config.get("training", {}).get("fine_tuning", {}).get(
+        "enabled", True
+    )
     total_epochs = int(config.get("training", {}).get("epochs", 50))
     unfreeze_epoch = int(config.get("training", {}).get("unfreeze_epoch", 10))
     if total_epochs < 1:
         raise ValueError("training.epochs must be >= 1")
 
-    if freeze_base:
+    if freeze_base and fine_tuning_enabled:
         initial_epochs = min(unfreeze_epoch, total_epochs)
         if unfreeze_epoch > total_epochs:
             logger.warning(
@@ -502,21 +603,43 @@ def train_model(config_path="config.yaml"):
             normalize=weight_config.get("normalize", True),
         )
 
-    # Create model
-    logger.info(f"Creating {config['model']['architecture']} model...")
-    model, base_model = get_model(
-        architecture=config["model"]["architecture"],
-        input_shape=tuple(config["model"]["input_shape"]),
-        num_classes=config["model"]["num_classes"],
-        dropout_rate=config["model"]["dropout_rate"],
-        weights=config["model"]["weights"],
-        hub_url=config["model"].get("hub_url"),
-        hub_cache_dir=config["model"].get("hub_cache_dir"),
-        hub_download_retries=config["model"].get("hub_download_retries", 1),
-        hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
-        head_units=tuple(config["model"].get("head_units", [256, 128])),
-        l2_regularization=config["model"].get("l2_regularization", 0.0),
+    # Validate that each split has the same classes and that every class has
+    # examples before constructing a model or starting a potentially long run.
+    split_counts = validate_dataset_splits(
+        config["dataset"]["train_dir"],
+        config["dataset"]["val_dir"],
+        config["dataset"].get("test_dir"),
     )
+    logger.info("Validated split counts: %s", split_counts)
+    for split_name in ("val", "test"):
+        unsupported = sorted(
+            class_name
+            for class_name, count in split_counts[split_name]["classes"].items()
+            if count == 0
+        )
+        if unsupported:
+            logger.warning(
+                "%s has no independent exact-deduplicated examples for classes: %s",
+                split_name,
+                unsupported,
+            )
+
+    # Create model inside the distribution scope so variables are mirrored.
+    logger.info(f"Creating {config['model']['architecture']} model...")
+    with runtime_strategy.scope():
+        model, base_model = get_model(
+            architecture=config["model"]["architecture"],
+            input_shape=tuple(config["model"]["input_shape"]),
+            num_classes=config["model"]["num_classes"],
+            dropout_rate=config["model"]["dropout_rate"],
+            weights=config["model"]["weights"],
+            hub_url=config["model"].get("hub_url"),
+            hub_cache_dir=config["model"].get("hub_cache_dir"),
+            hub_download_retries=config["model"].get("hub_download_retries", 1),
+            hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
+            head_units=tuple(config["model"].get("head_units", [256, 128])),
+            l2_regularization=config["model"].get("l2_regularization", 0.0),
+        )
 
     if not freeze_base:
         logger.info("freeze_base is False: training backbone from the first epoch")
@@ -525,6 +648,19 @@ def train_model(config_path="config.yaml"):
     print_model_summary(model)
 
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_config = config.setdefault("callbacks", {}).setdefault(
+        "checkpoint", {}
+    )
+    if checkpoint_config.get("run_scoped", True) and not checkpoint_config.get(
+        "directory"
+    ):
+        checkpoint_config["directory"] = os.path.join(
+            config["export"]["save_dir"],
+            config["model"]["architecture"],
+            "runs",
+            run_timestamp,
+            "checkpoints",
+        )
     run_dir = save_run_metadata(
         config=config,
         config_path=config_path,
@@ -537,11 +673,13 @@ def train_model(config_path="config.yaml"):
 
     # Compile model
     logger.info("Compiling model...")
-    model = compile_model(model, config)
+    with runtime_strategy.scope():
+        model = compile_model(model, config)
 
     # Setup callbacks
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config)
+    _add_throughput_callback(callbacks, split_counts["train"]["total"])
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
 
@@ -564,15 +702,16 @@ def train_model(config_path="config.yaml"):
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
-    if freeze_base and initial_epochs < total_epochs:
+    if freeze_base and fine_tuning_enabled and initial_epochs < total_epochs:
         logger.info("\n" + "=" * 50)
         logger.info("Phase 2: Fine-tuning (unfreezing base layers)")
         logger.info("=" * 50 + "\n")
 
         # Unfreeze base model
         # Support both old config key "freeze_until_layer" and new "unfreeze_from_layer" for backwards compatibility
-        unfreeze_from = config.get("training", {}).get("unfreeze_from_layer") or \
-                       config.get("training", {}).get("freeze_until_layer", 100)
+        unfreeze_from = config.get("training", {}).get("unfreeze_from_layer")
+        if unfreeze_from is None:
+            unfreeze_from = config.get("training", {}).get("freeze_until_layer", 100)
         unfreeze_base_model(base_model, unfreeze_from)
         model.set_weights(phase1_best_weights)
 
@@ -581,15 +720,39 @@ def train_model(config_path="config.yaml"):
             config.get("metrics", ["accuracy"]),
             config["model"]["num_classes"],
         )
-        model.compile(
-            optimizer=create_fine_tune_optimizer(config),
-            loss=_get_loss(config),
-            metrics=fine_tune_metrics,
-        )
+        with runtime_strategy.scope():
+            fine_tune_optimizer = _maybe_loss_scale_optimizer(
+                create_fine_tune_optimizer(config)
+            )
+            model.compile(
+                optimizer=fine_tune_optimizer,
+                loss=_get_loss(config),
+                metrics=fine_tune_metrics,
+            )
 
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.
         phase2_callbacks = setup_callbacks(config, checkpoint_name="best_phase2_model")
+        callbacks_config = config.get("callbacks", {})
+        phase2_early_stopping = callbacks_config.get("fine_tuning_early_stopping")
+        if phase2_early_stopping:
+            phase2_callbacks = [
+                callback
+                for callback in phase2_callbacks
+                if not isinstance(callback, keras.callbacks.EarlyStopping)
+            ]
+            phase2_callbacks.append(
+                keras.callbacks.EarlyStopping(
+                    monitor=phase2_early_stopping.get("monitor", "val_loss"),
+                    patience=phase2_early_stopping.get("patience", 4),
+                    restore_best_weights=True,
+                    mode=phase2_early_stopping.get("mode", "min"),
+                    verbose=1,
+                )
+            )
+        _add_throughput_callback(
+            phase2_callbacks, split_counts["train"]["total"]
+        )
         phase2_best = BestValidationWeights()
         phase2_callbacks.append(phase2_best)
 

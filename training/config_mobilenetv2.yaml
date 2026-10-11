@@ -12,29 +12,37 @@ model:
 
 # Dataset Settings
 dataset:
-  data_dir: "../dataset/processed"
-  train_dir: "../dataset/processed/train"
-  val_dir: "../dataset/processed/val"
-  test_dir: "../dataset/processed/test"
+  data_dir: "../dataset/processed_deduplicated"
+  train_dir: "../dataset/processed_deduplicated/train"
+  val_dir: "../dataset/processed_deduplicated/val"
+  test_dir: "../dataset/processed_deduplicated/test"
   batch_size: 32
   shuffle_buffer: 1000
   cache_mode: "none"
 
+# Use Tensor Core acceleration and all detected GPUs when supported.
+runtime:
+  mixed_precision: true
+  multi_gpu: true
+
 # Data Augmentation
 augmentation:
-  rotation_range: 25
-  zoom_range: [0.9, 1.1]
+  rotation_range: 15
+  zoom_range: [0.95, 1.05]
   horizontal_flip: true
-  vertical_flip: true
-  brightness_range: [0.9, 1.1]
+  vertical_flip: false
+  contrast_range: 0.1
+  brightness_range: [0.95, 1.05]
 
 # Training Settings
 training:
-  epochs: 14
+  epochs: 20
   freeze_base: true
   unfreeze_from_layer: 130 # Fine-tune only the final MobileNetV2 tail
-  unfreeze_epoch: 6 # Stop Phase 1 early if validation loss plateaus
-  fine_tune_learning_rate: 0.000005
+  unfreeze_epoch: 6
+  fine_tune_learning_rate: 0.00001
+  fine_tuning:
+    enabled: true # Set false for the frozen-backbone comparison baseline
 
 # Optimizer Settings
 optimizer:
@@ -54,9 +62,9 @@ optimizer:
 lr_schedule:
   type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
   monitor: "val_loss"
-  factor: 0.2
-  patience: 1
-  min_lr: 1.0e-7
+  factor: 0.5
+  patience: 2
+  min_lr: 1.0e-6
   # For exponential_decay:
   # decay_steps: 1000
   # decay_rate: 0.96
@@ -85,6 +93,7 @@ callbacks:
   # Model Checkpoint
   checkpoint:
     enabled: true
+    run_scoped: true
     monitor: "val_loss"
     save_best_only: true
     save_weights_only: false
@@ -95,8 +104,13 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 2
+    patience: 4
     restore_best_weights: true
+    mode: "min"
+
+  fine_tuning_early_stopping:
+    monitor: "val_loss"
+    patience: 6
     mode: "min"
 
   # TensorBoard

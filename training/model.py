@@ -282,7 +282,9 @@ def create_efficientnet_b0_model(
     x = tf.keras.layers.Dropout(dropout_rate)(x)
     x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer)(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+    outputs = tf.keras.layers.Dense(
+        num_classes, activation="softmax", dtype="float32"
+    )(x)
 
     model = tf.keras.Model(inputs, outputs, name="efficientnet_b0_disease_detector")
     return model, base_model
@@ -327,7 +329,7 @@ def create_mobilenetv2_model(
     x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer, name="fc2")(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
     outputs = tf.keras.layers.Dense(
-        num_classes, activation="softmax", name="predictions"
+        num_classes, activation="softmax", name="predictions", dtype="float32"
     )(x)
 
     model = tf.keras.Model(inputs, outputs, name="mobilenetv2_disease_detector")
@@ -424,7 +426,9 @@ def create_efficientnet_model(
     x = tf.keras.layers.Dropout(dropout_rate)(x)
     x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer)(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+    outputs = tf.keras.layers.Dense(
+        num_classes, activation="softmax", dtype="float32"
+    )(x)
 
     model = tf.keras.Model(inputs, outputs, name="efficientnet_lite0_disease_detector")
 
