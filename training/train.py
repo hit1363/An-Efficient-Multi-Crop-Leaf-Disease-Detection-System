@@ -419,6 +419,22 @@ def compile_model(model, config):
     return model
 
 
+def compile_fine_tune_model(model, config, strategy):
+    """Recompile a model for fine-tuning inside its distribution scope."""
+    with strategy.scope():
+        metrics = build_metrics(
+            config.get("metrics", ["accuracy"]),
+            config["model"]["num_classes"],
+        )
+        optimizer = _maybe_loss_scale_optimizer(create_fine_tune_optimizer(config))
+        model.compile(
+            optimizer=optimizer,
+            loss=_get_loss(config),
+            metrics=metrics,
+        )
+    return model
+
+
 def create_fine_tune_optimizer(config):
     """Create a fresh, clipped Adam optimizer for backbone fine-tuning."""
     optimizer_config = config.get("optimizer", {})
@@ -716,19 +732,7 @@ def train_model(config_path="config.yaml"):
         model.set_weights(phase1_best_weights)
 
         # Recompile with lower learning rate
-        fine_tune_metrics = build_metrics(
-            config.get("metrics", ["accuracy"]),
-            config["model"]["num_classes"],
-        )
-        with runtime_strategy.scope():
-            fine_tune_optimizer = _maybe_loss_scale_optimizer(
-                create_fine_tune_optimizer(config)
-            )
-            model.compile(
-                optimizer=fine_tune_optimizer,
-                loss=_get_loss(config),
-                metrics=fine_tune_metrics,
-            )
+        compile_fine_tune_model(model, config, runtime_strategy)
 
         # Callbacks retain monitor/patience state. A fresh set isolates the
         # second optimizer phase from Phase 1's plateau state.

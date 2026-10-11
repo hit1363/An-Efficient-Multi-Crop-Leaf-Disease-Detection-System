@@ -88,8 +88,6 @@ export:
 
 metrics:
   - "accuracy"
-  - "precision"
-  - "recall"
   - "auc"
 
 seed: 42

@@ -8,6 +8,7 @@ from training.model import unfreeze_base_model
 from training.train import (
     build_metrics,
     compile_model,
+    compile_fine_tune_model,
     create_fine_tune_optimizer,
     select_final_weights,
 )
@@ -86,6 +87,19 @@ def test_gradient_clipping_is_applied_in_both_training_phases():
 
     assert model.optimizer.clipnorm == pytest.approx(1.0)
     assert fine_tune_optimizer.clipnorm == pytest.approx(1.0)
+
+
+def test_fine_tune_compile_creates_metrics_in_distribution_scope():
+    strategy = tf.distribute.MirroredStrategy(devices=["/cpu:0"])
+    with strategy.scope():
+        model = tf.keras.Sequential(
+            [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+        )
+
+    compile_fine_tune_model(model, _config(), strategy)
+
+    assert model.optimizer is not None
+    assert [metric.name for metric in model.metrics] == ["loss", "accuracy"]
 
 
 def test_capped_class_weights_are_bounded_and_sample_normalized(tmp_path):

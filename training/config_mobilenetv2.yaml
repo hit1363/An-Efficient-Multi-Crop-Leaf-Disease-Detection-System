@@ -137,9 +137,6 @@ export:
 # Evaluation Metrics
 metrics:
   - "accuracy"
-  - "precision"
-  - "recall"
-  - "auc"
 
 # Reproducibility
 seed: 42
