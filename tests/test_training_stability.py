@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 tf = pytest.importorskip("tensorflow")
@@ -12,6 +13,7 @@ from training.train import (
     create_fine_tune_optimizer,
     select_final_weights,
 )
+from training.export import make_float32_inference_model
 from training.utils import (
     compute_class_weights,
     create_augmentation_layer,
@@ -169,6 +171,51 @@ def test_augmentation_respects_configured_flips_and_ranges():
         "RandomFlip"
     ]
     assert augmentation.layers[0].mode == "horizontal"
+
+
+def test_mixed_precision_model_clones_to_builtin_tflite_and_preserves_predictions():
+    previous_policy = tf.keras.mixed_precision.global_policy()
+    try:
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        inputs = tf.keras.Input((8, 8, 3))
+        backbone = tf.keras.Sequential(
+            [
+                tf.keras.layers.Conv2D(4, 3, padding="same", activation="relu"),
+                tf.keras.layers.BatchNormalization(),
+            ],
+            name="backbone",
+        )
+        features = backbone(inputs)
+        features = tf.keras.layers.GlobalAveragePooling2D()(features)
+        outputs = tf.keras.layers.Dense(3, activation="softmax", dtype="float32")(
+            features
+        )
+        mixed_model = tf.keras.Model(inputs, outputs)
+        sample = tf.random.uniform((2, 8, 8, 3))
+        expected = mixed_model(sample, training=False).numpy()
+
+        float32_model = make_float32_inference_model(mixed_model)
+        assert float32_model.compute_dtype == "float32"
+        assert float32_model.get_layer("backbone").compute_dtype == "float32"
+        actual = float32_model(sample, training=False).numpy()
+        np.testing.assert_allclose(actual, expected, rtol=2e-2, atol=2e-3)
+
+        converter = tf.lite.TFLiteConverter.from_keras_model(float32_model)
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        converter.allow_custom_ops = False
+        tflite_model = converter.convert()
+        interpreter = tf.lite.Interpreter(model_content=tflite_model)
+        interpreter.allocate_tensors()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        interpreter.set_tensor(input_details[0]["index"], sample[:1].numpy())
+        interpreter.invoke()
+        tflite_output = interpreter.get_tensor(output_details[0]["index"])
+        np.testing.assert_allclose(
+            tflite_output, expected[:1], rtol=3e-2, atol=3e-3
+        )
+    finally:
+        tf.keras.mixed_precision.set_global_policy(previous_policy)
 
 
 def test_checkpoint_can_be_scoped_to_a_run_directory(tmp_path):

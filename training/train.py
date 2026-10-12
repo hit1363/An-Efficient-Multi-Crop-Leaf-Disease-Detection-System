@@ -20,6 +20,7 @@ from datetime import datetime
 try:
     # Support module execution: python -m training.train
     from .model import get_model, unfreeze_base_model, print_model_summary
+    from .export import make_float32_inference_model
     from .utils import (
         load_dataset,
         compute_class_weights,
@@ -34,6 +35,7 @@ try:
 except ImportError:
     # Fallback for script execution: python training/train.py
     from model import get_model, unfreeze_base_model, print_model_summary
+    from export import make_float32_inference_model
     from utils import (
         load_dataset,
         compute_class_weights,
@@ -826,7 +828,10 @@ def train_model(config_path="config.yaml"):
             save_dir, model_name, f"{model_name}_{timestamp}.tflite"
         )
         os.makedirs(os.path.dirname(tflite_path), exist_ok=True)
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        tflite_export_model = make_float32_inference_model(model)
+        converter = tf.lite.TFLiteConverter.from_keras_model(tflite_export_model)
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        converter.allow_custom_ops = False
         tflite_model = converter.convert()
         with open(tflite_path, "wb") as f:
             f.write(tflite_model)
