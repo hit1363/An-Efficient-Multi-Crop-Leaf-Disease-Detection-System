@@ -10,12 +10,14 @@ os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 import yaml
 import argparse
 import tensorflow as tf
+import numpy as np
 from tensorflow import keras
 from datetime import datetime
 
 try:
     # Support module execution: python -m training.train
     from .model import get_model, unfreeze_base_model, print_model_summary
+    from .export import make_float32_inference_model
     from .utils import (
         load_dataset,
         compute_class_weights,
@@ -27,10 +29,13 @@ try:
         configure_runtime,
         choose_batch_size,
         validate_dataset_batch,
+        load_benchmark_class_names,
+        validate_dataset_splits,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
     from model import get_model, unfreeze_base_model, print_model_summary
+    from export import make_float32_inference_model
     from utils import (
         load_dataset,
         compute_class_weights,
@@ -42,6 +47,8 @@ except ImportError:
         configure_runtime,
         choose_batch_size,
         validate_dataset_batch,
+        load_benchmark_class_names,
+        validate_dataset_splits,
     )
 
 
@@ -50,6 +57,34 @@ def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+class BestValidationWeights(keras.callbacks.Callback):
+    """Keep the lowest finite validation-loss weights seen in one phase."""
+
+    def __init__(self):
+        super().__init__()
+        self.best = float("inf")
+        self.weights = None
+
+    def on_epoch_end(self, epoch, logs=None):
+        del epoch
+        value = (logs or {}).get("val_loss")
+        if value is not None and np.isfinite(value) and float(value) < self.best:
+            self.best = float(value)
+            self.weights = self.model.get_weights()
+
+
+def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
+    """Accept fine-tuning weights only when validation loss improves."""
+    if (
+        phase2_best is not None
+        and phase2_best.weights is not None
+        and np.isfinite(phase2_best.best)
+        and phase2_best.best < phase1_best.best
+    ):
+        return phase2_best.weights, "phase_2", phase2_best.best
+    return phase1_weights, "phase_1", phase1_best.best
 
 
 def _resolve_path(path_value, base_dir):
@@ -333,7 +368,25 @@ def train_model(config_path="config.yaml"):
     augmentation = (
         create_augmentation_layer(config) if config.get("augmentation") else None
     )
-    train_ds, val_ds, class_names = load_dataset(
+    dataset_config = config["dataset"]
+    class_names = load_benchmark_class_names(dataset_config["data_dir"])
+    if len(class_names) != 72:
+        raise ValueError(
+            f"Canonical benchmark must contain 72 classes, found {len(class_names)}"
+        )
+    validate_dataset_splits(
+        dataset_config["train_dir"],
+        dataset_config["val_dir"],
+        dataset_config.get("test_dir"),
+        class_names=class_names,
+    )
+    if int(config["model"].get("num_classes", -1)) != len(class_names):
+        raise ValueError(
+            f"Model expects {config['model'].get('num_classes')} outputs, but the "
+            f"canonical manifest contains {len(class_names)} classes"
+        )
+
+    train_ds, val_ds, loaded_class_names = load_dataset(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
         batch_size=batch_size,
@@ -346,7 +399,10 @@ def train_model(config_path="config.yaml"):
             "cache_memory_limit_gb", 8.0
         ),
         deterministic=config.get("performance", {}).get("deterministic", False),
+        class_names=class_names,
     )
+    if loaded_class_names != class_names:
+        raise ValueError("Training loader class order differs from canonical manifest")
 
     logger.info(f"Found {len(class_names)} classes")
     logger.info(f"Classes: {class_names}")
@@ -367,12 +423,6 @@ def train_model(config_path="config.yaml"):
     if config.get("performance", {}).get("finite_batch_check", True):
         validate_dataset_batch(train_ds, logger=logger)
         validate_dataset_batch(val_ds, logger=logger)
-
-    if len(class_names) != config["model"]["num_classes"]:
-        raise ValueError(
-            f"Class count mismatch: dataset has {len(class_names)} classes, "
-            f"but config model.num_classes={config['model']['num_classes']}"
-        )
 
     # Compute class weights if enabled
     class_weights = None
@@ -412,6 +462,16 @@ def train_model(config_path="config.yaml"):
             "shufflenet_v2_05",
             "shufflenetv2_0.5x",
             "shufflenet_v2_0.5x",
+            "mobilenet_v1",
+            "mobilenet",
+            "mobilenetv1",
+            "mobilenet_v3_large",
+            "mobilenetv3_large",
+            "mobilenetv3large",
+            "nasnet_mobile",
+            "nasnetmobile",
+            "efficientnet_v2_b0",
+            "efficientnetv2_b0",
         }:
             model_kwargs["classifier_units"] = config["model"].get(
                 "classifier_units", 256
@@ -420,6 +480,9 @@ def train_model(config_path="config.yaml"):
             "mobilenetv3_small",
             "mobilenetv3small",
             "mobilenet_v3_small",
+            "mobilenet_v3_large",
+            "mobilenetv3_large",
+            "mobilenetv3large",
         }:
             model_kwargs["include_preprocessing"] = config["model"].get(
                 "include_preprocessing", False
@@ -443,13 +506,19 @@ def train_model(config_path="config.yaml"):
     logger.info("Phase 1: Training classifier head (base frozen)")
     logger.info("=" * 50 + "\n")
 
+    phase1_best = BestValidationWeights()
+    phase1_callbacks = setup_callbacks(config, csv_append=False)
+    phase1_callbacks.insert(0, phase1_best)
     history1 = model.fit(
         train_ds,
         validation_data=val_ds,
         epochs=initial_epochs,
-        callbacks=setup_callbacks(config, csv_append=False),
+        callbacks=phase1_callbacks,
         class_weight=class_weights,
     )
+    if phase1_best.weights is None:
+        raise RuntimeError("Training produced no finite validation loss in phase 1")
+    phase1_weights = phase1_best.weights
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
@@ -470,14 +539,28 @@ def train_model(config_path="config.yaml"):
             compile_model(model, config, phase="fine_tune")
 
         # Continue training
+        phase2_best = BestValidationWeights()
+        phase2_callbacks = setup_callbacks(config, csv_append=True)
+        phase2_callbacks.insert(0, phase2_best)
         history2 = model.fit(
             train_ds,
             validation_data=val_ds,
             initial_epoch=initial_epochs,
             epochs=total_epochs,
-            callbacks=setup_callbacks(config, csv_append=True),
+            callbacks=phase2_callbacks,
             class_weight=class_weights,
         )
+        selected_weights, selected_phase, selected_loss = select_final_weights(
+            phase1_best, phase1_weights, phase2_best
+        )
+        model.set_weights(selected_weights)
+        logger.info(
+            "Selected %s weights with best validation loss %.6f",
+            selected_phase,
+            selected_loss,
+        )
+    else:
+        model.set_weights(phase1_weights)
 
     # Merge phase histories so downstream consumers get one continuous record
     merged_history = {k: list(v) for k, v in history1.history.items()}
@@ -523,11 +606,20 @@ def train_model(config_path="config.yaml"):
             save_dir, model_name, f"{model_name}_{timestamp}.tflite"
         )
         os.makedirs(os.path.dirname(tflite_path), exist_ok=True)
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        tflite_model = converter.convert()
-        with open(tflite_path, "wb") as f:
-            f.write(tflite_model)
-        logger.info(f"Saved TFLite model: {tflite_path}")
+        try:
+            float32_model = make_float32_inference_model(model)
+            converter = tf.lite.TFLiteConverter.from_keras_model(float32_model)
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+            converter.allow_custom_ops = False
+            tflite_model = converter.convert()
+            with open(tflite_path, "wb") as f:
+                f.write(tflite_model)
+            logger.info("Saved built-in-ops TFLite model: %s", tflite_path)
+        except Exception as exc:
+            logger.exception("TFLite export failed for %s: %s", model_name, exc)
+            error_path = os.path.join(save_dir, model_name, "tflite_export_error.txt")
+            with open(error_path, "w", encoding="utf-8") as handle:
+                handle.write(f"{type(exc).__name__}: {exc}\n")
 
     class_names_path = os.path.join(save_dir, model_name, "class_names.txt")
     save_class_names(class_names, class_names_path)

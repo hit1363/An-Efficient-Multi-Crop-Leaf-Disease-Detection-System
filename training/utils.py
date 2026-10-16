@@ -7,6 +7,9 @@ import logging
 import shutil
 import tempfile
 import time
+import csv
+import hashlib
+import json
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -124,13 +127,25 @@ def get_preprocess_fn(architecture):
         return None
 
     arch = architecture.lower()
+    if arch in {
+        "mobilenet", "mobilenet_v1", "mobilenetv1", "mobilenet_v2", "mobilenetv2",
+        "mobilenet_v3_small", "mobilenetv3_small", "mobilenetv3small",
+        "mobilenetv3_large", "mobilenet_v3_large", "mobilenetv3large",
+        "nasnet_mobile", "nasnetmobile",
+    }:
+        if arch in {
+            "mobilenet_v3_small", "mobilenetv3_small", "mobilenetv3small",
+            "mobilenetv3_large", "mobilenet_v3_large", "mobilenetv3large",
+        }:
+            # The comparison configs include Keras' built-in rescaling layer.
+            return None
+        if arch in {"nasnet_mobile", "nasnetmobile"}:
+            return tf.keras.applications.nasnet.preprocess_input
+        if arch in {"mobilenet", "mobilenet_v1", "mobilenetv1"}:
+            return tf.keras.applications.mobilenet.preprocess_input
+        return tf.keras.applications.mobilenet_v2.preprocess_input
     if arch == "mobilenetv2":
         return tf.keras.applications.mobilenet_v2.preprocess_input
-    if arch in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
-        # MobileNetV3's Keras ``preprocess_input`` is a compatibility
-        # placeholder. Because this project disables the backbone's built-in
-        # Rescaling layer, perform the documented [-1, 1] conversion here.
-        return lambda x: tf.cast(x, tf.float32) / 127.5 - 1.0
     if arch in {
         "shufflenetv2_05",
         "shufflenet_v2_05",
@@ -261,6 +276,7 @@ def load_dataset(
     cache_mode="none",
     cache_memory_limit_gb=8.0,
     deterministic=False,
+    class_names=None,
 ):
     """
     Load training and validation datasets
@@ -285,6 +301,8 @@ def load_dataset(
     """
     # Batch at the source. The previous unbatched -> shuffle -> batch path
     # added substantial tf.data overhead for large hosted datasets.
+    if class_names is not None:
+        class_names = list(class_names)
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
@@ -292,6 +310,7 @@ def load_dataset(
         label_mode="categorical",
         shuffle=False,
         seed=42,
+        class_names=class_names,
     )
 
     val_ds = keras.preprocessing.image_dataset_from_directory(
@@ -300,6 +319,7 @@ def load_dataset(
         batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
+        class_names=class_names,
     )
 
     class_names = train_ds.class_names
@@ -378,6 +398,93 @@ def load_dataset(
     )
 
     return train_ds, val_ds, class_names
+
+
+def load_benchmark_class_names(data_dir):
+    """Load the canonical class order written by prepare_benchmark.py."""
+    manifest_path = os.path.join(data_dir, "class_names.json")
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError(
+            f"Canonical class manifest is missing: {manifest_path}. "
+            "Prepare the harmonized benchmark before training."
+        )
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        class_names = json.load(handle)
+    if not isinstance(class_names, list) or not class_names or len(set(class_names)) != len(class_names):
+        raise ValueError(f"Invalid canonical class manifest: {manifest_path}")
+    return class_names
+
+
+def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None):
+    """Validate class parity, image support, and source-hash split isolation."""
+    valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    split_paths = {"train": train_dir, "val": val_dir}
+    if test_dir:
+        split_paths["test"] = test_dir
+    counts = {}
+    for split_name, split_path in split_paths.items():
+        if not os.path.isdir(split_path):
+            raise FileNotFoundError(f"Dataset {split_name} directory does not exist: {split_path}")
+        folders = sorted(
+            name for name in os.listdir(split_path)
+            if os.path.isdir(os.path.join(split_path, name))
+        )
+        expected = sorted(class_names) if class_names is not None else None
+        if expected is not None and folders != expected:
+            raise ValueError(
+                f"Dataset {split_name} class folders do not match the canonical manifest; "
+                f"missing={sorted(set(expected) - set(folders))}, "
+                f"extra={sorted(set(folders) - set(expected))}"
+            )
+        split_counts = {}
+        for class_name in folders:
+            class_dir = os.path.join(split_path, class_name)
+            images = [
+                os.path.join(class_dir, filename)
+                for filename in os.listdir(class_dir)
+                if os.path.splitext(filename)[1].lower() in valid_extensions
+            ]
+            split_counts[class_name] = len(images)
+            if split_name == "train" and not images:
+                raise ValueError(f"Training class '{class_name}' has no supported images")
+        counts[split_name] = {"total": sum(split_counts.values()), "classes": split_counts}
+        if counts[split_name]["total"] == 0:
+            raise ValueError(f"Dataset {split_name} split has no supported images")
+
+    all_classes = [set(value["classes"]) for value in counts.values()]
+    if any(classes != all_classes[0] for classes in all_classes[1:]):
+        raise ValueError("Train, validation, and test class folders differ")
+
+    # The source manifest records hashes before image conversion. This catches
+    # exact source duplicates even if JPEG re-encoding changed output bytes.
+    data_root = os.path.dirname(os.path.abspath(train_dir))
+    manifest_path = os.path.join(data_root, "split_manifest.csv")
+    hash_splits = {}
+    if os.path.isfile(manifest_path):
+        with open(manifest_path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                digest = row.get("source_sha256")
+                split = row.get("split")
+                if digest and split:
+                    hash_splits.setdefault(digest, set()).add(split)
+    else:
+        for split_name, split_path in split_paths.items():
+            for class_name in sorted(counts[split_name]["classes"]):
+                class_dir = os.path.join(split_path, class_name)
+                for filename in sorted(os.listdir(class_dir)):
+                    path = os.path.join(class_dir, filename)
+                    if os.path.isfile(path) and os.path.splitext(filename)[1].lower() in valid_extensions:
+                        digest = hashlib.sha256()
+                        with open(path, "rb") as image_file:
+                            for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                        hash_splits.setdefault(digest.hexdigest(), set()).add(split_name)
+    leaking_hashes = [digest for digest, splits in hash_splits.items() if len(splits) > 1]
+    if leaking_hashes:
+        raise ValueError(
+            f"Found {len(leaking_hashes)} exact duplicate image hashes across dataset splits"
+        )
+    return counts
 
 
 def create_augmentation_layer(config):
@@ -770,5 +877,5 @@ if __name__ == "__main__":
     print("Testing utility functions...")
 
     # Test class weight computation
-    # class_weights = compute_class_weights('../dataset/processed/train')
+    # class_weights = compute_class_weights('../dataset/processed_harmonized/train')
     # print("Class weights:", class_weights)

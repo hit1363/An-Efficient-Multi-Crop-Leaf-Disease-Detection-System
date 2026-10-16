@@ -1,0 +1,91 @@
+# Shared settings for controlled architecture comparison on the harmonized set.
+model:
+  architecture: "mobilenetv2"
+  input_shape: [224, 224, 3]
+  num_classes: 72
+  weights: "imagenet"
+  dropout_rate: 0.35
+  classifier_units: 256
+  include_preprocessing: true
+  hub_url: "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
+
+dataset:
+  data_dir: "../dataset/processed_harmonized"
+  train_dir: "../dataset/processed_harmonized/train"
+  val_dir: "../dataset/processed_harmonized/val"
+  test_dir: "../dataset/processed_harmonized/test"
+  batch_size: 32
+  batch_size_fallbacks: [32, 16, 8]
+  auto_batch_fallback: true
+  shuffle_buffer: 1000
+  cache_mode: "auto"
+  cache_memory_limit_gb: 8.0
+
+augmentation:
+  rotation_range: 15
+  zoom_range: [0.95, 1.05]
+  horizontal_flip: true
+  vertical_flip: false
+  brightness_range: [0.95, 1.05]
+
+training:
+  epochs: 20
+  freeze_base: true
+  unfreeze_from_layer: 100
+  unfreeze_epoch: 6
+  fine_tune_learning_rate: 0.00001
+
+optimizer:
+  name: "adam"
+  learning_rate: 0.0003
+  clipnorm: 1.0
+  decay: 0.0
+
+lr_schedule:
+  type: "reduce_on_plateau"
+  monitor: "val_loss"
+  factor: 0.5
+  patience: 3
+  min_lr: 0.000001
+
+class_weights:
+  enabled: false
+
+callbacks:
+  checkpoint:
+    enabled: true
+    monitor: "val_loss"
+    save_best_only: true
+    save_weights_only: true
+    mode: "min"
+    save_freq: "epoch"
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    patience: 5
+    restore_best_weights: true
+    mode: "min"
+  tensorboard:
+    enabled: false
+  csv_logger:
+    enabled: true
+    append: false
+
+export:
+  save_dir: "../models/benchmark"
+  formats: ["saved_model"]
+  sync_flutter_labels: false
+
+metrics: ["accuracy"]
+seed: 42
+performance:
+  mixed_precision: true
+  deterministic: true
+  distribution: auto
+  finite_batch_check: true
+  terminate_on_nan: true
+  log_throughput: true
+
+logging:
+  level: "INFO"
+  save_to_file: true

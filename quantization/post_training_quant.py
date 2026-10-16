@@ -50,6 +50,14 @@ except ImportError:
 
 def infer_architecture_from_path(model_path):
     lower = model_path.lower()
+    if "efficientnet_v2_b0" in lower or "efficientnetv2_b0" in lower:
+        return "efficientnet_v2_b0"
+    if "mobilenet_v3_large" in lower or "mobilenetv3_large" in lower or "mobilenetv3large" in lower:
+        return "mobilenet_v3_large"
+    if "mobilenet_v1" in lower or "mobilenetv1" in lower:
+        return "mobilenet_v1"
+    if "nasnet_mobile" in lower or "nasnetmobile" in lower:
+        return "nasnet_mobile"
     if "shufflenetv2_05" in lower or "shufflenet_v2_05" in lower:
         return "shufflenetv2_05"
     if "mobilenetv3_small" in lower or "mobilenet_v3_small" in lower:

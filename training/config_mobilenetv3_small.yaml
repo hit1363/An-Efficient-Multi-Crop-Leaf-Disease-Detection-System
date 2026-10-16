@@ -1,20 +1,20 @@
 # Training Configuration File (MobileNetV3-Small)
 
 model:
-  architecture: "mobilenetv3_small" # One of the five supported architectures
+  architecture: "mobilenetv3_small" # Supported mobile comparison architecture
   input_shape: [224, 224, 3]
-  num_classes: 45
+  num_classes: 72
   weights: "imagenet"
   dropout_rate: 0.35
   classifier_units: 256
-  # Keep preprocessing outside the backbone so the [-1, 1] contract is explicit.
-  include_preprocessing: false
+  # Use built-in preprocessing so serving and export share one input contract.
+  include_preprocessing: true
 
 dataset:
-  data_dir: "../dataset/processed"
-  train_dir: "../dataset/processed/train"
-  val_dir: "../dataset/processed/val"
-  test_dir: "../dataset/processed/test"
+  data_dir: "../dataset/processed_harmonized"
+  train_dir: "../dataset/processed_harmonized/train"
+  val_dir: "../dataset/processed_harmonized/val"
+  test_dir: "../dataset/processed_harmonized/test"
   batch_size: 128
   batch_size_fallbacks: [128, 64, 32]
   auto_batch_fallback: true

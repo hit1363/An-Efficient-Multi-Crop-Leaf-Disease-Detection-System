@@ -1,19 +1,18 @@
 # Multi-Crop Leaf Disease Detection System
 
-Lightweight, offline-capable multi-crop leaf disease detection optimized for mobile deployment. The system trains five mobile backbones, exports TensorFlow Lite models, and ships a Flutter app for on-device inference.
+Lightweight, offline-capable multi-crop leaf disease classification optimized for mobile deployment. The benchmark harmonizes 72 labels and compares Keras mobile classifiers using TensorFlow Lite export and CPU proxy measurements.
 
 ## Overview
 
-- 45 classes (diseases + healthy + invalid) across 15+ crops
-- MobileNetV2, EfficientNetB0, EfficientNet-Lite0, and MobileNetV3-Small with ImageNet pretraining
-- Native ShuffleNetV2 0.5x implementation trained from scratch
+- 72 canonical classes (including the explicit `Invalid` class) across 15+ crops
+- MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, EfficientNetB0/EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference
 - Post-training quantization (dynamic range and full INT8)
 - Flutter app with camera/gallery input and offline inference
 
 ## Goals
 
 1. Unified multi-crop classifier with test accuracy >= 90% and macro F1 >= 0.80
-2. Compare MobileNetV2 vs EfficientNet-Lite0 on accuracy, size, and speed
+2. Compare classifier accuracy, INT8 size, and single-thread CPU inference latency
 3. Achieve ~4x size reduction via INT8 quantization with < 2% accuracy loss
 4. Benchmark latency, memory, CPU, and battery on low-end and mid-range devices
 5. Deliver an offline Android app for field testing
@@ -26,16 +25,18 @@ Lightweight, offline-capable multi-crop leaf disease detection optimized for mob
 ├── requirements.txt
 ├── dataset/
 │   ├── raw/
-│   ├── processed/
-│   └── prepare_data.py
+│   ├── processed_harmonized/
+│   ├── taxonomy.py
+│   └── prepare_benchmark.py
 ├── notebooks/
 │   ├── colab_training_notebook.ipynb
 │   ├── colab_<model>_training.ipynb
-│   ├── kaggle_<model>_training.ipynb
+│   ├── kaggle_harmonized_comparison.ipynb
 │   ├── data_exploration.ipynb
 │   └── evaluation.ipynb
 ├── training/
 │   ├── train.py
+│   ├── compare_models.py
 │   ├── evaluate.py
 │   ├── model.py
 │   ├── utils.py
@@ -73,12 +74,13 @@ pip install -r requirements.txt
 
 ### Dataset Preparation
 
-1. Download PlantVillage (or your dataset) and place images in dataset/raw/
-2. Split into train/val/test:
+Build the canonical 72-class benchmark from raw class folders. An existing `train/val/test` tree is also accepted, but its old boundaries are discarded and regenerated:
 
 ```bash
-python dataset/prepare_data.py
+python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed_harmonized --seed 42
 ```
+
+The builder applies the explicit taxonomy, retains `Invalid` as class 72, removes exact duplicates, converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
 
 ### Training
 
@@ -89,6 +91,14 @@ python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_mobilenetv3_small.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
+
+Run the full mobile model comparison after preparing the benchmark:
+
+```bash
+python training/compare_models.py --data-dir dataset/processed_harmonized --output-dir results/mobile_model_comparison
+```
+
+The comparison covers MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, EfficientNetB0, EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference. It reports float and full INT8 classification metrics, TFLite size, single-thread CPU latency, and the Pareto frontier. CPU timing is a proxy; validate finalists on the target Android device.
 
 ### Evaluation
 
@@ -107,8 +117,8 @@ python quantization/post_training_quant.py \
 python quantization/post_training_quant.py \
   --model_path <path-to-model> \
   --output_path models/exported_tflite/mobilenetv2_int8.tflite \
-  --representative_data dataset/processed/train \
-  --evaluate --test_data dataset/processed/test \
+  --representative_data dataset/processed_harmonized/train \
+  --evaluate --test_data dataset/processed_harmonized/test \
   --arch mobilenetv2
 ```
 

@@ -266,22 +266,16 @@ def create_efficientnet_b0_model(
     )
     base_model.trainable = False
 
-    inputs = tf.keras.Input(shape=input_shape)
-    x = base_model(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.Dense(512, activation="relu")(x)
-    x = tf.keras.layers.Dropout(dropout_rate)(x)
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
-    x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
-
-    model = tf.keras.Model(inputs, outputs, name="efficientnet_b0_disease_detector")
+    model = _attach_classifier_head(
+        base_model, input_shape, num_classes, dropout_rate, 256,
+        model_name="efficientnet_b0_disease_detector",
+    )
     return model, base_model
 
 
 def create_mobilenetv2_model(
     input_shape=(224, 224, 3),
-    num_classes=45,
+    num_classes=72,
     dropout_rate=0.5,
     weights="imagenet",
     classifier_units=256,
@@ -291,7 +285,7 @@ def create_mobilenetv2_model(
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of disease classes (default 45 for multi-crop dataset)
+        num_classes: Number of canonical benchmark classes (default 72)
         dropout_rate: Dropout rate for regularization
         classifier_units: Hidden units in the lightweight classifier head. Set to
             0 to use a linear classifier on pooled backbone features.
@@ -310,28 +304,15 @@ def create_mobilenetv2_model(
     # Freeze base model layers initially
     base_model.trainable = False
 
-    # Build classification head
-    # MobileNetV2 outputs (batch, 7, 7, 1280), so we use GlobalAveragePooling2D
-    inputs = tf.keras.Input(shape=input_shape)
-    x = base_model(inputs, training=False)
-    x = tf.keras.layers.GlobalAveragePooling2D(name="global_average_pooling")(x)
-    # Normalize pooled ImageNet features to make the classifier head easier to
-    # optimize during both frozen-backbone training and fine-tuning.
-    x = tf.keras.layers.BatchNormalization(name="classifier_bn")(x)
-    if classifier_units and int(classifier_units) > 0:
-        x = tf.keras.layers.Dense(
-            int(classifier_units), activation="relu", name="classifier_dense"
-        )(x)
-        x = tf.keras.layers.Dropout(dropout_rate, name="classifier_dropout")(x)
-    else:
-        x = tf.keras.layers.Dropout(dropout_rate, name="classifier_dropout")(x)
-    outputs = tf.keras.layers.Dense(
-        num_classes, activation="softmax", dtype="float32", name="predictions"
-    )(x)
-
-    model = tf.keras.Model(inputs, outputs, name="mobilenetv2_disease_detector")
-
-    return model, base_model  # base_model is a standard Keras Model
+    model = _attach_classifier_head(
+        base_model,
+        input_shape,
+        num_classes,
+        dropout_rate=dropout_rate,
+        classifier_units=classifier_units,
+        model_name="mobilenetv2_disease_detector",
+    )
+    return model, base_model
 
 
 def _attach_classifier_head(
@@ -366,11 +347,11 @@ def _attach_classifier_head(
 
 def create_mobilenetv3_small_model(
     input_shape=(224, 224, 3),
-    num_classes=45,
+    num_classes=72,
     dropout_rate=0.35,
     weights="imagenet",
     classifier_units=256,
-    include_preprocessing=False,
+    include_preprocessing=True,
 ):
     """Create a MobileNetV3-Small classifier with optional ImageNet weights."""
     base_model = tf.keras.applications.MobileNetV3Small(
@@ -387,6 +368,50 @@ def create_mobilenetv3_small_model(
         dropout_rate=dropout_rate,
         classifier_units=classifier_units,
         model_name="mobilenetv3_small_disease_detector",
+    )
+    return model, base_model
+
+
+def create_application_model(
+    architecture,
+    input_shape=(224, 224, 3),
+    num_classes=72,
+    dropout_rate=0.35,
+    weights="imagenet",
+    classifier_units=256,
+    include_preprocessing=True,
+):
+    """Build one of the supported Keras Application classification backbones."""
+    key = architecture.lower().replace("-", "_")
+    backbones = {
+        "mobilenet_v1": tf.keras.applications.MobileNet,
+        "mobilenet": tf.keras.applications.MobileNet,
+        "mobilenetv1": tf.keras.applications.MobileNet,
+        "nasnet_mobile": tf.keras.applications.NASNetMobile,
+        "nasnetmobile": tf.keras.applications.NASNetMobile,
+        "mobilenetv3_large": tf.keras.applications.MobileNetV3Large,
+        "mobilenetv3large": tf.keras.applications.MobileNetV3Large,
+        "efficientnet_v2_b0": tf.keras.applications.EfficientNetV2B0,
+        "efficientnetv2_b0": tf.keras.applications.EfficientNetV2B0,
+    }
+    if key not in backbones:
+        raise ValueError(f"Unsupported Keras Application architecture: {architecture}")
+    kwargs = {
+        "input_shape": input_shape,
+        "include_top": False,
+        "weights": weights,
+    }
+    if key in {"mobilenet_v3_large"}:
+        kwargs["include_preprocessing"] = bool(include_preprocessing)
+    base_model = backbones[key](**kwargs)
+    base_model.trainable = False
+    model = _attach_classifier_head(
+        base_model,
+        input_shape,
+        num_classes,
+        dropout_rate=dropout_rate,
+        classifier_units=classifier_units,
+        model_name=f"{key}_disease_detector",
     )
     return model, base_model
 
@@ -483,7 +508,7 @@ def _shufflenet_v2_unit(x, output_channels, stride, name):
 
 def create_shufflenetv2_05_model(
     input_shape=(224, 224, 3),
-    num_classes=45,
+    num_classes=72,
     dropout_rate=0.35,
     weights=None,
     classifier_units=256,
@@ -530,7 +555,7 @@ def create_shufflenetv2_05_model(
 
 def create_efficientnet_model(
     input_shape=(224, 224, 3),
-    num_classes=45,
+    num_classes=72,
     dropout_rate=0.5,
     weights="imagenet",
     hub_url=None,
@@ -543,7 +568,7 @@ def create_efficientnet_model(
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of disease classes (default 45 for multi-crop dataset)
+        num_classes: Number of canonical benchmark classes (default 72)
         dropout_rate: Dropout rate for regularization
         weights: Pre-trained weights (note: Lite0 always uses TensorFlow Hub pretrained;
              parameter provided for API compatibility but is ignored)
@@ -681,11 +706,12 @@ def get_model(architecture="mobilenetv2", **kwargs):
             - 'mobilenetv2': MobileNetV2 backbone (full layer-level control)
             - 'efficientnet_b0': Standard Keras EfficientNetB0 backbone
             - 'efficientnet' or 'efficientnet_lite0': EfficientNet-Lite0 from TF Hub
-            - 'mobilenetv3_small': Standard Keras MobileNetV3-Small backbone
+            - 'mobilenetv3_small' / 'mobilenetv3_large': Keras MobileNetV3 backbones
+            - 'mobilenet_v1', 'nasnet_mobile', 'efficientnet_v2_b0': Keras Applications
             - 'shufflenetv2_05': Native ShuffleNetV2 0.5x backbone
         **kwargs: Additional arguments passed to model creation functions:
             - input_shape: tuple (default (224, 224, 3))
-            - num_classes: int (default 45)
+            - num_classes: int (default 72)
             - dropout_rate: float (default 0.5)
             - weights: str (default 'imagenet', ignored for Lite0)
             - classifier_units: optional hidden units for lightweight heads
@@ -702,6 +728,23 @@ def get_model(architecture="mobilenetv2", **kwargs):
         ValueError: If architecture is not recognized
     """
     arch_lower = architecture.lower()
+    app_architectures = {
+        "mobilenet",
+        "mobilenet_v1",
+        "mobilenetv1",
+        "mobilenet_v3_large",
+        "mobilenetv3_large",
+        "mobilenetv3large",
+        "efficientnet_v2_b0",
+        "efficientnetv2_b0",
+        "nasnet_mobile",
+        "nasnetmobile",
+    }
+    if arch_lower in app_architectures:
+        kwargs = dict(kwargs)
+        for key in ("hub_url", "hub_cache_dir", "hub_download_retries", "hub_download_delay_sec"):
+            kwargs.pop(key, None)
+        return create_application_model(architecture=arch_lower, **kwargs)
     if arch_lower == "mobilenetv2":
         kwargs = dict(kwargs)
         for key in [
@@ -753,19 +796,19 @@ def get_model(architecture="mobilenetv2", **kwargs):
     else:
         raise ValueError(
             f"Unknown architecture: {architecture}. "
-            f"Supported: 'mobilenetv2', 'efficientnet_b0', 'efficientnet_lite0', "
-            f"'mobilenetv3_small', 'shufflenetv2_05'"
+            f"Supported: MobileNetV1/V2/V3-Small/V3-Large, NASNetMobile, "
+            f"EfficientNetB0/EfficientNetV2-B0/EfficientNet-Lite0, ShuffleNetV2-0.5x"
         )
 
 
 if __name__ == "__main__":
     # Test model creation
     print("Creating MobileNetV2 model...")
-    model, base = create_mobilenetv2_model(num_classes=45)
+    model, base = create_mobilenetv2_model(num_classes=72)
     print_model_summary(model)
 
     print("\n" + "=" * 50 + "\n")
 
     print("Creating EfficientNet-Lite0 model...")
-    model2, base2 = create_efficientnet_model(num_classes=45)
+    model2, base2 = create_efficientnet_model(num_classes=72)
     print_model_summary(model2)

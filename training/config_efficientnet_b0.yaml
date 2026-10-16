@@ -3,15 +3,15 @@
 model:
   architecture: "efficientnet_b0"
   input_shape: [224, 224, 3]
-  num_classes: 45
+  num_classes: 72
   weights: "imagenet"
   dropout_rate: 0.5
 
 dataset:
-  data_dir: "../dataset/processed"
-  train_dir: "../dataset/processed/train"
-  val_dir: "../dataset/processed/val"
-  test_dir: "../dataset/processed/test"
+  data_dir: "../dataset/processed_harmonized"
+  train_dir: "../dataset/processed_harmonized/train"
+  val_dir: "../dataset/processed_harmonized/val"
+  test_dir: "../dataset/processed_harmonized/test"
   batch_size: 64
   batch_size_fallbacks: [64, 32, 16]
   auto_batch_fallback: true

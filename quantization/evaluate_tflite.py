@@ -22,11 +22,19 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from training.utils import get_preprocess_fn
+from training.utils import get_preprocess_fn, load_benchmark_class_names
 
 
 def infer_architecture_from_path(model_path):
     lower_path = model_path.lower()
+    if "efficientnet_v2_b0" in lower_path or "efficientnetv2_b0" in lower_path:
+        return "efficientnet_v2_b0"
+    if "mobilenet_v3_large" in lower_path or "mobilenetv3_large" in lower_path or "mobilenetv3large" in lower_path:
+        return "mobilenet_v3_large"
+    if "mobilenet_v1" in lower_path or "mobilenetv1" in lower_path:
+        return "mobilenet_v1"
+    if "nasnet_mobile" in lower_path or "nasnetmobile" in lower_path:
+        return "nasnet_mobile"
     if "shufflenetv2_05" in lower_path or "shufflenet_v2_05" in lower_path:
         return "shufflenetv2_05"
     if "mobilenetv3_small" in lower_path or "mobilenet_v3_small" in lower_path:
@@ -35,6 +43,8 @@ def infer_architecture_from_path(model_path):
         return "efficientnet_b0"
     if "efficientnet" in lower_path:
         return "efficientnet_lite0"
+    if "mobilenetv3_small" in lower_path or "mobilenet_v3_small" in lower_path:
+        return "mobilenetv3_small"
     if "mobilenet" in lower_path:
         return "mobilenetv2"
     raise ValueError("Pass --arch when the model filename does not identify its architecture.")
@@ -103,7 +113,7 @@ def evaluate_tflite_model(
     max_samples=None,
     warmup_runs=10,
 ):
-    interpreter = tf.lite.Interpreter(model_path=model_path)
+    interpreter = tf.lite.Interpreter(model_path=model_path, num_threads=1)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()[0]
     output_details = interpreter.get_output_details()[0]
@@ -113,14 +123,21 @@ def evaluate_tflite_model(
         raise ValueError(f"Unsupported TFLite input shape: {input_shape}")
 
     image_size = (int(input_shape[1]), int(input_shape[2]))
+    data_root = os.path.dirname(os.path.abspath(test_data_dir))
+    class_names = load_benchmark_class_names(data_root)
     test_ds = keras.preprocessing.image_dataset_from_directory(
         test_data_dir,
         image_size=image_size,
         batch_size=1,
         label_mode="int",
         shuffle=False,
+        class_names=class_names,
     )
-    class_names = test_ds.class_names
+    if len(class_names) != int(output_details["shape"][-1]):
+        raise ValueError(
+            f"TFLite output has {output_details['shape'][-1]} classes but "
+            f"the benchmark manifest has {len(class_names)}"
+        )
     preprocess_fn = get_preprocess_fn(
         architecture or infer_architecture_from_path(model_path)
     )
@@ -167,7 +184,11 @@ def evaluate_tflite_model(
         zero_division=0,
     )
     macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
-        labels, predictions, average="macro", zero_division=0
+        labels,
+        predictions,
+        labels=all_labels,
+        average="macro",
+        zero_division=0,
     )
     weighted_precision, weighted_recall, weighted_f1, _ = precision_recall_fscore_support(
         labels, predictions, average="weighted", zero_division=0
@@ -204,6 +225,7 @@ def evaluate_tflite_model(
         "std_inference_ms": float(np.std(inference_times_ms)),
         "input_dtype": np.dtype(input_details["dtype"]).name,
         "output_dtype": np.dtype(output_details["dtype"]).name,
+        "latency_device": "single-thread CPU interpreter proxy",
     }
     summary_path = os.path.join(output_dir, "metrics_summary.json")
     with open(summary_path, "w", encoding="utf-8") as handle:

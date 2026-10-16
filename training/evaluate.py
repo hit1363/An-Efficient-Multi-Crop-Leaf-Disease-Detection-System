@@ -25,10 +25,18 @@ from sklearn.metrics import (
 
 try:
     # Support module execution: python -m training.evaluate
-    from .utils import get_preprocess_fn
+    from .utils import (
+        get_preprocess_fn,
+        load_benchmark_class_names,
+        validate_dataset_splits,
+    )
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
-    from utils import get_preprocess_fn
+    from utils import (
+        get_preprocess_fn,
+        load_benchmark_class_names,
+        validate_dataset_splits,
+    )
 
 
 def _is_saved_model_dir(model_path):
@@ -142,7 +150,7 @@ def resolve_config_paths(config, config_path):
 
 
 def load_test_dataset(
-    test_dir, batch_size=32, image_size=(224, 224), preprocess_fn=None
+    test_dir, batch_size=32, image_size=(224, 224), preprocess_fn=None, class_names=None
 ):
     """Load test dataset"""
     test_ds = keras.preprocessing.image_dataset_from_directory(
@@ -151,6 +159,7 @@ def load_test_dataset(
         batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
+        class_names=list(class_names) if class_names is not None else None,
     )
     class_names = test_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
@@ -186,6 +195,18 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     # Load test dataset
     print("Loading test dataset...")
     test_dir = config["dataset"]["test_dir"]
+    class_names = load_benchmark_class_names(config["dataset"]["data_dir"])
+    if len(class_names) != int(config["model"]["num_classes"]):
+        raise ValueError(
+            f"Model class count {config['model']['num_classes']} does not match "
+            f"canonical manifest class count {len(class_names)}"
+        )
+    validate_dataset_splits(
+        config["dataset"]["train_dir"],
+        config["dataset"]["val_dir"],
+        test_dir,
+        class_names=class_names,
+    )
     batch_size = config["dataset"]["batch_size"]
     input_shape = tuple(config["model"]["input_shape"])
     image_size = input_shape[:2]
@@ -196,7 +217,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     test_ds, class_names = load_test_dataset(
-        test_dir, batch_size, image_size, preprocess_fn=preprocess_fn
+        test_dir,
+        batch_size,
+        image_size,
+        preprocess_fn=preprocess_fn,
+        class_names=class_names,
     )
     print(f"Found {len(class_names)} classes")
 
@@ -232,7 +257,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     # Macro and weighted averages
     precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
-        y_true, y_pred, average="macro", zero_division=0
+        y_true,
+        y_pred,
+        average="macro",
+        labels=range(len(class_names)),
+        zero_division=0,
     )
     precision_weighted, recall_weighted, f1_weighted, _ = (
         precision_recall_fscore_support(
@@ -281,7 +310,7 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     print(f"\nSaved metrics to {results_dir}/f1_scores.csv")
 
     # Generate confusion matrix
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
     plot_confusion_matrix(
         cm, class_names, save_path=f"{results_dir}/confusion_matrix.png"
     )
@@ -302,6 +331,10 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
         "weighted_precision": float(precision_weighted),
         "weighted_recall": float(recall_weighted),
         "weighted_f1": float(f1_weighted),
+        "class_names": class_names,
+        "classes_without_test_support": [
+            class_names[index] for index, value in enumerate(support) if value == 0
+        ],
     }
     summary_path = os.path.join(results_dir, "metrics_summary.json")
     with open(summary_path, "w", encoding="utf-8") as handle:
