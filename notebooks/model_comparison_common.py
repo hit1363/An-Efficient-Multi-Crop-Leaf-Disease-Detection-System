@@ -25,7 +25,11 @@ from quantization.evaluate_tflite import (
     evaluate_tflite_model,
 )
 from training.evaluate import _load_model, load_test_dataset
-from training.utils import get_preprocess_fn
+from training.utils import (
+    get_preprocess_fn,
+    load_benchmark_class_names,
+    validate_dataset_splits,
+)
 
 
 ARCHITECTURES = (
@@ -174,6 +178,7 @@ def evaluate_float_model(
         batch_size=batch_size,
         image_size=tuple(input_shape[:2]),
         preprocess_fn=get_preprocess_fn(architecture),
+        class_names=class_names,
     )
     if list(detected_classes) != list(class_names):
         raise ValueError(f"Class ordering mismatch while evaluating {architecture}.")
@@ -468,12 +473,25 @@ def run_comparison(
     (output_dir / "tflite_results").mkdir(exist_ok=True)
     (output_dir / "confusion_matrices").mkdir(exist_ok=True)
 
+    manifest_path = dataset_base / "class_names.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Canonical class manifest is missing: {manifest_path}"
+        )
+    class_names = load_benchmark_class_names(str(dataset_base))
+    if len(class_names) != 72:
+        raise ValueError(
+            f"Canonical benchmark must contain 72 classes, found {len(class_names)}"
+        )
+    train_dir = dataset_base / "train"
+    val_dir = dataset_base / "val"
     test_dir = dataset_base / "test"
-    class_names = sorted(
-        path.name for path in test_dir.iterdir() if path.is_dir()
+    validate_dataset_splits(
+        str(train_dir),
+        str(val_dir),
+        str(test_dir),
+        class_names=class_names,
     )
-    if not class_names:
-        raise ValueError(f"No class folders found in {test_dir}")
 
     records = []
     manifests = []

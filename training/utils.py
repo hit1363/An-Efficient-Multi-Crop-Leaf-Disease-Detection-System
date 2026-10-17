@@ -3,6 +3,7 @@ Utility Functions for Training Pipeline
 """
 
 import os
+import sys
 import logging
 import shutil
 import tempfile
@@ -401,16 +402,36 @@ def load_dataset(
 
 
 def load_benchmark_class_names(data_dir):
-    """Load the canonical class order written by prepare_benchmark.py."""
+    """Load class order from the manifest or the repository's fixed taxonomy."""
     manifest_path = os.path.join(data_dir, "class_names.json")
     if not os.path.isfile(manifest_path):
-        raise FileNotFoundError(
-            f"Canonical class manifest is missing: {manifest_path}. "
-            "Prepare the harmonized benchmark before training."
+        # Kaggle input mounts are read-only. Use the repository taxonomy in memory
+        # when a mounted 72-class dataset does not ship its own manifest.
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        try:
+            from dataset.taxonomy import CANONICAL_CLASSES
+        except ImportError as exc:
+            raise FileNotFoundError(
+                f"Canonical class manifest is missing: {manifest_path}, and the "
+                "repository taxonomy could not be loaded."
+            ) from exc
+        logging.getLogger(__name__).warning(
+            "Canonical class manifest is missing at %s; using the repository taxonomy. "
+            "Dataset splits must contain exactly the canonical 72 classes.",
+            manifest_path,
         )
+        return list(CANONICAL_CLASSES)
+
     with open(manifest_path, "r", encoding="utf-8") as handle:
         class_names = json.load(handle)
-    if not isinstance(class_names, list) or not class_names or len(set(class_names)) != len(class_names):
+    if (
+        not isinstance(class_names, list)
+        or not class_names
+        or any(not isinstance(name, str) for name in class_names)
+        or len(set(class_names)) != len(class_names)
+    ):
         raise ValueError(f"Invalid canonical class manifest: {manifest_path}")
     return class_names
 
