@@ -136,9 +136,13 @@ def get_preprocess_fn(architecture):
     }:
         if arch in {
             "mobilenet_v3_small", "mobilenetv3_small", "mobilenetv3small",
+        }:
+            # The MobileNetV3-Small config disables Keras' built-in preprocessing.
+            return lambda x: tf.cast(x, tf.float32) / 127.5 - 1.0
+        if arch in {
             "mobilenetv3_large", "mobilenet_v3_large", "mobilenetv3large",
         }:
-            # The main configs include Keras' built-in rescaling layer.
+            # Other MobileNetV3 configs may use Keras' built-in rescaling layer.
             return None
         if arch in {"nasnet_mobile", "nasnetmobile"}:
             return tf.keras.applications.nasnet.preprocess_input

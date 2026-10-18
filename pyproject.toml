@@ -78,3 +78,6 @@ build-backend = "setuptools.build_meta"
 include = ["models*", "training*", "quantization*"]
 # Exclude folders that are only for data, notebooks, or outputs
 exclude = ["dataset*", "notebooks*", "results*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

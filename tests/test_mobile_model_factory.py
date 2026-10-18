@@ -38,7 +38,10 @@ def test_each_application_input_contract_is_explicit():
     assert get_preprocess_fn("mobilenet_v1") is not None
     assert get_preprocess_fn("mobilenetv2") is not None
     assert get_preprocess_fn("nasnet_mobile") is not None
-    assert get_preprocess_fn("mobilenetv3_small") is None
+    mobilenetv3_preprocess = get_preprocess_fn("mobilenetv3_small")
+    assert mobilenetv3_preprocess is not None
+    normalized = mobilenetv3_preprocess(tf.constant([0.0, 127.5, 255.0]))
+    tf.debugging.assert_near(normalized, tf.constant([-1.0, 0.0, 1.0]))
     assert get_preprocess_fn("mobilenet_v3_large") is None
     assert get_preprocess_fn("efficientnet_b0") is not None
     assert get_preprocess_fn("efficientnet_v2_b0") is None

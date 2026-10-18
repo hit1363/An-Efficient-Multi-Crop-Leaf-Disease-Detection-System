@@ -7,8 +7,8 @@ model:
   weights: "imagenet"
   dropout_rate: 0.35
   classifier_units: 256
-  # Use built-in preprocessing so serving and export share one input contract.
-  include_preprocessing: true
+  # Normalize image tensors in the dataset pipeline to [-1, 1].
+  include_preprocessing: false
 
 dataset:
   data_dir: "../dataset/processed_harmonized"

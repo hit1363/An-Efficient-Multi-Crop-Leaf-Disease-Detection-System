@@ -4,6 +4,9 @@ import ast
 import json
 from pathlib import Path
 
+import yaml
+from IPython.core.interactiveshell import InteractiveShell
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +33,13 @@ def test_all_model_configs_exist():
         assert config_path.exists(), config_path
         config_text = config_path.read_text(encoding="utf-8")
         assert f'architecture: "{architecture}"' in config_text
+
+
+def test_pillow_constraints_match_project_metadata():
+    requirements_text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "pillow>=12.3.0" in requirements_text
+    assert '"pillow>=12.3.0"' in pyproject_text
 
 
 def test_efficientnet_lite0_uses_the_valid_tfhub_endpoint():
@@ -120,6 +130,7 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
         "mobilenetv3_small",
         "shufflenetv2_05",
     ]
+    shell = InteractiveShell()
     for platform in ("colab", "kaggle"):
         for architecture in architectures:
             path = ROOT / "notebooks" / f"{platform}_{architecture}_training.ipynb"
@@ -129,17 +140,24 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             ]
             for index, cell in enumerate(code_cells):
                 source = "".join(cell.get("source", []))
-                compile(source, f"{path}:cell{index}", "exec")
+                transformed_source = shell.transform_cell(source)
+                compile(transformed_source, f"{path}:cell{index}", "exec")
             code = "\n".join(
                 "".join(cell.get("source", [])) for cell in code_cells
             )
             assert f'ARCH = "{architecture}"' in code
             assert "--representative_data" in code
             assert "--arch" in code
-            assert 'cfg["dataset"]["cache_mode"] = "disk"' in code
-            assert 'cfg["dataset"]["cache_memory_limit_gb"] = 8.0' in code
-            assert "capture_output=True" in code or "PYTHONUNBUFFERED" in code
-            assert '"distribution": "auto"' in code
+            assert "train.py" in code and "--config" in code
+
+            config = yaml.safe_load(
+                (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            assert config["dataset"]["cache_mode"] == "auto"
+            assert config["dataset"]["cache_memory_limit_gb"] == 8.0
+            assert config["performance"]["distribution"] == "auto"
 
 
 def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
@@ -174,7 +192,15 @@ def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
 
 
 def test_all_colab_notebooks_include_kaggle_dataset_setup():
-    for path in sorted((ROOT / "notebooks").glob("colab*.ipynb")):
+    architectures = (
+        "mobilenetv2",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+    )
+    for architecture in architectures:
+        path = ROOT / "notebooks" / f"colab_{architecture}_training.ipynb"
         notebook = json.loads(path.read_text(encoding="utf-8"))
         code = "\n".join(
             "".join(cell.get("source", []))
@@ -185,6 +211,11 @@ def test_all_colab_notebooks_include_kaggle_dataset_setup():
         assert "mdhasibultamim/multi-crop-leaf-disease" in code, path
         assert "zipfile.ZipFile" in code, path
         assert "KAGGLE_DATASET_BASE" in code, path
+        assert "%pip install -q kaggle" in code, path
+        assert "kaggle datasets download" in code, path
+        assert "DATASET_BASE = os.path.join(KAGGLE_DATASET_BASE, 'processed')" in code, path
+        for split in ("train", "val", "test"):
+            assert f'"{split}"' in code, path
 
 
 def test_comparison_notebooks_and_common_runner_contract():
