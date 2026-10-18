@@ -8,6 +8,8 @@ model:
   weights: "imagenet" # Use ImageNet pre-trained weights
   dropout_rate: 0.35
   classifier_units: 256
+  head_units: [256, 128]
+  l2_regularization: 0.0001
 
 # Dataset Settings
 dataset:
@@ -37,6 +39,8 @@ training:
   unfreeze_from_layer: 100 # Keep early generic features frozen
   unfreeze_epoch: 5 # Train the head briefly before fine-tuning
   fine_tune_learning_rate: 0.00005
+  fine_tuning:
+    enabled: true
   fine_tune_optimizer:
     name: "sgd"
     momentum: 0.9
@@ -85,12 +89,14 @@ class_weights:
   enabled: true
   auto_compute: true # Automatically compute from dataset
   max_weight: 5.0
+  normalize: true
 
 # Callbacks
 callbacks:
   # Model Checkpoint
   checkpoint:
     enabled: true
+    run_scoped: true
     monitor: "val_accuracy"
     save_best_only: true
     save_weights_only: true
@@ -103,6 +109,10 @@ callbacks:
     monitor: "val_loss"
     patience: 7
     restore_best_weights: true
+    mode: "min"
+  fine_tuning_early_stopping:
+    monitor: "val_loss"
+    patience: 6
     mode: "min"
 
   # TensorBoard

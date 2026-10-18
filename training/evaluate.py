@@ -25,18 +25,10 @@ from sklearn.metrics import (
 
 try:
     # Support module execution: python -m training.evaluate
-    from .utils import (
-        get_preprocess_fn,
-        load_benchmark_class_names,
-        validate_dataset_splits,
-    )
+    from .utils import get_preprocess_fn, validate_dataset_splits
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
-    from utils import (
-        get_preprocess_fn,
-        load_benchmark_class_names,
-        validate_dataset_splits,
-    )
+    from utils import get_preprocess_fn, validate_dataset_splits
 
 
 def _is_saved_model_dir(model_path):
@@ -150,7 +142,11 @@ def resolve_config_paths(config, config_path):
 
 
 def load_test_dataset(
-    test_dir, batch_size=32, image_size=(224, 224), preprocess_fn=None, class_names=None
+    test_dir,
+    batch_size=32,
+    image_size=(224, 224),
+    preprocess_fn=None,
+    class_names=None,
 ):
     """Load test dataset"""
     test_ds = keras.preprocessing.image_dataset_from_directory(
@@ -195,17 +191,17 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     # Load test dataset
     print("Loading test dataset...")
     test_dir = config["dataset"]["test_dir"]
-    class_names = load_benchmark_class_names(config["dataset"]["data_dir"])
-    if len(class_names) != int(config["model"]["num_classes"]):
-        raise ValueError(
-            f"Model class count {config['model']['num_classes']} does not match "
-            f"canonical manifest class count {len(class_names)}"
-        )
-    validate_dataset_splits(
+    split_counts = validate_dataset_splits(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
         test_dir,
-        class_names=class_names,
+    )
+    print(
+        "Validated split classes and counts: "
+        + json.dumps(
+            {split: values["total"] for split, values in split_counts.items()},
+            sort_keys=True,
+        )
     )
     batch_size = config["dataset"]["batch_size"]
     input_shape = tuple(config["model"]["input_shape"])
@@ -217,13 +213,14 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     test_ds, class_names = load_test_dataset(
-        test_dir,
-        batch_size,
-        image_size,
-        preprocess_fn=preprocess_fn,
-        class_names=class_names,
+        test_dir, batch_size, image_size, preprocess_fn=preprocess_fn
     )
     print(f"Found {len(class_names)} classes")
+    if len(class_names) != int(config["model"]["num_classes"]):
+        raise ValueError(
+            f"Test set has {len(class_names)} classes, but the configured model "
+            f"expects {config['model']['num_classes']}"
+        )
 
     # Get predictions
     print("Generating predictions...")
@@ -232,6 +229,11 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     for images, labels in test_ds:
         predictions = model.predict(images, verbose=0)
+        if predictions.shape[-1] != len(class_names):
+            raise ValueError(
+                f"Model returned {predictions.shape[-1]} outputs, but the test set "
+                f"has {len(class_names)} classes"
+            )
         y_pred.extend(np.argmax(predictions, axis=1))
         y_true.extend(np.argmax(labels.numpy(), axis=1))
 
@@ -324,6 +326,19 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
         "model_path": os.path.abspath(model_path),
         "model_size_mb": round(_get_model_size_mb(model_path), 4),
         "samples": int(len(y_true)),
+        "class_names": class_names,
+        "classes_without_test_support": [
+            class_names[index] for index, count in enumerate(support) if count == 0
+        ],
+        "per_class": {
+            class_name: {
+                "precision": float(precision[index]),
+                "recall": float(recall[index]),
+                "f1": float(f1[index]),
+                "support": int(support[index]),
+            }
+            for index, class_name in enumerate(class_names)
+        },
         "accuracy": float(accuracy),
         "macro_precision": float(precision_macro),
         "macro_recall": float(recall_macro),
@@ -331,10 +346,6 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
         "weighted_precision": float(precision_weighted),
         "weighted_recall": float(recall_weighted),
         "weighted_f1": float(f1_weighted),
-        "class_names": class_names,
-        "classes_without_test_support": [
-            class_names[index] for index, value in enumerate(support) if value == 0
-        ],
     }
     summary_path = os.path.join(results_dir, "metrics_summary.json")
     with open(summary_path, "w", encoding="utf-8") as handle:

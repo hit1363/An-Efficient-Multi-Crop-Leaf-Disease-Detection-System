@@ -1,16 +1,19 @@
 """
 Training Script for Multi-Crop Leaf Disease Detection
-Uses transfer learning with the supported MobileNet, EfficientNet, and ShuffleNet backbones.
+Uses transfer learning with MobileNetV2 or EfficientNet-Lite0
 """
 
 import os
 
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
-import yaml
 import argparse
-import tensorflow as tf
+import json
 import numpy as np
+import subprocess
+import time
+import tensorflow as tf
+import yaml
 from tensorflow import keras
 from datetime import datetime
 
@@ -23,14 +26,13 @@ try:
         compute_class_weights,
         create_augmentation_layer,
         get_preprocess_fn,
+        save_model_checkpoint,
         setup_callbacks,
         setup_logging,
         save_class_names,
-        configure_runtime,
+        validate_dataset_splits,
         choose_batch_size,
         validate_dataset_batch,
-        load_benchmark_class_names,
-        validate_dataset_splits,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -41,14 +43,13 @@ except ImportError:
         compute_class_weights,
         create_augmentation_layer,
         get_preprocess_fn,
+        save_model_checkpoint,
         setup_callbacks,
         setup_logging,
         save_class_names,
-        configure_runtime,
+        validate_dataset_splits,
         choose_batch_size,
         validate_dataset_batch,
-        load_benchmark_class_names,
-        validate_dataset_splits,
     )
 
 
@@ -57,34 +58,6 @@ def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
-
-
-class BestValidationWeights(keras.callbacks.Callback):
-    """Keep the lowest finite validation-loss weights seen in one phase."""
-
-    def __init__(self):
-        super().__init__()
-        self.best = float("inf")
-        self.weights = None
-
-    def on_epoch_end(self, epoch, logs=None):
-        del epoch
-        value = (logs or {}).get("val_loss")
-        if value is not None and np.isfinite(value) and float(value) < self.best:
-            self.best = float(value)
-            self.weights = self.model.get_weights()
-
-
-def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
-    """Accept fine-tuning weights only when validation loss improves."""
-    if (
-        phase2_best is not None
-        and phase2_best.weights is not None
-        and np.isfinite(phase2_best.best)
-        and phase2_best.best < phase1_best.best
-    ):
-        return phase2_best.weights, "phase_2", phase2_best.best
-    return phase1_weights, "phase_1", phase1_best.best
 
 
 def _resolve_path(path_value, base_dir):
@@ -122,6 +95,11 @@ def resolve_config_paths(config, config_path):
         tensorboard_cfg["log_dir"] = _resolve_path(
             tensorboard_cfg["log_dir"], config_dir
         )
+    checkpoint_cfg = callbacks_cfg.get("checkpoint", {})
+    if checkpoint_cfg.get("directory"):
+        checkpoint_cfg["directory"] = _resolve_path(
+            checkpoint_cfg["directory"], config_dir
+        )
 
     csv_logger_cfg = callbacks_cfg.get("csv_logger", {})
     if "filename" in csv_logger_cfg:
@@ -144,10 +122,18 @@ def build_metrics(metric_names, num_classes):
         metric_key = metric_name.lower()
         if metric_key == "accuracy":
             built_metrics.append(keras.metrics.CategoricalAccuracy(name="accuracy"))
-        elif metric_key == "precision":
-            built_metrics.append(keras.metrics.Precision(name="precision", top_k=1))
-        elif metric_key == "recall":
-            built_metrics.append(keras.metrics.Recall(name="recall", top_k=1))
+        elif metric_key in {"precision", "recall"}:
+            # For a single-label multiclass problem, top-k precision/recall
+            # collapse to accuracy. Per-class metrics are computed by evaluate.py.
+            import warnings
+
+            warnings.warn(
+                f"Ignoring training metric '{metric_key}': top-1 multiclass "
+                "precision/recall duplicates accuracy. Use the evaluator for "
+                "macro and per-class metrics.",
+                UserWarning,
+                stacklevel=2,
+            )
         elif metric_key == "auc":
             # Single-label softmax classifier: macro AUC over the 1-hot labels.
             # multi_label=True would misreport AUC for this task.
@@ -206,6 +192,153 @@ class FocalLoss(keras.losses.Loss):
         return config
 
 
+class BestValidationWeights(keras.callbacks.Callback):
+    """Keep an in-memory copy of the lowest finite validation-loss weights."""
+
+    def __init__(self):
+        super().__init__()
+        self.best = float("inf")
+        self.weights = None
+
+    def on_epoch_end(self, epoch, logs=None):
+        value = (logs or {}).get("val_loss")
+        if value is not None and np.isfinite(value) and value < self.best:
+            self.best = float(value)
+            self.weights = self.model.get_weights()
+
+
+def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
+    """Return the best weights across phases, never degrading Phase 1.
+
+    Fine-tuning is accepted only when its best finite validation loss strictly
+    improves on the best frozen-backbone validation loss.
+    """
+    if (
+        phase2_best is not None
+        and phase2_best.weights is not None
+        and np.isfinite(phase2_best.best)
+        and phase2_best.best < phase1_best.best
+    ):
+        return phase2_best.weights, "phase_2", phase2_best.best
+    return phase1_weights, "phase_1", phase1_best.best
+
+
+def _count_images_by_class(data_dir):
+    """Return deterministic image counts for reproducible run metadata."""
+    if not data_dir or not os.path.isdir(data_dir):
+        return {"total": 0, "classes": {}}
+
+    valid_extensions = {".jpg", ".jpeg", ".png"}
+    class_counts = {}
+    for class_name in sorted(os.listdir(data_dir)):
+        class_dir = os.path.join(data_dir, class_name)
+        if not os.path.isdir(class_dir):
+            continue
+        class_counts[class_name] = sum(
+            1
+            for filename in os.listdir(class_dir)
+            if os.path.splitext(filename)[1].lower() in valid_extensions
+        )
+    return {"total": sum(class_counts.values()), "classes": class_counts}
+
+
+def _git_revision(repo_dir):
+    """Return the checked-out Git revision when the runtime has Git metadata."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _model_summary_text(model):
+    """Capture the Keras summary in a file-friendly form."""
+    lines = []
+    model.summary(print_fn=lines.append)
+    return "\n".join(lines) + "\n"
+
+
+def save_run_metadata(
+    config,
+    config_path,
+    model,
+    raw_class_weights,
+    applied_class_weights,
+    run_timestamp,
+):
+    """Persist the exact pre-fit configuration and data/model context."""
+    model_config = config.get("model", {})
+    dataset_config = config.get("dataset", {})
+    weight_config = config.get("class_weights", {})
+    save_dir = config.get("export", {}).get("save_dir", "../models")
+    model_name = model_config.get("architecture", "model")
+    run_dir = os.path.join(save_dir, model_name, "runs", run_timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+
+    with open(
+        os.path.join(run_dir, "resolved_config.yaml"), "w", encoding="utf-8"
+    ) as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+    with open(
+        os.path.join(run_dir, "model_summary.txt"), "w", encoding="utf-8"
+    ) as handle:
+        handle.write(_model_summary_text(model))
+
+    raw_values = list(raw_class_weights.values())
+    applied_values = list((applied_class_weights or {}).values())
+    repo_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+    metadata = {
+        "run_timestamp": run_timestamp,
+        "source_config_path": os.path.abspath(config_path),
+        "git_revision": _git_revision(repo_dir),
+        "tensorflow_version": tf.__version__,
+        "model": {
+            "name": model.name,
+            "total_parameters": int(model.count_params()),
+            "trainable_parameters": int(
+                sum(np.prod(variable.shape) for variable in model.trainable_weights)
+            ),
+            "non_trainable_parameters": int(
+                sum(
+                    np.prod(variable.shape) for variable in model.non_trainable_weights
+                )
+            ),
+        },
+        "datasets": {
+            split: {
+                "path": dataset_config.get(f"{split}_dir"),
+                **_count_images_by_class(dataset_config.get(f"{split}_dir")),
+            }
+            for split in ("train", "val", "test")
+        },
+        "class_weights": {
+            "enabled": bool(weight_config.get("enabled", False)),
+            "configured_max_weight": weight_config.get("max_weight"),
+            "normalize": bool(weight_config.get("normalize", True)),
+            "raw_range": (
+                {"min": min(raw_values), "max": max(raw_values)} if raw_values else None
+            ),
+            "applied_range": (
+                {"min": min(applied_values), "max": max(applied_values)}
+                if applied_values
+                else None
+            ),
+        },
+    }
+    with open(
+        os.path.join(run_dir, "run_metadata.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+
+    return run_dir
+
+
 def _get_loss(config):
     """Resolve the loss function from config.
 
@@ -226,53 +359,39 @@ def _get_loss(config):
     return loss_name
 
 
-def compile_model(model, config, phase="head"):
-    """Compile a model for either classifier-head or fine-tuning training."""
+def compile_model(model, config):
+    """Compile model with optimizer and loss function"""
 
     # Setup optimizer
-    optimizer_config = dict(config.get("optimizer", {}))
-    if phase == "fine_tune":
-        fine_tune_config = config.get("training", {}).get("fine_tune_optimizer", {})
-        if isinstance(fine_tune_config, str):
-            fine_tune_config = {"name": fine_tune_config}
-        if not isinstance(fine_tune_config, dict):
-            fine_tune_config = {}
-        optimizer_config.update(fine_tune_config)
-        optimizer_config["learning_rate"] = config["training"].get(
-            "fine_tune_learning_rate", optimizer_config.get("learning_rate", 1e-4)
-        )
+    optimizer_config = config["optimizer"]
     optimizer_name = optimizer_config.get("name", "adam").lower()
     lr = optimizer_config.get("learning_rate", 0.001)
     decay = optimizer_config.get("decay", 0.0)
     weight_decay = decay if decay and decay > 0 else None
+    clipnorm = optimizer_config.get("clipnorm")
+    clipvalue = optimizer_config.get("clipvalue")
 
-    if optimizer_name in {"adam", "adamw"}:
+    if optimizer_name == "adam":
         adam_kwargs = {"learning_rate": lr}
+        if clipnorm:
+            adam_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            adam_kwargs["clipvalue"] = float(clipvalue)
         for key in ["beta_1", "beta_2", "epsilon"]:
             if key in optimizer_config and optimizer_config[key] is not None:
                 adam_kwargs[key] = optimizer_config[key]
-        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
-            if key in optimizer_config and optimizer_config[key] is not None:
-                adam_kwargs[key] = optimizer_config[key]
-        if weight_decay is not None and optimizer_name == "adamw":
+        if weight_decay is not None:
             adam_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.Adam(**adam_kwargs)
-        if optimizer_name == "adamw" and weight_decay is not None:
-            try:
-                optimizer = keras.optimizers.AdamW(
-                    weight_decay=weight_decay, **{k: v for k, v in adam_kwargs.items() if k != "weight_decay"}
-                )
-            except AttributeError:
-                # Older TensorFlow builds do not expose AdamW; Adam remains valid.
-                optimizer = keras.optimizers.Adam(**adam_kwargs)
     elif optimizer_name == "sgd":
         sgd_kwargs = {
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.9),
         }
-        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
-            if key in optimizer_config and optimizer_config[key] is not None:
-                sgd_kwargs[key] = optimizer_config[key]
+        if clipnorm:
+            sgd_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            sgd_kwargs["clipvalue"] = float(clipvalue)
         if weight_decay is not None:
             sgd_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.SGD(**sgd_kwargs)
@@ -281,15 +400,16 @@ def compile_model(model, config, phase="head"):
             "learning_rate": lr,
             "momentum": optimizer_config.get("momentum", 0.0),
         }
-        for key in ["clipnorm", "clipvalue", "global_clipnorm"]:
-            if key in optimizer_config and optimizer_config[key] is not None:
-                rmsprop_kwargs[key] = optimizer_config[key]
+        if clipnorm:
+            rmsprop_kwargs["clipnorm"] = float(clipnorm)
+        if clipvalue:
+            rmsprop_kwargs["clipvalue"] = float(clipvalue)
         if weight_decay is not None:
             rmsprop_kwargs["weight_decay"] = weight_decay
         optimizer = keras.optimizers.RMSprop(**rmsprop_kwargs)
     else:
         raise ValueError(
-            f"Unsupported optimizer '{optimizer_name}'. Supported: adam, adamw, sgd, rmsprop"
+            f"Unsupported optimizer '{optimizer_name}'. Supported: adam, sgd, rmsprop"
         )
 
     # Setup loss
@@ -299,21 +419,164 @@ def compile_model(model, config, phase="head"):
     metric_names = config.get("metrics", ["accuracy"])
     metrics = build_metrics(metric_names, config["model"]["num_classes"])
 
-    performance = config.get("performance", {})
-    compile_kwargs = {
-        "optimizer": optimizer,
-        "loss": loss,
-        "metrics": metrics,
-    }
-    steps_per_execution = int(performance.get("steps_per_execution", 1))
-    if steps_per_execution > 1:
-        compile_kwargs["steps_per_execution"] = steps_per_execution
-    if performance.get("jit_compile", False):
-        compile_kwargs["jit_compile"] = True
-
-    model.compile(**compile_kwargs)
+    optimizer = _maybe_loss_scale_optimizer(optimizer)
+    performance_config = config.get("performance", {})
+    compile_options = {}
+    if performance_config.get("steps_per_execution"):
+        compile_options["steps_per_execution"] = int(
+            performance_config["steps_per_execution"]
+        )
+    if "jit_compile" in performance_config:
+        compile_options["jit_compile"] = bool(performance_config["jit_compile"])
+    model.compile(optimizer=optimizer, loss=loss, metrics=metrics, **compile_options)
 
     return model
+
+
+def compile_fine_tune_model(model, config, strategy):
+    """Recompile a model for fine-tuning inside its distribution scope."""
+    with strategy.scope():
+        metrics = build_metrics(
+            config.get("metrics", ["accuracy"]),
+            config["model"]["num_classes"],
+        )
+        optimizer = _maybe_loss_scale_optimizer(create_fine_tune_optimizer(config))
+        model.compile(
+            optimizer=optimizer,
+            loss=_get_loss(config),
+            metrics=metrics,
+        )
+    return model
+
+
+def create_fine_tune_optimizer(config):
+    """Create a fresh optimizer for backbone fine-tuning."""
+    optimizer_config = config.get("optimizer", {})
+    fine_tune_config = config.get("training", {}).get("fine_tune_optimizer", {})
+    optimizer_name = fine_tune_config.get("name", "adam").lower()
+    kwargs = {"learning_rate": config.get("training", {}).get("fine_tune_learning_rate", 0.0001)}
+    clipnorm = fine_tune_config.get("clipnorm", optimizer_config.get("clipnorm"))
+    clipvalue = fine_tune_config.get("clipvalue", optimizer_config.get("clipvalue"))
+    if clipnorm:
+        kwargs["clipnorm"] = float(clipnorm)
+    if clipvalue:
+        kwargs["clipvalue"] = float(clipvalue)
+    weight_decay = fine_tune_config.get("decay", optimizer_config.get("decay", 0.0))
+    if weight_decay and weight_decay > 0:
+        kwargs["weight_decay"] = weight_decay
+    if optimizer_name == "adam":
+        for key in ["beta_1", "beta_2", "epsilon"]:
+            value = fine_tune_config.get(key, optimizer_config.get(key))
+            if value is not None:
+                kwargs[key] = value
+        return keras.optimizers.Adam(**kwargs)
+    if optimizer_name == "sgd":
+        kwargs["momentum"] = fine_tune_config.get("momentum", 0.9)
+        return keras.optimizers.SGD(**kwargs)
+    if optimizer_name == "rmsprop":
+        kwargs["momentum"] = fine_tune_config.get("momentum", 0.0)
+        epsilon = fine_tune_config.get("epsilon", optimizer_config.get("epsilon"))
+        if epsilon is not None:
+            kwargs["epsilon"] = epsilon
+        return keras.optimizers.RMSprop(**kwargs)
+    raise ValueError(
+        f"Unsupported fine-tuning optimizer '{optimizer_name}'. Supported: adam, sgd, rmsprop"
+    )
+
+
+class EpochThroughputLogger(keras.callbacks.Callback):
+    """Log training examples per second for runtime comparisons."""
+
+    def __init__(self, samples):
+        super().__init__()
+        self.samples = max(0, int(samples))
+        self.epoch_started = None
+        self.train_elapsed = None
+
+    def on_epoch_begin(self, epoch, logs=None):
+        del epoch, logs
+        self.epoch_started = time.perf_counter()
+        self.train_elapsed = None
+
+    def on_test_begin(self, logs=None):
+        del logs
+        if self.epoch_started is not None:
+            self.train_elapsed = max(time.perf_counter() - self.epoch_started, 1e-9)
+
+    def on_epoch_end(self, epoch, logs=None):
+        del epoch
+        elapsed = self.train_elapsed or max(
+            time.perf_counter() - self.epoch_started, 1e-9
+        )
+        throughput = self.samples / elapsed
+        if logs is not None:
+            logs["examples_per_second"] = throughput
+        print(f" - examples_per_second: {throughput:.1f}")
+
+
+def _add_throughput_callback(callbacks, sample_count):
+    """Place throughput before CSVLogger so the rate is persisted in history."""
+    throughput_callback = EpochThroughputLogger(sample_count)
+    csv_logger_index = next(
+        (
+            index
+            for index, callback in enumerate(callbacks)
+            if isinstance(callback, keras.callbacks.CSVLogger)
+        ),
+        len(callbacks),
+    )
+    callbacks.insert(csv_logger_index, throughput_callback)
+    return callbacks
+
+
+def _setup_phase2_callbacks(config):
+    """Build fresh fine-tuning callbacks and append to the Phase 1 CSV log."""
+    return setup_callbacks(
+        config,
+        csv_append=True,
+        checkpoint_name="best_phase2_model",
+        include_throughput=False,
+    )
+
+
+def configure_runtime(config, logger):
+    """Enable optional mixed precision and mirrored multi-GPU training."""
+    runtime_config = dict(config.get("performance", {}))
+    runtime_config.update(config.get("runtime", {}))
+    physical_gpus = tf.config.list_physical_devices("GPU")
+    use_mixed_precision = bool(
+        runtime_config.get("mixed_precision", False) and physical_gpus
+    )
+    if runtime_config.get("mixed_precision", False) and not physical_gpus:
+        logger.info("Mixed precision requested but no GPU is available; using float32")
+    policy_name = "mixed_float16" if use_mixed_precision else "float32"
+    keras.mixed_precision.set_global_policy(policy_name)
+
+    distribution = str(runtime_config.get("distribution", "auto")).lower()
+    multi_gpu = runtime_config.get(
+        "multi_gpu", distribution in {"auto", "mirrored", "multi_gpu"}
+    )
+    if multi_gpu and len(physical_gpus) > 1:
+        strategy = tf.distribute.MirroredStrategy()
+    else:
+        strategy = tf.distribute.get_strategy()
+    logger.info(
+        "Runtime: policy=%s, replicas=%d, GPUs=%d",
+        policy_name,
+        strategy.num_replicas_in_sync,
+        len(physical_gpus),
+    )
+    return strategy
+
+
+def _maybe_loss_scale_optimizer(optimizer):
+    """Use dynamic loss scaling for optional mixed_float16 training."""
+    policy = keras.mixed_precision.global_policy().name
+    if policy == "mixed_float16":
+        loss_scale_optimizer = keras.mixed_precision.LossScaleOptimizer
+        if not isinstance(optimizer, loss_scale_optimizer):
+            optimizer = loss_scale_optimizer(optimizer)
+    return optimizer
 
 
 def train_model(config_path="config.yaml"):
@@ -323,35 +586,28 @@ def train_model(config_path="config.yaml"):
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
 
-    # Configure runtime before loading data or creating the model. The returned
-    # strategy is reused for model creation, compilation, and fine-tuning.
-    runtime = configure_runtime(config)
-    strategy = runtime["strategy"]
-
     # Setup logging
     logger = setup_logging(config)
     logger.info("Starting training...")
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
-    batch_size = choose_batch_size(config, runtime, logger=logger)
-    logger.info(
-        "Runtime: GPUs=%d, strategy=%s, replicas=%d, global_batch_size=%d, "
-        "per_replica_batch_size=%d, device_mode=%s",
-        runtime["gpu_count"],
-        runtime["strategy_name"],
-        runtime["num_replicas"],
-        batch_size,
-        max(1, batch_size // max(1, runtime["num_replicas"])),
-        "multi-GPU" if runtime["gpu_count"] > 1 else ("GPU" if runtime["has_gpu"] else "CPU"),
-    )
 
+    runtime_strategy = configure_runtime(config, logger)
+    runtime_info = {
+        "num_replicas": runtime_strategy.num_replicas_in_sync,
+        "has_gpu": bool(tf.config.list_physical_devices("GPU")),
+    }
+    choose_batch_size(config, runtime_info, logger)
     freeze_base = config.get("training", {}).get("freeze_base", True)
+    fine_tuning_enabled = config.get("training", {}).get("fine_tuning", {}).get(
+        "enabled", True
+    )
     total_epochs = int(config.get("training", {}).get("epochs", 50))
     unfreeze_epoch = int(config.get("training", {}).get("unfreeze_epoch", 10))
     if total_epochs < 1:
         raise ValueError("training.epochs must be >= 1")
 
-    if freeze_base:
+    if freeze_base and fine_tuning_enabled:
         initial_epochs = min(unfreeze_epoch, total_epochs)
         if unfreeze_epoch > total_epochs:
             logger.warning(
@@ -362,167 +618,168 @@ def train_model(config_path="config.yaml"):
     else:
         initial_epochs = total_epochs
 
+    # Set random seeds for reproducibility
+    seed = config.get("seed", 42)
+    tf.random.set_seed(seed)
+    np.random.seed(seed)
+
     # Load datasets
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     augmentation = (
         create_augmentation_layer(config) if config.get("augmentation") else None
     )
-    dataset_config = config["dataset"]
-    class_names = load_benchmark_class_names(dataset_config["data_dir"])
-    if len(class_names) != 72:
-        raise ValueError(
-            f"Canonical benchmark must contain 72 classes, found {len(class_names)}"
-        )
-    validate_dataset_splits(
-        dataset_config["train_dir"],
-        dataset_config["val_dir"],
-        dataset_config.get("test_dir"),
-        class_names=class_names,
-    )
-    if int(config["model"].get("num_classes", -1)) != len(class_names):
-        raise ValueError(
-            f"Model expects {config['model'].get('num_classes')} outputs, but the "
-            f"canonical manifest contains {len(class_names)} classes"
-        )
-
-    train_ds, val_ds, loaded_class_names = load_dataset(
+    train_ds, val_ds, class_names = load_dataset(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
-        batch_size=batch_size,
+        batch_size=config["dataset"]["batch_size"],
         image_size=tuple(config["model"]["input_shape"][:2]),
         preprocess_fn=preprocess_fn,
         augmentation=augmentation,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
-        cache_memory_limit_gb=config.get("dataset", {}).get(
-            "cache_memory_limit_gb", 8.0
-        ),
-        deterministic=config.get("performance", {}).get("deterministic", False),
-        class_names=class_names,
     )
-    if loaded_class_names != class_names:
-        raise ValueError("Training loader class order differs from canonical manifest")
+    if config.get("performance", {}).get("finite_batch_check", False):
+        validate_dataset_batch(train_ds, logger)
 
     logger.info(f"Found {len(class_names)} classes")
     logger.info(f"Classes: {class_names}")
 
-    train_cardinality = tf.data.experimental.cardinality(train_ds)
-    val_cardinality = tf.data.experimental.cardinality(val_ds)
-    try:
-        train_steps = int(train_cardinality.numpy())
-        val_steps = int(val_cardinality.numpy())
-    except (AttributeError, TypeError, ValueError):
-        train_steps = val_steps = -1
-    logger.info(
-        "Training workload: %s train steps + %s validation steps per epoch",
-        train_steps if train_steps >= 0 else "unknown",
-        val_steps if val_steps >= 0 else "unknown",
-    )
+    if len(class_names) != config["model"]["num_classes"]:
+        raise ValueError(
+            f"Class count mismatch: dataset has {len(class_names)} classes, "
+            f"but config model.num_classes={config['model']['num_classes']}"
+        )
 
-    if config.get("performance", {}).get("finite_batch_check", True):
-        validate_dataset_batch(train_ds, logger=logger)
-        validate_dataset_batch(val_ds, logger=logger)
+    # Compute the raw range for run metadata even when the stability-first
+    # baseline leaves class weighting disabled.
+    weight_config = config.get("class_weights", {})
+    raw_class_weights = compute_class_weights(config["dataset"]["train_dir"])
 
-    # Compute class weights if enabled
+    # Compute class weights only when explicitly enabled for a later
+    # imbalance-focused experiment.
     class_weights = None
-    if config.get("class_weights", {}).get("enabled", False):
+    if weight_config.get("enabled", False):
         logger.info("Computing class weights...")
-        max_weight = config.get("class_weights", {}).get("max_weight", 5.0)
         class_weights = compute_class_weights(
-            config["dataset"]["train_dir"], max_weight=max_weight
-        )
-        logger.info(
-            "Class weights enabled: min=%.3f max=%.3f",
-            min(class_weights.values()) if class_weights else 0.0,
-            max(class_weights.values()) if class_weights else 0.0,
+            config["dataset"]["train_dir"],
+            max_weight=weight_config.get("max_weight"),
+            normalize=weight_config.get("normalize", True),
         )
 
-    # Create and compile the model inside the distribution scope. This is
-    # required for MirroredStrategy to place variables on every replica.
-    logger.info(f"Creating {config['model']['architecture']} model...")
-    with strategy.scope():
-        model_kwargs = dict(
-            architecture=config["model"]["architecture"],
-            input_shape=tuple(config["model"]["input_shape"]),
-            num_classes=config["model"]["num_classes"],
-            dropout_rate=config["model"]["dropout_rate"],
-            weights=config["model"]["weights"],
-            hub_url=config["model"].get("hub_url"),
-            hub_cache_dir=config["model"].get("hub_cache_dir"),
-            hub_download_retries=config["model"].get("hub_download_retries", 1),
-            hub_download_delay_sec=config["model"].get("hub_download_delay_sec", 5),
+    # Validate that each split has the same classes and that every class has
+    # examples before constructing a model or starting a potentially long run.
+    split_counts = validate_dataset_splits(
+        config["dataset"]["train_dir"],
+        config["dataset"]["val_dir"],
+        config["dataset"].get("test_dir"),
+    )
+    logger.info("Validated split counts: %s", split_counts)
+    for split_name in ("val", "test"):
+        unsupported = sorted(
+            class_name
+            for class_name, count in split_counts[split_name]["classes"].items()
+            if count == 0
         )
-        if config["model"]["architecture"].lower() in {
-            "mobilenetv2",
-            "mobilenetv3_small",
-            "mobilenetv3small",
-            "mobilenet_v3_small",
-            "shufflenetv2_05",
-            "shufflenet_v2_05",
-            "shufflenetv2_0.5x",
-            "shufflenet_v2_0.5x",
-            "mobilenet_v1",
-            "mobilenet",
-            "mobilenetv1",
-            "mobilenet_v3_large",
-            "mobilenetv3_large",
-            "mobilenetv3large",
-            "nasnet_mobile",
-            "nasnetmobile",
-            "efficientnet_v2_b0",
-            "efficientnetv2_b0",
-        }:
-            model_kwargs["classifier_units"] = config["model"].get(
-                "classifier_units", 256
+        if unsupported:
+            logger.warning(
+                "%s has no independent exact-deduplicated examples for classes: %s",
+                split_name,
+                unsupported,
             )
-        if config["model"]["architecture"].lower() in {
-            "mobilenetv3_small",
-            "mobilenetv3small",
-            "mobilenet_v3_small",
-            "mobilenet_v3_large",
-            "mobilenetv3_large",
-            "mobilenetv3large",
-        }:
-            model_kwargs["include_preprocessing"] = config["model"].get(
-                "include_preprocessing", False
+
+    # Create model inside the distribution scope so variables are mirrored.
+    logger.info(f"Creating {config['model']['architecture']} model...")
+    with runtime_strategy.scope():
+        model_kwargs = {
+            "architecture": config["model"]["architecture"],
+            "input_shape": tuple(config["model"]["input_shape"]),
+            "num_classes": config["model"]["num_classes"],
+            "dropout_rate": config["model"]["dropout_rate"],
+            "weights": config["model"]["weights"],
+            "hub_url": config["model"].get("hub_url"),
+            "hub_cache_dir": config["model"].get("hub_cache_dir"),
+            "hub_download_retries": config["model"].get("hub_download_retries", 1),
+            "hub_download_delay_sec": config["model"].get("hub_download_delay_sec", 5),
+        }
+        architecture = config["model"]["architecture"].lower()
+        if architecture in {"mobilenetv2", "efficientnet_b0"}:
+            model_kwargs["head_units"] = tuple(
+                config["model"].get("head_units", [256, 128])
             )
+            model_kwargs["l2_regularization"] = config["model"].get(
+                "l2_regularization", 0.0
+            )
+        if "classifier_units" in config["model"]:
+            model_kwargs["classifier_units"] = config["model"]["classifier_units"]
+        if "include_preprocessing" in config["model"]:
+            model_kwargs["include_preprocessing"] = config["model"][
+                "include_preprocessing"
+            ]
         model, base_model = get_model(**model_kwargs)
 
-        if not freeze_base:
-            logger.info("freeze_base is False: training backbone from the first epoch")
-            unfreeze_base_model(base_model, unfreeze_from_layer=0)
-
-        # Compile model
-        logger.info("Compiling model...")
-        model = compile_model(model, config)
+    if not freeze_base:
+        logger.info("freeze_base is False: training backbone from the first epoch")
+        unfreeze_base_model(base_model, unfreeze_from_layer=0)
 
     print_model_summary(model)
 
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_config = config.setdefault("callbacks", {}).setdefault(
+        "checkpoint", {}
+    )
+    if checkpoint_config.get("run_scoped", True) and not checkpoint_config.get(
+        "directory"
+    ):
+        checkpoint_config["directory"] = os.path.join(
+            config["export"]["save_dir"],
+            config["model"]["architecture"],
+            "runs",
+            run_timestamp,
+            "checkpoints",
+        )
+    run_dir = save_run_metadata(
+        config=config,
+        config_path=config_path,
+        model=model,
+        raw_class_weights=raw_class_weights,
+        applied_class_weights=class_weights,
+        run_timestamp=run_timestamp,
+    )
+    logger.info("Saved reproducibility metadata to: %s", run_dir)
+
+    # Compile model
+    logger.info("Compiling model...")
+    with runtime_strategy.scope():
+        model = compile_model(model, config)
+
     # Setup callbacks
     logger.info("Setting up callbacks...")
+    callbacks = setup_callbacks(config, include_throughput=False)
+    _add_throughput_callback(callbacks, split_counts["train"]["total"])
+    phase1_best = BestValidationWeights()
+    callbacks.append(phase1_best)
+
     # Phase 1: Train classifier head with frozen base
     logger.info("\n" + "=" * 50)
     logger.info("Phase 1: Training classifier head (base frozen)")
     logger.info("=" * 50 + "\n")
 
-    phase1_best = BestValidationWeights()
-    phase1_callbacks = setup_callbacks(config, csv_append=False)
-    phase1_callbacks.insert(0, phase1_best)
     history1 = model.fit(
         train_ds,
         validation_data=val_ds,
         epochs=initial_epochs,
-        callbacks=phase1_callbacks,
+        callbacks=callbacks,
         class_weight=class_weights,
     )
-    if phase1_best.weights is None:
-        raise RuntimeError("Training produced no finite validation loss in phase 1")
-    phase1_weights = phase1_best.weights
+
+    # The last Phase 1 epoch is not necessarily the best validation point.
+    # Keep its best restored weights as the stable starting point for Phase 2.
+    phase1_best_weights = phase1_best.weights or model.get_weights()
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
-    if freeze_base and initial_epochs < total_epochs:
+    if freeze_base and fine_tuning_enabled and initial_epochs < total_epochs:
         logger.info("\n" + "=" * 50)
         logger.info("Phase 2: Fine-tuning (unfreezing base layers)")
         logger.info("=" * 50 + "\n")
@@ -532,16 +789,39 @@ def train_model(config_path="config.yaml"):
         unfreeze_from = config.get("training", {}).get("unfreeze_from_layer")
         if unfreeze_from is None:
             unfreeze_from = config.get("training", {}).get("freeze_until_layer", 100)
-        with strategy.scope():
-            unfreeze_base_model(base_model, unfreeze_from)
+        unfreeze_base_model(base_model, unfreeze_from)
+        model.set_weights(phase1_best_weights)
 
-            # Recompile with the configured fine-tuning optimizer and lower LR.
-            compile_model(model, config, phase="fine_tune")
+        # Recompile with lower learning rate
+        compile_fine_tune_model(model, config, runtime_strategy)
+
+        # Callbacks retain monitor/patience state. A fresh set isolates the
+        # second optimizer phase from Phase 1's plateau state.
+        phase2_callbacks = _setup_phase2_callbacks(config)
+        callbacks_config = config.get("callbacks", {})
+        phase2_early_stopping = callbacks_config.get("fine_tuning_early_stopping")
+        if phase2_early_stopping:
+            phase2_callbacks = [
+                callback
+                for callback in phase2_callbacks
+                if not isinstance(callback, keras.callbacks.EarlyStopping)
+            ]
+            phase2_callbacks.append(
+                keras.callbacks.EarlyStopping(
+                    monitor=phase2_early_stopping.get("monitor", "val_loss"),
+                    patience=phase2_early_stopping.get("patience", 4),
+                    restore_best_weights=True,
+                    mode=phase2_early_stopping.get("mode", "min"),
+                    verbose=1,
+                )
+            )
+        _add_throughput_callback(
+            phase2_callbacks, split_counts["train"]["total"]
+        )
+        phase2_best = BestValidationWeights()
+        phase2_callbacks.append(phase2_best)
 
         # Continue training
-        phase2_best = BestValidationWeights()
-        phase2_callbacks = setup_callbacks(config, csv_append=True)
-        phase2_callbacks.insert(0, phase2_best)
         history2 = model.fit(
             train_ds,
             validation_data=val_ds,
@@ -550,17 +830,18 @@ def train_model(config_path="config.yaml"):
             callbacks=phase2_callbacks,
             class_weight=class_weights,
         )
-        selected_weights, selected_phase, selected_loss = select_final_weights(
-            phase1_best, phase1_weights, phase2_best
+        final_weights, selected_phase, selected_loss = select_final_weights(
+            phase1_best, phase1_best_weights, phase2_best
         )
-        model.set_weights(selected_weights)
+        model.set_weights(final_weights)
         logger.info(
-            "Selected %s weights with best validation loss %.6f",
+            "Selected %s weights for export (best val_loss: %.6f)",
             selected_phase,
             selected_loss,
         )
-    else:
-        model.set_weights(phase1_weights)
+        selected_checkpoint = save_model_checkpoint(model, config)
+        if selected_checkpoint:
+            logger.info("Saved cross-phase winner checkpoint to: %s", selected_checkpoint)
 
     # Merge phase histories so downstream consumers get one continuous record
     merged_history = {k: list(v) for k, v in history1.history.items()}
@@ -573,7 +854,7 @@ def train_model(config_path="config.yaml"):
     logger.info("Saving final model...")
     save_dir = config.get("export", {}).get("save_dir", "../models")
     model_name = config.get("model", {}).get("architecture", "model")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = run_timestamp
 
     # Save in multiple formats
     is_lite0_arch = model_name.lower() in ["efficientnet", "efficientnet_lite0"]
@@ -606,20 +887,14 @@ def train_model(config_path="config.yaml"):
             save_dir, model_name, f"{model_name}_{timestamp}.tflite"
         )
         os.makedirs(os.path.dirname(tflite_path), exist_ok=True)
-        try:
-            float32_model = make_float32_inference_model(model)
-            converter = tf.lite.TFLiteConverter.from_keras_model(float32_model)
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
-            converter.allow_custom_ops = False
-            tflite_model = converter.convert()
-            with open(tflite_path, "wb") as f:
-                f.write(tflite_model)
-            logger.info("Saved built-in-ops TFLite model: %s", tflite_path)
-        except Exception as exc:
-            logger.exception("TFLite export failed for %s: %s", model_name, exc)
-            error_path = os.path.join(save_dir, model_name, "tflite_export_error.txt")
-            with open(error_path, "w", encoding="utf-8") as handle:
-                handle.write(f"{type(exc).__name__}: {exc}\n")
+        tflite_export_model = make_float32_inference_model(model)
+        converter = tf.lite.TFLiteConverter.from_keras_model(tflite_export_model)
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        converter.allow_custom_ops = False
+        tflite_model = converter.convert()
+        with open(tflite_path, "wb") as f:
+            f.write(tflite_model)
+        logger.info(f"Saved TFLite model: {tflite_path}")
 
     class_names_path = os.path.join(save_dir, model_name, "class_names.txt")
     save_class_names(class_names, class_names_path)

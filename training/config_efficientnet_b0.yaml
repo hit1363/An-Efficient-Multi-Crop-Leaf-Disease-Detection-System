@@ -6,6 +6,8 @@ model:
   num_classes: 72
   weights: "imagenet"
   dropout_rate: 0.5
+  head_units: [256, 128]
+  l2_regularization: 0.0001
 
 dataset:
   data_dir: "../dataset/processed_harmonized"
@@ -32,6 +34,8 @@ training:
   unfreeze_from_layer: 100
   unfreeze_epoch: 10
   fine_tune_learning_rate: 0.0001
+  fine_tuning:
+    enabled: true
 
 optimizer:
   name: "adam"
@@ -56,10 +60,12 @@ class_weights:
   enabled: true
   auto_compute: true
   max_weight: 5.0
+  normalize: true
 
 callbacks:
   checkpoint:
     enabled: true
+    run_scoped: true
     monitor: "val_accuracy"
     save_best_only: true
     save_weights_only: true
@@ -70,6 +76,10 @@ callbacks:
     monitor: "val_loss"
     patience: 10
     restore_best_weights: true
+    mode: "min"
+  fine_tuning_early_stopping:
+    monitor: "val_loss"
+    patience: 6
     mode: "min"
   tensorboard:
     enabled: true

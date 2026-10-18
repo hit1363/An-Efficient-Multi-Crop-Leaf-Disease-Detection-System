@@ -22,7 +22,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from training.utils import get_preprocess_fn, load_benchmark_class_names
+from training.utils import get_preprocess_fn
 
 
 def infer_architecture_from_path(model_path):
@@ -41,10 +41,10 @@ def infer_architecture_from_path(model_path):
         return "mobilenetv3_small"
     if "efficientnet_b0" in lower_path:
         return "efficientnet_b0"
+    if "mobilenetv2" in lower_path or "mobilenet_v2" in lower_path:
+        return "mobilenetv2"
     if "efficientnet" in lower_path:
         return "efficientnet_lite0"
-    if "mobilenetv3_small" in lower_path or "mobilenet_v3_small" in lower_path:
-        return "mobilenetv3_small"
     if "mobilenet" in lower_path:
         return "mobilenetv2"
     raise ValueError("Pass --arch when the model filename does not identify its architecture.")
@@ -123,21 +123,14 @@ def evaluate_tflite_model(
         raise ValueError(f"Unsupported TFLite input shape: {input_shape}")
 
     image_size = (int(input_shape[1]), int(input_shape[2]))
-    data_root = os.path.dirname(os.path.abspath(test_data_dir))
-    class_names = load_benchmark_class_names(data_root)
     test_ds = keras.preprocessing.image_dataset_from_directory(
         test_data_dir,
         image_size=image_size,
         batch_size=1,
         label_mode="int",
         shuffle=False,
-        class_names=class_names,
     )
-    if len(class_names) != int(output_details["shape"][-1]):
-        raise ValueError(
-            f"TFLite output has {output_details['shape'][-1]} classes but "
-            f"the benchmark manifest has {len(class_names)}"
-        )
+    class_names = test_ds.class_names
     preprocess_fn = get_preprocess_fn(
         architecture or infer_architecture_from_path(model_path)
     )
@@ -223,9 +216,9 @@ def evaluate_tflite_model(
         "weighted_f1": float(weighted_f1),
         "mean_inference_ms": float(np.mean(inference_times_ms)),
         "std_inference_ms": float(np.std(inference_times_ms)),
+        "latency_device": "single-thread CPU interpreter proxy",
         "input_dtype": np.dtype(input_details["dtype"]).name,
         "output_dtype": np.dtype(output_details["dtype"]).name,
-        "latency_device": "single-thread CPU interpreter proxy",
     }
     summary_path = os.path.join(output_dir, "metrics_summary.json")
     with open(summary_path, "w", encoding="utf-8") as handle:
@@ -244,7 +237,7 @@ def main():
     parser.add_argument(
         "--arch",
         default=None,
-        help="mobilenetv2, efficientnet_b0, efficientnet_lite0, mobilenetv3_small, or shufflenetv2_05",
+        help="mobilenetv2, efficientnet_b0, or efficientnet_lite0",
     )
     parser.add_argument(
         "--max-samples", type=int, default=None, help="Optional limit for faster checks"

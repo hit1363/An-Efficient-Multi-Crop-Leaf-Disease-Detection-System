@@ -253,6 +253,8 @@ def create_efficientnet_b0_model(
     num_classes,
     dropout_rate,
     weights="imagenet",
+    head_units=(256, 128),
+    l2_regularization=0.0,
 ):
     """Build a standard Keras EfficientNetB0 classifier."""
     print(
@@ -266,29 +268,34 @@ def create_efficientnet_b0_model(
     )
     base_model.trainable = False
 
-    model = _attach_classifier_head(
-        base_model, input_shape, num_classes, dropout_rate, 256,
-        model_name="efficientnet_b0_disease_detector",
-    )
+    inputs = tf.keras.Input(shape=input_shape)
+    x = base_model(inputs, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
+    x = tf.keras.layers.Dense(head_units[0], activation="relu", kernel_regularizer=regularizer)(x)
+    x = tf.keras.layers.Dropout(dropout_rate)(x)
+    x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer)(x)
+    x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
+    outputs = tf.keras.layers.Dense(
+        num_classes, activation="softmax", dtype="float32"
+    )(x)
+
+    model = tf.keras.Model(inputs, outputs, name="efficientnet_b0_disease_detector")
     return model, base_model
 
 
+
 def create_mobilenetv2_model(
-    input_shape=(224, 224, 3),
-    num_classes=72,
-    dropout_rate=0.5,
-    weights="imagenet",
-    classifier_units=256,
+    input_shape=(224, 224, 3), num_classes=72, dropout_rate=0.5, weights="imagenet",
+    head_units=(256, 128), l2_regularization=0.0,
 ):
     """
     Create MobileNetV2-based model for leaf disease classification
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of canonical benchmark classes (default 72)
+        num_classes: Number of disease classes (default 72 for multi-crop dataset)
         dropout_rate: Dropout rate for regularization
-        classifier_units: Hidden units in the lightweight classifier head. Set to
-            0 to use a linear classifier on pooled backbone features.
         weights: Pre-trained weights ('imagenet' for ImageNet pretrained, None for random init)
 
     Returns:
@@ -304,15 +311,26 @@ def create_mobilenetv2_model(
     # Freeze base model layers initially
     base_model.trainable = False
 
-    model = _attach_classifier_head(
-        base_model,
-        input_shape,
-        num_classes,
-        dropout_rate=dropout_rate,
-        classifier_units=classifier_units,
-        model_name="mobilenetv2_disease_detector",
-    )
-    return model, base_model
+    # Build classification head
+    # MobileNetV2 outputs (batch, 7, 7, 1280), so we use GlobalAveragePooling2D
+    inputs = tf.keras.Input(shape=input_shape)
+    x = base_model(inputs, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D()(
+        x
+    )  # Converts (batch, H, W, C) -> (batch, C)
+    regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
+    x = tf.keras.layers.Dense(head_units[0], activation="relu", kernel_regularizer=regularizer, name="fc1")(x)
+    x = tf.keras.layers.Dropout(dropout_rate)(x)
+    x = tf.keras.layers.Dense(head_units[1], activation="relu", kernel_regularizer=regularizer, name="fc2")(x)
+    x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
+    outputs = tf.keras.layers.Dense(
+        num_classes, activation="softmax", name="predictions", dtype="float32"
+    )(x)
+
+    model = tf.keras.Model(inputs, outputs, name="mobilenetv2_disease_detector")
+
+    return model, base_model  # base_model is a standard Keras Model
+
 
 
 def _attach_classifier_head(
@@ -391,6 +409,7 @@ def create_application_model(
         "nasnetmobile": tf.keras.applications.NASNetMobile,
         "mobilenetv3_large": tf.keras.applications.MobileNetV3Large,
         "mobilenetv3large": tf.keras.applications.MobileNetV3Large,
+        "mobilenet_v3_large": tf.keras.applications.MobileNetV3Large,
         "efficientnet_v2_b0": tf.keras.applications.EfficientNetV2B0,
         "efficientnetv2_b0": tf.keras.applications.EfficientNetV2B0,
     }
@@ -655,8 +674,7 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
 
     Args:
         base_model: Base model to unfreeze. Can be:
-            - MobileNetV2/MobileNetV3-Small: Standard Keras models (layers selectively unfrozen)
-            - ShuffleNetV2 0.5x: Native Keras model (layers selectively unfrozen)
+            - MobileNetV2: Standard Keras Model (layers will be selectively unfrozen)
             - EfficientNet-Lite0: hub.KerasLayer (all-or-nothing; entire layer unfrozen)
         unfreeze_from_layer: Layer index to start unfreezing from (only for Keras Models)
     """
@@ -680,6 +698,7 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
     print(
         f"Total trainable layers: {sum([layer.trainable for layer in base_model.layers])}"
     )
+
 
 
 def print_model_summary(model):
@@ -754,6 +773,11 @@ def get_model(architecture="mobilenetv2", **kwargs):
             "hub_download_delay_sec",
         ]:
             kwargs.pop(key, None)
+        kwargs.pop("include_preprocessing", None)
+        classifier_units = kwargs.pop("classifier_units", None)
+        if classifier_units is not None and "head_units" not in kwargs:
+            units = int(classifier_units)
+            kwargs["head_units"] = (units, units)
         return create_mobilenetv2_model(**kwargs)
     elif arch_lower in {"mobilenetv3_small", "mobilenetv3small", "mobilenet_v3_small"}:
         kwargs = dict(kwargs)
@@ -790,6 +814,11 @@ def get_model(architecture="mobilenetv2", **kwargs):
             "hub_download_delay_sec",
         ]:
             kwargs.pop(key, None)
+        classifier_units = kwargs.pop("classifier_units", None)
+        kwargs.pop("include_preprocessing", None)
+        if classifier_units is not None and "head_units" not in kwargs:
+            units = int(classifier_units)
+            kwargs["head_units"] = (units, units)
         return create_efficientnet_b0_model(**kwargs)
     elif arch_lower in ["efficientnet", "efficientnet_lite0"]:
         return create_efficientnet_model(**kwargs)

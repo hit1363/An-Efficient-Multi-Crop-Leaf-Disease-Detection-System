@@ -138,7 +138,7 @@ def get_preprocess_fn(architecture):
             "mobilenet_v3_small", "mobilenetv3_small", "mobilenetv3small",
             "mobilenetv3_large", "mobilenet_v3_large", "mobilenetv3large",
         }:
-            # The comparison configs include Keras' built-in rescaling layer.
+            # The main configs include Keras' built-in rescaling layer.
             return None
         if arch in {"nasnet_mobile", "nasnetmobile"}:
             return tf.keras.applications.nasnet.preprocess_input
@@ -526,27 +526,29 @@ def create_augmentation_layer(config):
     else:
         zoom_factor = zoom_range
 
-    layers = []
-    horizontal_flip = aug_config.get("horizontal_flip", True)
-    vertical_flip = aug_config.get("vertical_flip", False)
-    if horizontal_flip and vertical_flip:
-        flip_mode = "horizontal_and_vertical"
-    elif horizontal_flip:
-        flip_mode = "horizontal"
-    elif vertical_flip:
-        flip_mode = "vertical"
-    else:
-        flip_mode = None
-    if flip_mode:
-        layers.append(keras.layers.RandomFlip(flip_mode))
+    flip_mode = {
+        (True, True): "horizontal_and_vertical",
+        (True, False): "horizontal",
+        (False, True): "vertical",
+        (False, False): "none",
+    }[(bool(aug_config.get("horizontal_flip", True)),
+       bool(aug_config.get("vertical_flip", False)))]
 
-    rotation_range = float(aug_config.get("rotation_range", 45))
+    layers = []
+    if flip_mode != "none":
+        layers.append(keras.layers.RandomFlip(flip_mode))
+    rotation_range = float(aug_config.get("rotation_range", 15))
     if rotation_range > 0:
         layers.append(keras.layers.RandomRotation(rotation_range / 360))
-    layers.append(keras.layers.RandomZoom(zoom_factor))
-    layers.append(keras.layers.RandomContrast(0.2))
+    if zoom_factor != (0.0, 0.0):
+        layers.append(keras.layers.RandomZoom(zoom_factor))
+    contrast_range = aug_config.get("contrast_range", 0.1)
+    if contrast_range and contrast_range > 0:
+        layers.append(keras.layers.RandomContrast(contrast_range))
 
-    augmentation = keras.Sequential(layers)
+    if not layers:
+        layers.append(keras.layers.Identity())
+    augmentation = keras.Sequential(layers, name="training_augmentation")
 
     brightness_range = aug_config.get("brightness_range")
     random_brightness = getattr(keras.layers, "RandomBrightness", None)
@@ -598,15 +600,19 @@ class ThroughputCallback(keras.callbacks.Callback):
             )
 
 
-def compute_class_weights(data_dir, max_weight=5.0):
+def compute_class_weights(data_dir, max_weight=None, normalize=True):
     """
     Compute class weights for imbalanced dataset
 
     Args:
-        data_dir: Directory containing class subdirectories
+        data_dir: Directory containing class subdirectories.
+        max_weight: Optional upper bound for any class weight. When supplied
+            with ``normalize=True``, weights are scaled before clipping so the
+            sample-weighted mean remains one.
+        normalize: Preserve a sample-weighted mean of one when clipping.
 
     Returns:
-        Dictionary of class weights
+        Dictionary of class weights.
     """
     class_counts = {}
     class_names = sorted(
@@ -630,22 +636,53 @@ def compute_class_weights(data_dir, max_weight=5.0):
         return {}
 
     class_weights = {}
-    max_weight = float(max_weight) if max_weight is not None else float("inf")
-    if max_weight <= 0 or (
-        not np.isfinite(max_weight) and max_weight != float("inf")
-    ):
-        raise ValueError("max_weight must be positive or None")
     for i, count in class_counts.items():
         if count > 0:
-            weight = total / (len(nonzero) * count)
-            class_weights[i] = min(float(weight), max_weight)
+            class_weights[i] = total / (len(nonzero) * count)
         else:
             class_weights[i] = 0.0
 
-    if not all(np.isfinite(weight) for weight in class_weights.values()):
-        raise ValueError("Class-weight computation produced a non-finite value")
+    if max_weight is None:
+        return class_weights
 
-    return class_weights
+    max_weight = float(max_weight)
+    if max_weight <= 0:
+        raise ValueError("class_weights.max_weight must be greater than zero")
+    if not normalize:
+        return {
+            index: min(weight, max_weight)
+            for index, weight in class_weights.items()
+        }
+    if max_weight < 1.0:
+        raise ValueError(
+            "class_weights.max_weight must be >= 1.0 when normalize is enabled"
+        )
+
+    # Raw inverse-frequency weights have a sample-weighted mean of one. A
+    # direct clip lowers that mean, so solve for a scale that restores it
+    # without allowing any individual class weight to exceed the configured
+    # ceiling.
+    def weighted_mean(scale):
+        return sum(
+            class_counts[index] * min(weight * scale, max_weight)
+            for index, weight in class_weights.items()
+        ) / total
+
+    lower, upper = 0.0, 1.0
+    while weighted_mean(upper) < 1.0:
+        upper *= 2.0
+
+    for _ in range(60):
+        midpoint = (lower + upper) / 2.0
+        if weighted_mean(midpoint) < 1.0:
+            lower = midpoint
+        else:
+            upper = midpoint
+
+    return {
+        index: min(weight * upper, max_weight)
+        for index, weight in class_weights.items()
+    }
 
 
 def validate_dataset_batch(dataset, logger=None):
@@ -714,7 +751,46 @@ def choose_batch_size(config, runtime, logger=None):
     return selected
 
 
-def setup_callbacks(config, csv_append=None):
+def get_checkpoint_path(config, checkpoint_name="best_model"):
+    """Return the canonical checkpoint path and its serialization mode."""
+    checkpoint_config = config.get("callbacks", {}).get("checkpoint", {})
+    architecture = config.get("model", {}).get("architecture", "").lower()
+    is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
+
+    save_weights_only = checkpoint_config.get("save_weights_only", False)
+    if is_lite0_arch and not save_weights_only:
+        # TF Hub-backed models are more reliable with weights-only checkpoints.
+        save_weights_only = True
+
+    extension = ".weights.h5" if save_weights_only else ".h5"
+    checkpoint_dir = checkpoint_config.get("directory") or os.path.join(
+        config["export"]["save_dir"],
+        config["model"]["architecture"],
+        "checkpoints",
+    )
+    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name + extension)
+    return checkpoint_path, save_weights_only
+
+def save_model_checkpoint(model, config, checkpoint_name="best_model"):
+    """Save the cross-phase winner to the configured canonical checkpoint."""
+    checkpoint_config = config.get("callbacks", {}).get("checkpoint", {})
+    if not checkpoint_config.get("enabled", True):
+        return None
+
+    checkpoint_path, save_weights_only = get_checkpoint_path(config, checkpoint_name)
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    if save_weights_only:
+        model.save_weights(checkpoint_path)
+    else:
+        model.save(checkpoint_path)
+    return checkpoint_path
+
+def setup_callbacks(
+    config,
+    csv_append=None,
+    checkpoint_name="best_model",
+    include_throughput=True,
+):
     """
     Setup training callbacks
 
@@ -731,7 +807,7 @@ def setup_callbacks(config, csv_append=None):
     if performance_config.get("terminate_on_nan", True):
         callbacks.append(keras.callbacks.TerminateOnNaN())
 
-    if performance_config.get("log_throughput", True):
+    if include_throughput and performance_config.get("log_throughput", True):
         callbacks.append(
             ThroughputCallback(
                 batch_size=config.get("dataset", {}).get("batch_size", 32),
@@ -742,22 +818,8 @@ def setup_callbacks(config, csv_append=None):
     # Model Checkpoint
     if callback_config.get("checkpoint", {}).get("enabled", True):
         checkpoint_config = callback_config["checkpoint"]
-        architecture = config.get("model", {}).get("architecture", "").lower()
-        is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
-
-        save_weights_only = checkpoint_config.get("save_weights_only", False)
-        if is_lite0_arch and not save_weights_only:
-            # TF Hub-backed models are more reliable with weights-only checkpoints.
-            save_weights_only = True
-
-        checkpoint_filename = (
-            "best_model.weights.h5" if save_weights_only else "best_model.h5"
-        )
-        checkpoint_path = os.path.join(
-            config["export"]["save_dir"],
-            config["model"]["architecture"],
-            "checkpoints",
-            checkpoint_filename,
+        checkpoint_path, save_weights_only = get_checkpoint_path(
+            config, checkpoint_name=checkpoint_name
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 

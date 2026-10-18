@@ -30,6 +30,8 @@ augmentation:
   brightness_range: [0.9, 1.1]
 
 training:
+  fine_tuning:
+    enabled: true
   epochs: 35
   freeze_base: true
   unfreeze_from_layer: 100
@@ -64,9 +66,11 @@ class_weights:
   enabled: true
   auto_compute: true
   max_weight: 5.0
+  normalize: true
 
 callbacks:
   checkpoint:
+    run_scoped: true
     enabled: true
     monitor: "val_accuracy"
     save_best_only: true
@@ -78,6 +82,10 @@ callbacks:
     monitor: "val_loss"
     patience: 7
     restore_best_weights: true
+    mode: "min"
+  fine_tuning_early_stopping:
+    monitor: "val_loss"
+    patience: 6
     mode: "min"
   tensorboard:
     enabled: true
