@@ -15,11 +15,13 @@ from training.train import (
 )
 from training.export import make_float32_inference_model
 from training.utils import (
+    _dataset_class_names,
     compute_class_weights,
     create_augmentation_layer,
     get_checkpoint_path,
     validate_dataset_splits,
 )
+from dataset.taxonomy import CANONICAL_CLASSES, LABEL_ALIASES
 
 
 def _config():
@@ -159,6 +161,57 @@ def test_split_validation_requires_matching_classes_and_train_support(tmp_path):
         validate_dataset_splits(
             tmp_path / "train", tmp_path / "val", tmp_path / "test"
         )
+
+
+def test_alias_split_validation_hashes_actual_source_folders_without_manifest(tmp_path):
+    source_by_canonical = {
+        canonical: alias for alias, canonical in LABEL_ALIASES.items()
+    }
+    expected_source_order = [
+        source_by_canonical.get(name, name) for name in CANONICAL_CLASSES
+    ]
+
+    for split in ("train", "val", "test"):
+        for index, class_name in enumerate(CANONICAL_CLASSES):
+            source_name = expected_source_order[index]
+            class_dir = tmp_path / split / source_name
+            class_dir.mkdir(parents=True)
+            (class_dir / "sample.jpg").write_bytes(
+                f"{split}-{class_name}".encode("utf-8")
+            )
+
+    assert _dataset_class_names(tmp_path / "train") == expected_source_order
+    counts = validate_dataset_splits(
+        tmp_path / "train", tmp_path / "val", tmp_path / "test"
+    )
+    assert list(counts["train"]["classes"]) == list(CANONICAL_CLASSES)
+    assert counts["train"]["total"] == len(CANONICAL_CLASSES)
+
+    train_image = tmp_path / "train" / expected_source_order[0] / "sample.jpg"
+    val_image = tmp_path / "val" / expected_source_order[0] / "sample.jpg"
+    val_image.write_bytes(train_image.read_bytes())
+    with pytest.raises(ValueError, match="exact duplicate image hashes"):
+        validate_dataset_splits(
+            tmp_path / "train", tmp_path / "val", tmp_path / "test"
+        )
+
+
+def test_class_folder_alias_resolution_rejects_invalid_taxonomy(tmp_path):
+    unknown_dir = tmp_path / "unknown"
+    (unknown_dir / "Unmapped___Disease").mkdir(parents=True)
+    with pytest.raises(ValueError, match="Unknown dataset class folder"):
+        _dataset_class_names(unknown_dir, CANONICAL_CLASSES)
+
+    missing_dir = tmp_path / "missing"
+    (missing_dir / CANONICAL_CLASSES[0]).mkdir(parents=True)
+    with pytest.raises(ValueError, match="missing="):
+        _dataset_class_names(missing_dir, CANONICAL_CLASSES)
+
+    duplicate_dir = tmp_path / "duplicate"
+    (duplicate_dir / "Mango___Anthracnose").mkdir(parents=True)
+    (duplicate_dir / "Mango__Anthracnose").mkdir(parents=True)
+    with pytest.raises(ValueError, match="Duplicate dataset class folders"):
+        _dataset_class_names(duplicate_dir, CANONICAL_CLASSES)
 
 
 def test_augmentation_respects_configured_flips_and_ranges():

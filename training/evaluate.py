@@ -25,10 +25,10 @@ from sklearn.metrics import (
 
 try:
     # Support module execution: python -m training.evaluate
-    from .utils import get_preprocess_fn, validate_dataset_splits
+    from .utils import _dataset_class_names, get_preprocess_fn, validate_dataset_splits
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
-    from utils import get_preprocess_fn, validate_dataset_splits
+    from utils import _dataset_class_names, get_preprocess_fn, validate_dataset_splits
 
 
 def _is_saved_model_dir(model_path):
@@ -149,15 +149,24 @@ def load_test_dataset(
     class_names=None,
 ):
     """Load test dataset"""
+    source_class_names = _dataset_class_names(test_dir, class_names)
+    canonical_class_names = class_names
+    if source_class_names is not None and canonical_class_names is None:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import sys
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from dataset.taxonomy import CANONICAL_CLASSES
+        canonical_class_names = list(CANONICAL_CLASSES)
     test_ds = keras.preprocessing.image_dataset_from_directory(
         test_dir,
         image_size=image_size,
         batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
-        class_names=list(class_names) if class_names is not None else None,
+        class_names=source_class_names,
     )
-    class_names = test_ds.class_names
+    class_names = canonical_class_names or test_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
 
     if preprocess_fn is not None:

@@ -16,6 +16,79 @@ import tensorflow as tf
 from tensorflow import keras
 
 
+def _dataset_class_names(directory, class_names=None):
+    """Return source folder names in canonical order when aliases are used."""
+    folders = sorted(
+        name for name in os.listdir(directory)
+        if os.path.isdir(os.path.join(directory, name))
+    )
+    if class_names is not None:
+        expected = list(class_names)
+    else:
+        expected = None
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from dataset.taxonomy import CANONICAL_CLASSES, canonicalize_label
+    except ImportError:
+        if expected is not None and set(folders) != set(expected):
+            raise ValueError(
+                f"Dataset class folders do not match the configured classes; "
+                f"missing={sorted(set(expected) - set(folders))}, "
+                f"extra={sorted(set(folders) - set(expected))}"
+            )
+        return expected
+
+    canonical_expected = list(CANONICAL_CLASSES)
+    use_canonical_taxonomy = expected is None or set(expected) == set(canonical_expected)
+    if not use_canonical_taxonomy:
+        if set(folders) != set(expected):
+            raise ValueError(
+                f"Dataset class folders do not match the configured classes; "
+                f"missing={sorted(set(expected) - set(folders))}, "
+                f"extra={sorted(set(folders) - set(expected))}"
+            )
+        return expected
+
+    if expected is None:
+        recognized = False
+        for source_name in folders:
+            try:
+                canonicalize_label(source_name)
+                recognized = True
+                break
+            except ValueError:
+                continue
+        if not recognized:
+            return None
+
+    resolved = {}
+    for source_name in folders:
+        try:
+            canonical_name = canonicalize_label(source_name)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unknown dataset class folder {source_name!r} in {directory}: {exc}"
+            ) from exc
+        if canonical_name in resolved:
+            raise ValueError(
+                f"Duplicate dataset class folders in {directory} resolve to "
+                f"{canonical_name!r}: {resolved[canonical_name]!r} and {source_name!r}"
+            )
+        resolved[canonical_name] = source_name
+
+    missing = sorted(set(canonical_expected) - set(resolved))
+    extra = sorted(set(resolved) - set(canonical_expected))
+    if missing or extra:
+        raise ValueError(
+            f"Dataset class folders do not match the canonical taxonomy in {directory}; "
+            f"missing={missing}, extra={extra}"
+        )
+    return [resolved[name] for name in canonical_expected]
+
+
 def configure_runtime(config):
     """Configure reproducibility and optional GPU performance features."""
     seed = int(config.get("seed", 42))
@@ -306,8 +379,22 @@ def load_dataset(
     """
     # Batch at the source. The previous unbatched -> shuffle -> batch path
     # added substantial tf.data overhead for large hosted datasets.
-    if class_names is not None:
-        class_names = list(class_names)
+    source_class_names = _dataset_class_names(train_dir, class_names)
+    val_source_class_names = _dataset_class_names(val_dir, class_names)
+    canonical_class_names = None
+    if source_class_names is not None:
+        if val_source_class_names != source_class_names:
+            raise ValueError(
+                "Train and validation class folders resolve to different canonical orders"
+            )
+        class_names = list(class_names) if class_names is not None else None
+        if class_names is None:
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            from dataset.taxonomy import CANONICAL_CLASSES
+            class_names = list(CANONICAL_CLASSES)
+        canonical_class_names = class_names
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
@@ -315,7 +402,7 @@ def load_dataset(
         label_mode="categorical",
         shuffle=False,
         seed=42,
-        class_names=class_names,
+        class_names=source_class_names,
     )
 
     val_ds = keras.preprocessing.image_dataset_from_directory(
@@ -324,10 +411,10 @@ def load_dataset(
         batch_size=batch_size,
         label_mode="categorical",
         shuffle=False,
-        class_names=class_names,
+        class_names=val_source_class_names,
     )
 
-    class_names = train_ds.class_names
+    class_names = canonical_class_names or train_ds.class_names
     AUTOTUNE = tf.data.AUTOTUNE
     options = tf.data.Options()
     options.experimental_deterministic = bool(deterministic)
@@ -450,12 +537,25 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
     for split_name, split_path in split_paths.items():
         if not os.path.isdir(split_path):
             raise FileNotFoundError(f"Dataset {split_name} directory does not exist: {split_path}")
-        folders = sorted(
+        source_folders = sorted(
             name for name in os.listdir(split_path)
             if os.path.isdir(os.path.join(split_path, name))
         )
+        ordered_folders = _dataset_class_names(split_path, class_names)
+        if ordered_folders is None:
+            folders = source_folders
+            canonical_to_source = {name: name for name in folders}
+        else:
+            folders = list(class_names) if class_names is not None else None
+            if folders is None:
+                repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if repo_root not in sys.path:
+                    sys.path.insert(0, repo_root)
+                from dataset.taxonomy import CANONICAL_CLASSES
+                folders = list(CANONICAL_CLASSES)
+            canonical_to_source = dict(zip(folders, ordered_folders))
         expected = sorted(class_names) if class_names is not None else None
-        if expected is not None and folders != expected:
+        if expected is not None and sorted(folders) != expected:
             raise ValueError(
                 f"Dataset {split_name} class folders do not match the canonical manifest; "
                 f"missing={sorted(set(expected) - set(folders))}, "
@@ -463,7 +563,7 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
             )
         split_counts = {}
         for class_name in folders:
-            class_dir = os.path.join(split_path, class_name)
+            class_dir = os.path.join(split_path, canonical_to_source[class_name])
             images = [
                 os.path.join(class_dir, filename)
                 for filename in os.listdir(class_dir)
@@ -494,8 +594,23 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
                     hash_splits.setdefault(digest, set()).add(split)
     else:
         for split_name, split_path in split_paths.items():
+            ordered_source_folders = _dataset_class_names(split_path, class_names)
+            if ordered_source_folders is None:
+                source_by_class = {
+                    name: name for name in counts[split_name]["classes"]
+                }
+            else:
+                repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if repo_root not in sys.path:
+                    sys.path.insert(0, repo_root)
+                from dataset.taxonomy import CANONICAL_CLASSES
+
+                canonical_names = list(CANONICAL_CLASSES)
+                if class_names is not None and set(class_names) != set(CANONICAL_CLASSES):
+                    canonical_names = list(class_names)
+                source_by_class = dict(zip(canonical_names, ordered_source_folders))
             for class_name in sorted(counts[split_name]["classes"]):
-                class_dir = os.path.join(split_path, class_name)
+                class_dir = os.path.join(split_path, source_by_class[class_name])
                 for filename in sorted(os.listdir(class_dir)):
                     path = os.path.join(class_dir, filename)
                     if os.path.isfile(path) and os.path.splitext(filename)[1].lower() in valid_extensions:
