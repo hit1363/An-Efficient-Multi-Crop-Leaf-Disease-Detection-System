@@ -473,11 +473,6 @@ def run_comparison(
     (output_dir / "tflite_results").mkdir(exist_ok=True)
     (output_dir / "confusion_matrices").mkdir(exist_ok=True)
 
-    manifest_path = dataset_base / "class_names.json"
-    if not manifest_path.is_file():
-        raise FileNotFoundError(
-            f"Canonical class manifest is missing: {manifest_path}"
-        )
     class_names = load_benchmark_class_names(str(dataset_base))
     if len(class_names) != 72:
         raise ValueError(
