@@ -200,6 +200,47 @@ def test_run_metadata_reuses_supplied_split_counts(tmp_path):
     }
 
 
+def test_run_metadata_records_null_weight_ranges_when_weighting_is_disabled(tmp_path):
+    class Model:
+        name = "test_model"
+        trainable_weights = []
+        non_trainable_weights = []
+
+        @staticmethod
+        def count_params():
+            return 0
+
+        @staticmethod
+        def summary(print_fn):
+            print_fn("test model")
+
+    config = {
+        "model": {"architecture": "test_model"},
+        "dataset": {},
+        "class_weights": {"enabled": False},
+        "export": {"save_dir": str(tmp_path)},
+    }
+    save_run_metadata(
+        config=config,
+        config_path="config.yaml",
+        model=Model(),
+        raw_class_weights=None,
+        applied_class_weights=None,
+        split_counts={},
+        run_timestamp="unweighted-run",
+    )
+
+    with open(
+        tmp_path / "test_model" / "runs" / "unweighted-run" / "run_metadata.json",
+        encoding="utf-8",
+    ) as handle:
+        metadata = json.load(handle)
+
+    assert metadata["class_weights"]["enabled"] is False
+    assert metadata["class_weights"]["raw_range"] is None
+    assert metadata["class_weights"]["applied_range"] is None
+
+
 def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():
     with pytest.warns(UserWarning, match="duplicates accuracy"):
         metrics = build_metrics(["accuracy", "precision", "recall"], 3)

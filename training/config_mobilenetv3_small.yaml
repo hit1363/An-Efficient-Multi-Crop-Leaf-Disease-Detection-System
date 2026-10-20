@@ -63,7 +63,7 @@ loss:
   name: "categorical_crossentropy"
 
 class_weights:
-  enabled: true
+  enabled: false
   auto_compute: true
   max_weight: 5.0
   normalize: true

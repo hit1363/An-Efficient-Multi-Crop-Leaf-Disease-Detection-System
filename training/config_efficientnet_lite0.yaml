@@ -83,7 +83,7 @@ loss:
 
 # Class Weights (for imbalanced dataset)
 class_weights:
-  enabled: true
+  enabled: false
   auto_compute: true # Automatically compute from dataset
   max_weight: 5.0
   normalize: true

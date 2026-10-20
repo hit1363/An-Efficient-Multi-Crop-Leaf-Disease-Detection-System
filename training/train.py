@@ -272,7 +272,7 @@ def save_run_metadata(
     ) as handle:
         handle.write(_model_summary_text(model))
 
-    raw_values = list(raw_class_weights.values())
+    raw_values = list((raw_class_weights or {}).values())
     applied_values = list((applied_class_weights or {}).values())
     repo_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
     metadata = {
@@ -658,18 +658,18 @@ def train_model(config_path="config.yaml"):
                 unsupported,
             )
 
-    train_class_counts = [
-        split_counts["train"]["classes"][class_name] for class_name in class_names
-    ]
-    logger.info("Computing raw class weights from validated training counts...")
-    raw_class_weights = compute_class_weights_from_counts(train_class_counts)
-    logger.info("Computed raw class weights.")
-
-    # Compute class weights only when explicitly enabled for a later
-    # imbalance-focused experiment.
+    # Compute weights only for explicitly enabled imbalance-focused runs.
+    # Fast baseline runs do not construct class-count lists or weight metadata.
     weight_config = config.get("class_weights", {})
     class_weights = None
+    raw_class_weights = None
     if weight_config.get("enabled", False):
+        train_class_counts = [
+            split_counts["train"]["classes"][class_name] for class_name in class_names
+        ]
+        logger.info("Computing raw class weights from validated training counts...")
+        raw_class_weights = compute_class_weights_from_counts(train_class_counts)
+        logger.info("Computed raw class weights.")
         logger.info("Computing applied class weights from validated training counts...")
         class_weights = compute_class_weights_from_counts(
             train_class_counts,
@@ -677,6 +677,8 @@ def train_model(config_path="config.yaml"):
             normalize=weight_config.get("normalize", True),
         )
         logger.info("Computed applied class weights.")
+    else:
+        logger.info("Class weighting is disabled; skipping class-weight computation.")
 
     # Create model inside the distribution scope so variables are mirrored.
     logger.info(f"Creating {config['model']['architecture']} model...")
