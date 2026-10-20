@@ -1,3 +1,4 @@
+import csv
 import json
 from types import SimpleNamespace
 
@@ -274,6 +275,43 @@ def test_split_validation_requires_matching_classes_and_train_support(tmp_path):
         validate_dataset_splits(
             tmp_path / "train", tmp_path / "val", tmp_path / "test"
         )
+
+
+def test_split_validation_uses_manifest_counts_without_directory_image_scans(tmp_path):
+    class_names = ["healthy", "disease"]
+    for split in ("train", "val", "test"):
+        for class_name in class_names:
+            (tmp_path / split / class_name).mkdir(parents=True)
+
+    manifest_rows = [
+        ("train", "healthy", "train-healthy"),
+        ("train", "disease", "train-disease"),
+        ("train", "disease", "train-disease-2"),
+        ("val", "healthy", "val-healthy"),
+        ("test", "disease", "test-disease"),
+    ]
+    with (tmp_path / "split_manifest.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["split", "canonical_label", "source_sha256"]
+        )
+        writer.writeheader()
+        for split, label, digest in manifest_rows:
+            writer.writerow(
+                {"split": split, "canonical_label": label, "source_sha256": digest}
+            )
+
+    counts = validate_dataset_splits(
+        tmp_path / "train",
+        tmp_path / "val",
+        tmp_path / "test",
+        class_names=class_names,
+    )
+
+    assert counts["train"] == {
+        "total": 3,
+        "classes": {"healthy": 1, "disease": 2},
+    }
+    assert counts["val"]["classes"] == {"healthy": 1, "disease": 0}
 
 
 def test_alias_split_validation_hashes_actual_source_folders_without_manifest(tmp_path):

@@ -533,6 +533,33 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
     split_paths = {"train": train_dir, "val": val_dir}
     if test_dir:
         split_paths["test"] = test_dir
+    # A benchmark manifest is authoritative for its split assignment and
+    # source hashes. Reading it once is substantially faster on hosted
+    # filesystems than listing every image directory before reading it anyway.
+    data_root = os.path.dirname(os.path.abspath(train_dir))
+    manifest_path = os.path.join(data_root, "split_manifest.csv")
+    manifest_counts = None
+    hash_splits = {}
+    if os.path.isfile(manifest_path):
+        logging.getLogger(__name__).info(
+            "Validating split counts from manifest: %s", manifest_path
+        )
+        manifest_counts = {split: {} for split in split_paths}
+        with open(manifest_path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                digest = row.get("source_sha256")
+                split = row.get("split")
+                label = row.get("canonical_label")
+                if digest and split:
+                    hash_splits.setdefault(digest, set()).add(split)
+                if split in manifest_counts:
+                    if not label:
+                        raise ValueError(
+                            f"Split manifest has no canonical label for {split!r}"
+                        )
+                    manifest_counts[split][label] = (
+                        manifest_counts[split].get(label, 0) + 1
+                    )
     counts = {}
     for split_name, split_path in split_paths.items():
         if not os.path.isdir(split_path):
@@ -561,17 +588,35 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
                 f"missing={sorted(set(expected) - set(folders))}, "
                 f"extra={sorted(set(folders) - set(expected))}"
             )
-        split_counts = {}
-        for class_name in folders:
-            class_dir = os.path.join(split_path, canonical_to_source[class_name])
-            images = [
-                os.path.join(class_dir, filename)
-                for filename in os.listdir(class_dir)
-                if os.path.splitext(filename)[1].lower() in valid_extensions
+        if manifest_counts is not None:
+            unknown_manifest_classes = set(manifest_counts[split_name]) - set(folders)
+            if unknown_manifest_classes:
+                raise ValueError(
+                    f"Split manifest has unknown classes for {split_name}: "
+                    f"{sorted(unknown_manifest_classes)}"
+                )
+            split_counts = {
+                class_name: manifest_counts[split_name].get(class_name, 0)
+                for class_name in folders
+            }
+        else:
+            split_counts = {}
+            for class_name in folders:
+                class_dir = os.path.join(split_path, canonical_to_source[class_name])
+                images = [
+                    os.path.join(class_dir, filename)
+                    for filename in os.listdir(class_dir)
+                    if os.path.splitext(filename)[1].lower() in valid_extensions
+                ]
+                split_counts[class_name] = len(images)
+        if split_name == "train":
+            empty_training_classes = [
+                class_name for class_name, count in split_counts.items() if count == 0
             ]
-            split_counts[class_name] = len(images)
-            if split_name == "train" and not images:
-                raise ValueError(f"Training class '{class_name}' has no supported images")
+            if empty_training_classes:
+                raise ValueError(
+                    f"Training class '{empty_training_classes[0]}' has no supported images"
+                )
         counts[split_name] = {"total": sum(split_counts.values()), "classes": split_counts}
         if counts[split_name]["total"] == 0:
             raise ValueError(f"Dataset {split_name} split has no supported images")
@@ -580,19 +625,11 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
     if any(classes != all_classes[0] for classes in all_classes[1:]):
         raise ValueError("Train, validation, and test class folders differ")
 
-    # The source manifest records hashes before image conversion. This catches
-    # exact source duplicates even if JPEG re-encoding changed output bytes.
-    data_root = os.path.dirname(os.path.abspath(train_dir))
-    manifest_path = os.path.join(data_root, "split_manifest.csv")
-    hash_splits = {}
-    if os.path.isfile(manifest_path):
-        with open(manifest_path, newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                digest = row.get("source_sha256")
-                split = row.get("split")
-                if digest and split:
-                    hash_splits.setdefault(digest, set()).add(split)
-    else:
+    # Without a manifest, hash every image to preserve split-isolation checks.
+    if manifest_counts is None:
+        logging.getLogger(__name__).warning(
+            "Split manifest is unavailable; validating by scanning image files."
+        )
         for split_name, split_path in split_paths.items():
             ordered_source_folders = _dataset_class_names(split_path, class_names)
             if ordered_source_folders is None:
