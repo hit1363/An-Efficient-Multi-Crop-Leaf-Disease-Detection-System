@@ -143,6 +143,7 @@ metrics:
 # Runtime performance. Mixed precision and batched execution are especially
 # effective for MobileNetV2 on Kaggle GPUs. Set mixed_precision to false for CPU.
 performance:
+  validate_dataset_splits: false
   mixed_precision: true
   steps_per_execution: 32
   jit_compile: false

@@ -9,6 +9,7 @@ tf = pytest.importorskip("tensorflow")
 
 from training.model import unfreeze_base_model
 from training.train import (
+    _estimated_split_counts,
     build_metrics,
     compile_model,
     compile_fine_tune_model,
@@ -247,6 +248,19 @@ def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():
         metrics = build_metrics(["accuracy", "precision", "recall"], 3)
 
     assert [metric.name for metric in metrics] == ["accuracy"]
+
+
+def test_estimated_split_counts_use_dataset_cardinality_without_file_scans():
+    train_dataset = tf.data.Dataset.range(3).batch(2)
+    val_dataset = tf.data.Dataset.range(2).batch(2)
+
+    counts = _estimated_split_counts(train_dataset, val_dataset, batch_size=2)
+
+    assert counts == {
+        "train": {"total": 4, "classes": {}},
+        "val": {"total": 2, "classes": {}},
+        "test": {"total": 0, "classes": {}},
+    }
 
 
 def test_split_validation_requires_matching_classes_and_train_support(tmp_path):

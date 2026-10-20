@@ -87,6 +87,7 @@ export:
 metrics: ["accuracy"]
 seed: 42
 performance:
+  validate_dataset_splits: false
   mixed_precision: true
   deterministic: true
   distribution: auto

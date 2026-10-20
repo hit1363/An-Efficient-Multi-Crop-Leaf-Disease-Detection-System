@@ -511,6 +511,22 @@ def _add_throughput_callback(callbacks, sample_count):
     return callbacks
 
 
+def _estimated_split_counts(train_dataset, val_dataset, batch_size):
+    """Return lightweight upper-bound sample totals without filesystem scans."""
+    def estimated_total(dataset):
+        try:
+            batches = int(tf.data.experimental.cardinality(dataset).numpy())
+        except (AttributeError, TypeError, ValueError):
+            return 0
+        return max(0, batches) * int(batch_size)
+
+    return {
+        "train": {"total": estimated_total(train_dataset), "classes": {}},
+        "val": {"total": estimated_total(val_dataset), "classes": {}},
+        "test": {"total": 0, "classes": {}},
+    }
+
+
 def _setup_phase2_callbacks(config):
     """Build fresh fine-tuning callbacks and append to the Phase 1 CSV log."""
     return setup_callbacks(
@@ -633,34 +649,48 @@ def train_model(config_path="config.yaml"):
             f"but config model.num_classes={config['model']['num_classes']}"
         )
 
-    # Validate that each split has the same classes and that every class has
-    # examples before constructing a model or starting a potentially long run.
-    # The resulting counts are also the single source of truth for class
-    # weighting and run metadata, avoiding repeated directory walks.
-    logger.info("Counting and validating dataset splits...")
-    split_counts = validate_dataset_splits(
-        config["dataset"]["train_dir"],
-        config["dataset"]["val_dir"],
-        config["dataset"].get("test_dir"),
-        class_names=class_names,
+    weight_config = config.get("class_weights", {})
+    deep_validation = bool(
+        config.get("performance", {}).get("validate_dataset_splits", True)
     )
-    logger.info("Validated split counts: %s", split_counts)
-    for split_name in ("val", "test"):
-        unsupported = sorted(
-            class_name
-            for class_name, count in split_counts[split_name]["classes"].items()
-            if count == 0
+    if deep_validation:
+        # Validate that each split has the same classes and that every class has
+        # examples before constructing a model or starting a potentially long run.
+        logger.info("Counting and validating dataset splits...")
+        split_counts = validate_dataset_splits(
+            config["dataset"]["train_dir"],
+            config["dataset"]["val_dir"],
+            config["dataset"].get("test_dir"),
+            class_names=class_names,
         )
-        if unsupported:
-            logger.warning(
-                "%s has no independent exact-deduplicated examples for classes: %s",
-                split_name,
-                unsupported,
+        logger.info("Validated split counts: %s", split_counts)
+        for split_name in ("val", "test"):
+            unsupported = sorted(
+                class_name
+                for class_name, count in split_counts[split_name]["classes"].items()
+                if count == 0
             )
+            if unsupported:
+                logger.warning(
+                    "%s has no independent exact-deduplicated examples for classes: %s",
+                    split_name,
+                    unsupported,
+                )
+    else:
+        if weight_config.get("enabled", False):
+            raise ValueError(
+                "class_weights.enabled requires performance.validate_dataset_splits"
+            )
+        logger.warning(
+            "Deep split validation is disabled; skipping split scans and duplicate hashing."
+        )
+        split_counts = _estimated_split_counts(
+            train_ds, val_ds, config["dataset"]["batch_size"]
+        )
+        logger.info("Estimated split totals: %s", split_counts)
 
     # Compute weights only for explicitly enabled imbalance-focused runs.
     # Fast baseline runs do not construct class-count lists or weight metadata.
-    weight_config = config.get("class_weights", {})
     class_weights = None
     raw_class_weights = None
     if weight_config.get("enabled", False):
