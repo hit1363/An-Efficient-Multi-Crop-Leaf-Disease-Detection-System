@@ -14,8 +14,10 @@ dataset:
   train_dir: "../dataset/processed_harmonized/train"
   val_dir: "../dataset/processed_harmonized/val"
   test_dir: "../dataset/processed_harmonized/test"
-  batch_size: 128
-  batch_size_fallbacks: [128, 64, 32]
+  # ShuffleNet trains its randomly initialized backbone from the first step;
+  # use a smaller global batch to stay within Kaggle T4 memory limits.
+  batch_size: 64
+  batch_size_fallbacks: [64, 32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
   cache_mode: "auto"
@@ -118,7 +120,7 @@ metrics:
 performance:
   validate_dataset_splits: false
   mixed_precision: true
-  steps_per_execution: 32
+  steps_per_execution: 8
   jit_compile: true
   deterministic: false
   distribution: auto

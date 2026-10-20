@@ -67,7 +67,6 @@ def test_optimized_runtime_defaults_are_present():
     mobile_architectures = (
         "mobilenetv2",
         "mobilenetv3_small",
-        "shufflenetv2_05",
     )
     efficient_architectures = ("efficientnet_b0", "efficientnet_lite0")
 
@@ -84,6 +83,12 @@ def test_optimized_runtime_defaults_are_present():
         assert "terminate_on_nan: true" in config_text
         assert "distribution: auto" in config_text
         assert "log_throughput: true" in config_text
+
+    shufflenet_config = (
+        ROOT / "training" / "config_shufflenetv2_05.yaml"
+    ).read_text(encoding="utf-8")
+    assert "batch_size: 64" in shufflenet_config
+    assert "batch_size_fallbacks: [64, 32, 16]" in shufflenet_config
 
     for architecture in efficient_architectures:
         config_text = (
