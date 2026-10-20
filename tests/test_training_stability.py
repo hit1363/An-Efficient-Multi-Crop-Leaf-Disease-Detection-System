@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,12 +12,14 @@ from training.train import (
     compile_model,
     compile_fine_tune_model,
     create_fine_tune_optimizer,
+    save_run_metadata,
     select_final_weights,
 )
 from training.export import make_float32_inference_model
 from training.utils import (
     _dataset_class_names,
     compute_class_weights,
+    compute_class_weights_from_counts,
     create_augmentation_layer,
     get_checkpoint_path,
     validate_dataset_splits,
@@ -126,6 +129,75 @@ def test_capped_class_weights_are_bounded_and_sample_normalized(tmp_path):
 
     assert max(weights.values()) <= 3.0
     assert sample_weighted_mean == pytest.approx(1.0)
+
+
+def test_class_weights_from_counts_match_directory_scan(tmp_path):
+    counts = {"common": 100, "rare": 2, "empty": 0}
+    for class_name, count in counts.items():
+        class_dir = tmp_path / class_name
+        class_dir.mkdir()
+        for index in range(count):
+            (class_dir / f"{index}.jpg").touch()
+
+    scanned = compute_class_weights(tmp_path, max_weight=3.0, normalize=True)
+    from_counts = compute_class_weights_from_counts(
+        [counts[name] for name in sorted(counts)], max_weight=3.0, normalize=True
+    )
+
+    assert from_counts == pytest.approx(scanned)
+
+
+def test_run_metadata_reuses_supplied_split_counts(tmp_path):
+    class Model:
+        name = "test_model"
+        trainable_weights = [SimpleNamespace(shape=(2,))]
+        non_trainable_weights = []
+
+        @staticmethod
+        def count_params():
+            return 2
+
+        @staticmethod
+        def summary(print_fn):
+            print_fn("test model")
+
+    split_counts = {
+        "train": {"total": 3, "classes": {"healthy": 2, "disease": 1}},
+        "val": {"total": 2, "classes": {"healthy": 1, "disease": 1}},
+        "test": {"total": 1, "classes": {"healthy": 1, "disease": 0}},
+    }
+    config = {
+        "model": {"architecture": "test_model"},
+        "dataset": {
+            "train_dir": "/data/train",
+            "val_dir": "/data/val",
+            "test_dir": "/data/test",
+        },
+        "class_weights": {"enabled": True, "max_weight": 3.0, "normalize": True},
+        "export": {"save_dir": str(tmp_path)},
+    }
+
+    run_dir = save_run_metadata(
+        config=config,
+        config_path="config.yaml",
+        model=Model(),
+        raw_class_weights={0: 0.75, 1: 1.5},
+        applied_class_weights={0: 0.75, 1: 1.5},
+        split_counts=split_counts,
+        run_timestamp="test-run",
+    )
+
+    with open(
+        tmp_path / "test_model" / "runs" / "test-run" / "run_metadata.json",
+        encoding="utf-8",
+    ) as handle:
+        metadata = json.load(handle)
+
+    assert run_dir == str(tmp_path / "test_model" / "runs" / "test-run")
+    assert metadata["datasets"]["train"] == {
+        "path": "/data/train",
+        **split_counts["train"],
+    }
 
 
 def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():

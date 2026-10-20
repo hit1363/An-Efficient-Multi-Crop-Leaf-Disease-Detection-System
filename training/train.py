@@ -23,7 +23,7 @@ try:
     from .export import make_float32_inference_model
     from .utils import (
         load_dataset,
-        compute_class_weights,
+        compute_class_weights_from_counts,
         create_augmentation_layer,
         get_preprocess_fn,
         save_model_checkpoint,
@@ -40,7 +40,7 @@ except ImportError:
     from export import make_float32_inference_model
     from utils import (
         load_dataset,
-        compute_class_weights,
+        compute_class_weights_from_counts,
         create_augmentation_layer,
         get_preprocess_fn,
         save_model_checkpoint,
@@ -223,25 +223,6 @@ def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
     return phase1_weights, "phase_1", phase1_best.best
 
 
-def _count_images_by_class(data_dir):
-    """Return deterministic image counts for reproducible run metadata."""
-    if not data_dir or not os.path.isdir(data_dir):
-        return {"total": 0, "classes": {}}
-
-    valid_extensions = {".jpg", ".jpeg", ".png"}
-    class_counts = {}
-    for class_name in sorted(os.listdir(data_dir)):
-        class_dir = os.path.join(data_dir, class_name)
-        if not os.path.isdir(class_dir):
-            continue
-        class_counts[class_name] = sum(
-            1
-            for filename in os.listdir(class_dir)
-            if os.path.splitext(filename)[1].lower() in valid_extensions
-        )
-    return {"total": sum(class_counts.values()), "classes": class_counts}
-
-
 def _git_revision(repo_dir):
     """Return the checked-out Git revision when the runtime has Git metadata."""
     try:
@@ -270,6 +251,7 @@ def save_run_metadata(
     model,
     raw_class_weights,
     applied_class_weights,
+    split_counts,
     run_timestamp,
 ):
     """Persist the exact pre-fit configuration and data/model context."""
@@ -313,7 +295,7 @@ def save_run_metadata(
         "datasets": {
             split: {
                 "path": dataset_config.get(f"{split}_dir"),
-                **_count_images_by_class(dataset_config.get(f"{split}_dir")),
+                **split_counts.get(split, {"total": 0, "classes": {}}),
             }
             for split in ("train", "val", "test")
         },
@@ -651,28 +633,16 @@ def train_model(config_path="config.yaml"):
             f"but config model.num_classes={config['model']['num_classes']}"
         )
 
-    # Compute the raw range for run metadata even when the stability-first
-    # baseline leaves class weighting disabled.
-    weight_config = config.get("class_weights", {})
-    raw_class_weights = compute_class_weights(config["dataset"]["train_dir"])
-
-    # Compute class weights only when explicitly enabled for a later
-    # imbalance-focused experiment.
-    class_weights = None
-    if weight_config.get("enabled", False):
-        logger.info("Computing class weights...")
-        class_weights = compute_class_weights(
-            config["dataset"]["train_dir"],
-            max_weight=weight_config.get("max_weight"),
-            normalize=weight_config.get("normalize", True),
-        )
-
     # Validate that each split has the same classes and that every class has
     # examples before constructing a model or starting a potentially long run.
+    # The resulting counts are also the single source of truth for class
+    # weighting and run metadata, avoiding repeated directory walks.
+    logger.info("Counting and validating dataset splits...")
     split_counts = validate_dataset_splits(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
         config["dataset"].get("test_dir"),
+        class_names=class_names,
     )
     logger.info("Validated split counts: %s", split_counts)
     for split_name in ("val", "test"):
@@ -687,6 +657,26 @@ def train_model(config_path="config.yaml"):
                 split_name,
                 unsupported,
             )
+
+    train_class_counts = [
+        split_counts["train"]["classes"][class_name] for class_name in class_names
+    ]
+    logger.info("Computing raw class weights from validated training counts...")
+    raw_class_weights = compute_class_weights_from_counts(train_class_counts)
+    logger.info("Computed raw class weights.")
+
+    # Compute class weights only when explicitly enabled for a later
+    # imbalance-focused experiment.
+    weight_config = config.get("class_weights", {})
+    class_weights = None
+    if weight_config.get("enabled", False):
+        logger.info("Computing applied class weights from validated training counts...")
+        class_weights = compute_class_weights_from_counts(
+            train_class_counts,
+            max_weight=weight_config.get("max_weight"),
+            normalize=weight_config.get("normalize", True),
+        )
+        logger.info("Computed applied class weights.")
 
     # Create model inside the distribution scope so variables are mirrored.
     logger.info(f"Creating {config['model']['architecture']} model...")
@@ -744,6 +734,7 @@ def train_model(config_path="config.yaml"):
         model=model,
         raw_class_weights=raw_class_weights,
         applied_class_weights=class_weights,
+        split_counts=split_counts,
         run_timestamp=run_timestamp,
     )
     logger.info("Saved reproducibility metadata to: %s", run_dir)

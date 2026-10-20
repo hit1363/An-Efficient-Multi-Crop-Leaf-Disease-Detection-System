@@ -719,35 +719,21 @@ class ThroughputCallback(keras.callbacks.Callback):
             )
 
 
-def compute_class_weights(data_dir, max_weight=None, normalize=True):
-    """
-    Compute class weights for imbalanced dataset
+def compute_class_weights_from_counts(class_counts, max_weight=None, normalize=True):
+    """Compute class weights from counts in deterministic class order.
 
     Args:
-        data_dir: Directory containing class subdirectories.
-        max_weight: Optional upper bound for any class weight. When supplied
-            with ``normalize=True``, weights are scaled before clipping so the
-            sample-weighted mean remains one.
+        class_counts: A sequence of per-class image counts. Its position is the
+            class index used by Keras labels.
+        max_weight: Optional upper bound for any class weight.
         normalize: Preserve a sample-weighted mean of one when clipping.
 
     Returns:
-        Dictionary of class weights.
+        Dictionary mapping class indices to weights.
     """
-    class_counts = {}
-    class_names = sorted(
-        [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
-    )
-
-    for i, class_name in enumerate(class_names):
-        class_path = os.path.join(data_dir, class_name)
-        count = len(
-            [
-                f
-                for f in os.listdir(class_path)
-                if f.lower().endswith((".png", ".jpg", ".jpeg"))
-            ]
-        )
-        class_counts[i] = count
+    class_counts = {index: int(count) for index, count in enumerate(class_counts)}
+    if any(count < 0 for count in class_counts.values()):
+        raise ValueError("class counts must be non-negative")
 
     total = sum(class_counts.values())
     nonzero = {i: count for i, count in class_counts.items() if count > 0}
@@ -802,6 +788,39 @@ def compute_class_weights(data_dir, max_weight=None, normalize=True):
         index: min(weight * upper, max_weight)
         for index, weight in class_weights.items()
     }
+
+
+def compute_class_weights(data_dir, max_weight=None, normalize=True):
+    """Compute class weights for an imbalanced directory dataset.
+
+    Args:
+        data_dir: Directory containing class subdirectories.
+        max_weight: Optional upper bound for any class weight. When supplied
+            with ``normalize=True``, weights are scaled before clipping so the
+            sample-weighted mean remains one.
+        normalize: Preserve a sample-weighted mean of one when clipping.
+
+    Returns:
+        Dictionary of class weights.
+    """
+    class_names = sorted(
+        [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+    )
+    class_counts = []
+    for class_name in class_names:
+        class_path = os.path.join(data_dir, class_name)
+        count = len(
+            [
+                f
+                for f in os.listdir(class_path)
+                if f.lower().endswith((".png", ".jpg", ".jpeg"))
+            ]
+        )
+        class_counts.append(count)
+
+    return compute_class_weights_from_counts(
+        class_counts, max_weight=max_weight, normalize=normalize
+    )
 
 
 def validate_dataset_batch(dataset, logger=None):
