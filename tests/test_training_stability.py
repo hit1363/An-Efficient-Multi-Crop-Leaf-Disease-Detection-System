@@ -15,6 +15,7 @@ from training.train import (
     compile_model,
     compile_fine_tune_model,
     create_fine_tune_optimizer,
+    phase_one_heading,
     save_run_metadata,
     select_final_weights,
 )
@@ -70,6 +71,17 @@ def test_accepts_phase_two_weights_only_on_strict_improvement():
     assert weights == ["phase-two"]
     assert phase == "phase_2"
     assert loss == pytest.approx(0.41)
+
+
+@pytest.mark.parametrize(
+    ("freeze_base", "expected"),
+    [
+        (True, "Phase 1: Training classifier head (base frozen)"),
+        (False, "Phase 1: Training full model (backbone trainable)"),
+    ],
+)
+def test_phase_one_heading_matches_backbone_trainability(freeze_base, expected):
+    assert phase_one_heading(freeze_base) == expected
 
 
 def test_unfreezing_keeps_batch_normalization_frozen():

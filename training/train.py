@@ -227,6 +227,13 @@ def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
     return phase1_weights, "phase_1", phase1_best.best
 
 
+def phase_one_heading(freeze_base):
+    """Return an accurate Phase 1 status line for the configured backbone."""
+    if freeze_base:
+        return "Phase 1: Training classifier head (base frozen)"
+    return "Phase 1: Training full model (backbone trainable)"
+
+
 def _git_revision(repo_dir):
     """Return the checked-out Git revision when the runtime has Git metadata."""
     try:
@@ -846,9 +853,10 @@ def train_model(config_path="config.yaml"):
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
 
-    # Phase 1: Train classifier head with frozen base
+    # Phase 1 either warms up the classifier head or trains a randomly
+    # initialized backbone end-to-end, depending on freeze_base.
     logger.info("\n" + "=" * 50)
-    logger.info("Phase 1: Training classifier head (base frozen)")
+    logger.info(phase_one_heading(freeze_base))
     logger.info("=" * 50 + "\n")
 
     history1 = model.fit(
