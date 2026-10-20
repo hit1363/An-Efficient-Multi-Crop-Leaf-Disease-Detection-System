@@ -33,6 +33,15 @@ augmentation:
   horizontal_flip: true
   vertical_flip: true
   brightness_range: [0.9, 1.1]
+  class_aware:
+    enabled: true
+    max_train_samples: 500
+    rotation_range: 20
+    zoom_range: [0.9, 1.1]
+    horizontal_flip: true
+    vertical_flip: true
+    contrast_range: 0.15
+    brightness_range: [0.85, 1.15]
 
 # Training Settings
 training:
@@ -41,7 +50,7 @@ training:
   epochs: 50
   freeze_base: true
   unfreeze_from_layer: 100 # Layer index to start unfreezing from
-  unfreeze_epoch: 10 # Unfreeze after this epoch
+  unfreeze_epoch: 5 # Train the head briefly before fine-tuning
   fine_tune_learning_rate: 0.0001
 
 # Optimizer Settings
@@ -83,7 +92,7 @@ loss:
 
 # Class Weights (for imbalanced dataset)
 class_weights:
-  enabled: false
+  enabled: true
   auto_compute: true # Automatically compute from dataset
   max_weight: 5.0
   normalize: true
@@ -94,17 +103,17 @@ callbacks:
   checkpoint:
     enabled: true
     run_scoped: true
-    monitor: "val_accuracy"
+    monitor: "val_loss"
     save_best_only: true
     save_weights_only: true
-    mode: "max"
+    mode: "min"
     save_freq: "epoch"
 
   # Early Stopping
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 10
+    patience: 6
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
@@ -154,7 +163,7 @@ performance:
   validate_dataset_splits: false
   mixed_precision: true
   steps_per_execution: 32
-  jit_compile: false
+  jit_compile: true
   deterministic: false
   distribution: auto
   log_throughput: true

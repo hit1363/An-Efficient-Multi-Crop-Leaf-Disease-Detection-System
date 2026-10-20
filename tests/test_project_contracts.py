@@ -109,6 +109,43 @@ def test_optimized_runtime_defaults_are_present():
     assert "with strategy.scope()" in train_text
 
 
+def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
+    architectures = (
+        "benchmark",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+    )
+    for architecture in architectures:
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["loss"]["name"] == "categorical_crossentropy"
+        assert config["class_weights"]["enabled"] is True
+        class_aware = config["augmentation"]["class_aware"]
+        assert class_aware["enabled"] is True
+        assert class_aware["max_train_samples"] == 500
+        assert config["callbacks"]["checkpoint"]["monitor"] == "val_loss"
+        assert config["callbacks"]["checkpoint"]["mode"] == "min"
+        assert config["callbacks"]["early_stopping"]["patience"] == 6
+        assert config["callbacks"]["fine_tuning_early_stopping"]["patience"] == 6
+        assert config["performance"]["mixed_precision"] is True
+        assert config["performance"]["jit_compile"] is True
+
+    for architecture in ("benchmark", "mobilenetv2", "mobilenetv3_small", "efficientnet_b0", "efficientnet_lite0"):
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["training"]["freeze_base"] is True
+        assert config["training"]["unfreeze_epoch"] == 5
+
+
 def test_mobilenetv3_uses_explicit_finite_input_preprocessing():
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     config_text = (

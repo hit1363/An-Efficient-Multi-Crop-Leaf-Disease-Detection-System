@@ -27,6 +27,15 @@ augmentation:
   horizontal_flip: true
   vertical_flip: false
   brightness_range: [0.95, 1.05]
+  class_aware:
+    enabled: true
+    max_train_samples: 500
+    rotation_range: 20
+    zoom_range: [0.9, 1.1]
+    horizontal_flip: true
+    vertical_flip: true
+    contrast_range: 0.15
+    brightness_range: [0.85, 1.15]
 
 training:
   fine_tuning:
@@ -34,7 +43,7 @@ training:
   epochs: 20
   freeze_base: true
   unfreeze_from_layer: 100
-  unfreeze_epoch: 6
+  unfreeze_epoch: 5
   fine_tune_learning_rate: 0.00001
 
 optimizer:
@@ -42,6 +51,9 @@ optimizer:
   learning_rate: 0.0003
   clipnorm: 1.0
   decay: 0.0
+
+loss:
+  name: "categorical_crossentropy"
 
 lr_schedule:
   type: "reduce_on_plateau"
@@ -51,7 +63,8 @@ lr_schedule:
   min_lr: 0.000001
 
 class_weights:
-  enabled: false
+  enabled: true
+  max_weight: 5.0
   normalize: true
 
 callbacks:
@@ -66,7 +79,7 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 5
+    patience: 6
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
@@ -89,6 +102,7 @@ seed: 42
 performance:
   validate_dataset_splits: false
   mixed_precision: true
+  jit_compile: true
   deterministic: true
   distribution: auto
   finite_batch_check: true

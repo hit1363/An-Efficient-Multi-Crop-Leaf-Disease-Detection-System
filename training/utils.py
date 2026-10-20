@@ -16,6 +16,9 @@ import tensorflow as tf
 from tensorflow import keras
 
 
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+
+
 def _dataset_class_names(directory, class_names=None):
     """Return source folder names in canonical order when aliases are used."""
     folders = sorted(
@@ -87,6 +90,70 @@ def _dataset_class_names(directory, class_names=None):
             f"missing={missing}, extra={extra}"
         )
     return [resolved[name] for name in canonical_expected]
+
+
+def get_training_class_counts(train_dir, class_names=None):
+    """Return canonical training-image counts without validating every split.
+
+    A harmonized benchmark's manifest is authoritative and substantially faster
+    than walking hosted image directories.  For ordinary directory datasets,
+    count supported files only in the training split.  The returned insertion
+    order is the model's categorical-label order.
+    """
+    source_class_names = _dataset_class_names(train_dir, class_names)
+    if source_class_names is None:
+        canonical_names = sorted(
+            name for name in os.listdir(train_dir)
+            if os.path.isdir(os.path.join(train_dir, name))
+        )
+        source_class_names = canonical_names
+    elif class_names is not None:
+        canonical_names = list(class_names)
+    else:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        try:
+            from dataset.taxonomy import CANONICAL_CLASSES
+
+            canonical_names = list(CANONICAL_CLASSES)
+        except ImportError:
+            canonical_names = list(source_class_names)
+
+    manifest_path = os.path.join(os.path.dirname(os.path.abspath(train_dir)), "split_manifest.csv")
+    if os.path.isfile(manifest_path):
+        manifest_counts = {name: 0 for name in canonical_names}
+        with open(manifest_path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("split") == "train":
+                    label = row.get("canonical_label")
+                    if label not in manifest_counts:
+                        raise ValueError(
+                            f"Training manifest has an unknown canonical label: {label!r}"
+                        )
+                    manifest_counts[label] += 1
+        return manifest_counts
+
+    counts = {}
+    for canonical_name, source_name in zip(canonical_names, source_class_names):
+        class_dir = os.path.join(train_dir, source_name)
+        counts[canonical_name] = sum(
+            os.path.isfile(os.path.join(class_dir, filename))
+            and os.path.splitext(filename)[1].lower() in _IMAGE_EXTENSIONS
+            for filename in os.listdir(class_dir)
+        )
+    return counts
+
+
+def get_minority_class_indices(class_counts, max_train_samples=500):
+    """Return label indices with positive counts below the configured cutoff."""
+    if max_train_samples is None:
+        return []
+    cutoff = int(max_train_samples)
+    if cutoff < 1:
+        raise ValueError("augmentation.class_aware.max_train_samples must be >= 1")
+    values = class_counts.values() if isinstance(class_counts, dict) else class_counts
+    return [index for index, count in enumerate(values) if 0 < int(count) < cutoff]
 
 
 def configure_runtime(config):
@@ -350,6 +417,8 @@ def load_dataset(
     image_size=(224, 224),
     preprocess_fn=None,
     augmentation=None,
+    minority_augmentation=None,
+    minority_class_indices=None,
     shuffle_buffer=1000,
     cache_mode="none",
     cache_memory_limit_gb=8.0,
@@ -365,7 +434,11 @@ def load_dataset(
         batch_size: Batch size for training
         image_size: Target image size (height, width)
         preprocess_fn: Deterministic preprocessing applied to both splits
-        augmentation: Random augmentation layer applied to training split only
+        augmentation: Baseline random augmentation applied to training only.
+        minority_augmentation: Replacement augmentation applied only to examples
+            whose labels appear in minority_class_indices.
+        minority_class_indices: Categorical-label indices eligible for the
+            class-aware augmentation policy.
         shuffle_buffer: Shuffle buffer size for the training split. Shuffling is
             applied AFTER caching so the order reshuffles every epoch instead of
             being frozen in the cache.
@@ -455,13 +528,49 @@ def load_dataset(
             buffer_size=shuffle_batches, seed=42, reshuffle_each_iteration=True
         )
 
-    # Augmentation only on training data. Runs each epoch because it sits
-    # after the cache.
+    # Augmentation only on training data. It runs after the cache each epoch.
+    # The stronger minority branch is evaluated only for the minority examples
+    # in a batch, avoiding oversampling and duplicate epoch exposure.
     if augmentation is not None:
-        train_ds = train_ds.map(
-            lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
-            num_parallel_calls=AUTOTUNE,
-        )
+        minority_indices = tuple(int(index) for index in (minority_class_indices or ()))
+
+        if minority_augmentation is not None and minority_indices:
+            minority_ids = tf.constant(minority_indices, dtype=tf.int32)
+
+            def _apply_class_aware_augmentation(x, y):
+                images = tf.cast(x, tf.float32)
+                baseline_images = augmentation(images, training=True)
+                label_indices = tf.argmax(y, axis=-1, output_type=tf.int32)
+                is_minority = tf.reduce_any(
+                    tf.equal(tf.expand_dims(label_indices, axis=-1), minority_ids),
+                    axis=-1,
+                )
+                batch_indices = tf.cast(tf.reshape(tf.where(is_minority), [-1]), tf.int32)
+
+                def _replace_minority_images():
+                    minority_images = minority_augmentation(
+                        tf.gather(images, batch_indices), training=True
+                    )
+                    return tf.tensor_scatter_nd_update(
+                        baseline_images,
+                        tf.expand_dims(batch_indices, axis=1),
+                        minority_images,
+                    )
+
+                return tf.cond(
+                    tf.size(batch_indices) > 0,
+                    _replace_minority_images,
+                    lambda: baseline_images,
+                ), y
+
+            train_ds = train_ds.map(
+                _apply_class_aware_augmentation, num_parallel_calls=AUTOTUNE
+            )
+        else:
+            train_ds = train_ds.map(
+                lambda x, y: (augmentation(tf.cast(x, tf.float32), training=True), y),
+                num_parallel_calls=AUTOTUNE,
+            )
 
     # Deterministic preprocessing on both splits.
     if preprocess_fn is not None:
@@ -664,18 +773,8 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
     return counts
 
 
-def create_augmentation_layer(config):
-    """
-    Create data augmentation layer
-
-    Args:
-        config: Augmentation configuration
-
-    Returns:
-        Keras Sequential model with augmentation layers
-    """
-    aug_config = config.get("augmentation", {})
-
+def _create_augmentation_layer(aug_config, name):
+    """Build one stochastic image augmentation layer from a flat config."""
     zoom_range = aug_config.get("zoom_range", [0.8, 1.2])
     if isinstance(zoom_range, (list, tuple)) and len(zoom_range) == 2:
         zoom_factor = (zoom_range[0] - 1.0, zoom_range[1] - 1.0)
@@ -704,7 +803,7 @@ def create_augmentation_layer(config):
 
     if not layers:
         layers.append(keras.layers.Identity())
-    augmentation = keras.Sequential(layers, name="training_augmentation")
+    augmentation = keras.Sequential(layers, name=name)
 
     brightness_range = aug_config.get("brightness_range")
     random_brightness = getattr(keras.layers, "RandomBrightness", None)
@@ -719,8 +818,41 @@ def create_augmentation_layer(config):
         augmentation.add(
             random_brightness(brightness_factor, value_range=(0, 255))
         )
-
     return augmentation
+
+
+def create_augmentation_layer(config):
+    """
+    Create data augmentation layer
+
+    Args:
+        config: Augmentation configuration
+
+    Returns:
+        Keras Sequential model with augmentation layers
+    """
+    return _create_augmentation_layer(
+        config.get("augmentation", {}), name="training_augmentation"
+    )
+
+
+def create_class_aware_augmentation_layers(config):
+    """Return baseline and optional minority augmentation layers."""
+    base_augmentation = create_augmentation_layer(config)
+    class_aware = config.get("augmentation", {}).get("class_aware", {})
+    if not class_aware.get("enabled", False):
+        return base_augmentation, None
+
+    minority_config = {
+        key: value
+        for key, value in class_aware.items()
+        if key not in {"enabled", "max_train_samples"}
+    }
+    if not minority_config:
+        raise ValueError("augmentation.class_aware needs at least one transform setting")
+    return base_augmentation, _create_augmentation_layer(
+        minority_config, name="minority_training_augmentation"
+    )
 
 
 class ThroughputCallback(keras.callbacks.Callback):

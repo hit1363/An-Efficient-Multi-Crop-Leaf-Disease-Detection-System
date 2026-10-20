@@ -24,7 +24,9 @@ try:
     from .utils import (
         load_dataset,
         compute_class_weights_from_counts,
-        create_augmentation_layer,
+        create_class_aware_augmentation_layers,
+        get_minority_class_indices,
+        get_training_class_counts,
         get_preprocess_fn,
         save_model_checkpoint,
         setup_callbacks,
@@ -41,7 +43,9 @@ except ImportError:
     from utils import (
         load_dataset,
         compute_class_weights_from_counts,
-        create_augmentation_layer,
+        create_class_aware_augmentation_layers,
+        get_minority_class_indices,
+        get_training_class_counts,
         get_preprocess_fn,
         save_model_checkpoint,
         setup_callbacks,
@@ -253,6 +257,7 @@ def save_run_metadata(
     applied_class_weights,
     split_counts,
     run_timestamp,
+    minority_class_names=None,
 ):
     """Persist the exact pre-fit configuration and data/model context."""
     model_config = config.get("model", {})
@@ -311,6 +316,15 @@ def save_run_metadata(
                 if applied_values
                 else None
             ),
+        },
+        "class_aware_augmentation": {
+            "enabled": bool(
+                config.get("augmentation", {}).get("class_aware", {}).get("enabled", False)
+            ),
+            "max_train_samples": config.get("augmentation", {}).get(
+                "class_aware", {}
+            ).get("max_train_samples"),
+            "class_names": list(minority_class_names or []),
         },
     }
     with open(
@@ -423,10 +437,19 @@ def compile_fine_tune_model(model, config, strategy):
             config["model"]["num_classes"],
         )
         optimizer = _maybe_loss_scale_optimizer(create_fine_tune_optimizer(config))
+        performance_config = config.get("performance", {})
+        compile_options = {}
+        if performance_config.get("steps_per_execution"):
+            compile_options["steps_per_execution"] = int(
+                performance_config["steps_per_execution"]
+            )
+        if "jit_compile" in performance_config:
+            compile_options["jit_compile"] = bool(performance_config["jit_compile"])
         model.compile(
             optimizer=optimizer,
             loss=_get_loss(config),
             metrics=metrics,
+            **compile_options,
         )
     return model
 
@@ -511,18 +534,28 @@ def _add_throughput_callback(callbacks, sample_count):
     return callbacks
 
 
-def _estimated_split_counts(train_dataset, val_dataset, batch_size):
+def _finite_dataset_steps(dataset, split_name):
+    """Return a positive finite batch count required for explicit fit steps."""
+    try:
+        steps = int(tf.data.experimental.cardinality(dataset).numpy())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Could not determine {split_name} dataset cardinality") from exc
+    if steps <= 0:
+        raise ValueError(
+            f"{split_name} dataset must have a known positive finite cardinality; "
+            f"got {steps}"
+        )
+    return steps
+
+
+def _estimated_split_counts(train_steps, val_steps, batch_size):
     """Return lightweight upper-bound sample totals without filesystem scans."""
-    def estimated_total(dataset):
-        try:
-            batches = int(tf.data.experimental.cardinality(dataset).numpy())
-        except (AttributeError, TypeError, ValueError):
-            return 0
-        return max(0, batches) * int(batch_size)
+    def estimated_total(steps):
+        return int(steps) * int(batch_size)
 
     return {
-        "train": {"total": estimated_total(train_dataset), "classes": {}},
-        "val": {"total": estimated_total(val_dataset), "classes": {}},
+        "train": {"total": estimated_total(train_steps), "classes": {}},
+        "val": {"total": estimated_total(val_steps), "classes": {}},
         "test": {"total": 0, "classes": {}},
     }
 
@@ -621,12 +654,27 @@ def train_model(config_path="config.yaml"):
     tf.random.set_seed(seed)
     np.random.seed(seed)
 
+    # Count the training split once up front. This supports class weighting and
+    # class-aware augmentation without enabling expensive cross-split hashing.
+    training_class_counts = get_training_class_counts(config["dataset"]["train_dir"])
+    expected_class_names = list(training_class_counts)
+    class_aware_config = config.get("augmentation", {}).get("class_aware", {})
+    minority_indices = get_minority_class_indices(
+        training_class_counts,
+        class_aware_config.get("max_train_samples", 500),
+    ) if class_aware_config.get("enabled", False) else []
+    minority_class_names = [expected_class_names[index] for index in minority_indices]
+    logger.info(
+        "Class-aware augmentation: enabled=%s, cutoff=%s, minority_classes=%s",
+        bool(class_aware_config.get("enabled", False)),
+        class_aware_config.get("max_train_samples"),
+        minority_class_names,
+    )
+
     # Load datasets
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
-    augmentation = (
-        create_augmentation_layer(config) if config.get("augmentation") else None
-    )
+    augmentation, minority_augmentation = create_class_aware_augmentation_layers(config)
     train_ds, val_ds, class_names = load_dataset(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
@@ -634,11 +682,25 @@ def train_model(config_path="config.yaml"):
         image_size=tuple(config["model"]["input_shape"][:2]),
         preprocess_fn=preprocess_fn,
         augmentation=augmentation,
+        minority_augmentation=minority_augmentation,
+        minority_class_indices=minority_indices,
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
+        cache_memory_limit_gb=config.get("dataset", {}).get("cache_memory_limit_gb", 8.0),
+        deterministic=config.get("performance", {}).get("deterministic", False),
+        class_names=expected_class_names,
     )
+    train_steps = _finite_dataset_steps(train_ds, "training")
+    val_steps = _finite_dataset_steps(val_ds, "validation")
     if config.get("performance", {}).get("finite_batch_check", False):
         validate_dataset_batch(train_ds, logger)
+    train_ds = train_ds.repeat()
+    logger.info(
+        "Using repeated training dataset with explicit steps_per_epoch=%d and "
+        "validation_steps=%d",
+        train_steps,
+        val_steps,
+    )
 
     logger.info(f"Found {len(class_names)} classes")
     logger.info(f"Classes: {class_names}")
@@ -648,6 +710,8 @@ def train_model(config_path="config.yaml"):
             f"Class count mismatch: dataset has {len(class_names)} classes, "
             f"but config model.num_classes={config['model']['num_classes']}"
         )
+    if class_names != expected_class_names:
+        raise ValueError("Training-count label order does not match dataset label order")
 
     weight_config = config.get("class_weights", {})
     deep_validation = bool(
@@ -677,16 +741,16 @@ def train_model(config_path="config.yaml"):
                     unsupported,
                 )
     else:
-        if weight_config.get("enabled", False):
-            raise ValueError(
-                "class_weights.enabled requires performance.validate_dataset_splits"
-            )
         logger.warning(
-            "Deep split validation is disabled; skipping split scans and duplicate hashing."
+            "Deep split validation is disabled; skipping cross-split scans and duplicate hashing."
         )
         split_counts = _estimated_split_counts(
-            train_ds, val_ds, config["dataset"]["batch_size"]
+            train_steps, val_steps, config["dataset"]["batch_size"]
         )
+        split_counts["train"] = {
+            "total": sum(training_class_counts.values()),
+            "classes": training_class_counts,
+        }
         logger.info("Estimated split totals: %s", split_counts)
 
     # Compute weights only for explicitly enabled imbalance-focused runs.
@@ -694,9 +758,7 @@ def train_model(config_path="config.yaml"):
     class_weights = None
     raw_class_weights = None
     if weight_config.get("enabled", False):
-        train_class_counts = [
-            split_counts["train"]["classes"][class_name] for class_name in class_names
-        ]
+        train_class_counts = [training_class_counts[class_name] for class_name in class_names]
         logger.info("Computing raw class weights from validated training counts...")
         raw_class_weights = compute_class_weights_from_counts(train_class_counts)
         logger.info("Computed raw class weights.")
@@ -768,6 +830,7 @@ def train_model(config_path="config.yaml"):
         applied_class_weights=class_weights,
         split_counts=split_counts,
         run_timestamp=run_timestamp,
+        minority_class_names=minority_class_names,
     )
     logger.info("Saved reproducibility metadata to: %s", run_dir)
 
@@ -794,6 +857,8 @@ def train_model(config_path="config.yaml"):
         epochs=initial_epochs,
         callbacks=callbacks,
         class_weight=class_weights,
+        steps_per_epoch=train_steps,
+        validation_steps=val_steps,
     )
 
     # The last Phase 1 epoch is not necessarily the best validation point.
@@ -852,6 +917,8 @@ def train_model(config_path="config.yaml"):
             epochs=total_epochs,
             callbacks=phase2_callbacks,
             class_weight=class_weights,
+            steps_per_epoch=train_steps,
+            validation_steps=val_steps,
         )
         final_weights, selected_phase, selected_loss = select_final_weights(
             phase1_best, phase1_best_weights, phase2_best

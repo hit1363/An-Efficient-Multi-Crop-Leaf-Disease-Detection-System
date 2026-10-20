@@ -10,6 +10,7 @@ tf = pytest.importorskip("tensorflow")
 from training.model import unfreeze_base_model
 from training.train import (
     _estimated_split_counts,
+    _finite_dataset_steps,
     build_metrics,
     compile_model,
     compile_fine_tune_model,
@@ -23,7 +24,10 @@ from training.utils import (
     compute_class_weights,
     compute_class_weights_from_counts,
     create_augmentation_layer,
+    get_minority_class_indices,
+    get_training_class_counts,
     get_checkpoint_path,
+    load_dataset,
     validate_dataset_splits,
 )
 from dataset.taxonomy import CANONICAL_CLASSES, LABEL_ALIASES
@@ -98,6 +102,22 @@ def test_gradient_clipping_is_applied_in_both_training_phases():
     assert fine_tune_optimizer.clipnorm == pytest.approx(1.0)
 
 
+def test_weighted_categorical_crossentropy_completes_a_small_fit():
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+    compile_model(model, _config())
+    features = tf.constant([[0.0] * 4, [1.0] * 4, [0.5] * 4, [0.25] * 4])
+    labels = tf.constant([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
+    dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(2)
+
+    history = model.fit(
+        dataset, epochs=1, class_weight={0: 1.0, 1: 3.0}, verbose=0
+    )
+
+    assert np.isfinite(history.history["loss"][0])
+
+
 def test_fine_tune_compile_creates_metrics_in_distribution_scope():
     strategy = tf.distribute.MirroredStrategy(devices=["/cpu:0"])
     with strategy.scope():
@@ -147,6 +167,62 @@ def test_class_weights_from_counts_match_directory_scan(tmp_path):
     )
 
     assert from_counts == pytest.approx(scanned)
+
+
+def test_training_counts_use_manifest_and_select_only_positive_minority_classes(tmp_path):
+    class_names = ["common", "rare", "empty"]
+    for class_name in class_names:
+        (tmp_path / "train" / class_name).mkdir(parents=True)
+    with (tmp_path / "split_manifest.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["split", "canonical_label"])
+        writer.writeheader()
+        writer.writerows(
+            [{"split": "train", "canonical_label": "common"}] * 600
+            + [{"split": "train", "canonical_label": "rare"}] * 350
+        )
+
+    counts = get_training_class_counts(tmp_path / "train", class_names=class_names)
+
+    assert counts == {"common": 600, "rare": 350, "empty": 0}
+    assert get_minority_class_indices(counts, max_train_samples=500) == [1]
+
+
+def test_class_aware_pipeline_replaces_only_minority_training_images(tmp_path):
+    for class_name in ("common", "rare"):
+        (tmp_path / "train" / class_name).mkdir(parents=True)
+        (tmp_path / "val" / class_name).mkdir(parents=True)
+    image = tf.zeros((4, 4, 3), dtype=tf.uint8)
+    for split in ("train", "val"):
+        for class_name in ("common", "rare"):
+            tf.io.write_file(
+                str(tmp_path / split / class_name / "sample.png"),
+                tf.io.encode_png(image),
+            )
+
+    baseline = tf.keras.layers.Lambda(lambda x: x + 1.0)
+    minority = tf.keras.layers.Lambda(lambda x: x + 10.0)
+    train_ds, val_ds, class_names = load_dataset(
+        tmp_path / "train",
+        tmp_path / "val",
+        batch_size=2,
+        image_size=(4, 4),
+        augmentation=baseline,
+        minority_augmentation=minority,
+        minority_class_indices=[1],
+        shuffle_buffer=0,
+        cache_mode="none",
+    )
+
+    train_images, train_labels = next(iter(train_ds))
+    values_by_label = {
+        int(label): float(tf.reduce_mean(train_images[index]).numpy())
+        for index, label in enumerate(tf.argmax(train_labels, axis=-1).numpy())
+    }
+    val_images, _ = next(iter(val_ds))
+
+    assert class_names == ["common", "rare"]
+    assert values_by_label == {0: 1.0, 1: 10.0}
+    assert float(tf.reduce_max(val_images).numpy()) == 0.0
 
 
 def test_run_metadata_reuses_supplied_split_counts(tmp_path):
@@ -250,17 +326,32 @@ def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():
     assert [metric.name for metric in metrics] == ["accuracy"]
 
 
-def test_estimated_split_counts_use_dataset_cardinality_without_file_scans():
+def test_explicit_steps_and_estimated_counts_use_finite_dataset_cardinality():
     train_dataset = tf.data.Dataset.range(3).batch(2)
     val_dataset = tf.data.Dataset.range(2).batch(2)
 
-    counts = _estimated_split_counts(train_dataset, val_dataset, batch_size=2)
+    train_steps = _finite_dataset_steps(train_dataset, "training")
+    val_steps = _finite_dataset_steps(val_dataset, "validation")
+    counts = _estimated_split_counts(train_steps, val_steps, batch_size=2)
 
+    assert train_steps == 2
+    assert val_steps == 1
     assert counts == {
         "train": {"total": 4, "classes": {}},
         "val": {"total": 2, "classes": {}},
         "test": {"total": 0, "classes": {}},
     }
+
+
+def test_explicit_steps_reject_unknown_or_empty_dataset_cardinality():
+    with pytest.raises(ValueError, match="known positive finite cardinality"):
+        _finite_dataset_steps(tf.data.Dataset.range(0).batch(2), "training")
+
+    unknown_dataset = tf.data.Dataset.from_generator(
+        lambda: iter([1, 2]), output_signature=tf.TensorSpec((), tf.int64)
+    ).batch(2)
+    with pytest.raises(ValueError, match="known positive finite cardinality"):
+        _finite_dataset_steps(unknown_dataset, "training")
 
 
 def test_split_validation_requires_matching_classes_and_train_support(tmp_path):
