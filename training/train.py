@@ -346,7 +346,7 @@ def _get_loss(config):
     """Resolve the loss function from config.
 
     Supports:
-      - ``categorical_crossentropy`` (default, passed as string)
+      - ``categorical_crossentropy`` (weighted per example at ``model.fit``)
       - ``focal_loss`` with optional ``loss.gamma`` and ``loss.alpha``
     """
     loss_cfg = config.get("loss", {})
@@ -604,6 +604,14 @@ def configure_runtime(config, logger):
         strategy.num_replicas_in_sync,
         len(physical_gpus),
     )
+    if len(physical_gpus) > 1 and strategy.num_replicas_in_sync < len(physical_gpus):
+        logger.warning(
+            "Multiple GPUs are visible (%d), but the active strategy has only %d "
+            "replica(s); this run will not use all visible GPUs. Check the Kaggle "
+            "runtime profile (performance.distribution and performance.multi_gpu).",
+            len(physical_gpus),
+            strategy.num_replicas_in_sync,
+        )
     return strategy
 
 
@@ -776,6 +784,14 @@ def train_model(config_path="config.yaml"):
             normalize=weight_config.get("normalize", True),
         )
         logger.info("Computed applied class weights.")
+        if class_weights:
+            applied_values = list(class_weights.values())
+            logger.info(
+                "Applying fit-time class weights: classes=%d, range=[%.4f, %.4f]",
+                len(applied_values),
+                min(applied_values),
+                max(applied_values),
+            )
     else:
         logger.info("Class weighting is disabled; skipping class-weight computation.")
 
@@ -905,8 +921,10 @@ def train_model(config_path="config.yaml"):
             phase2_callbacks.append(
                 keras.callbacks.EarlyStopping(
                     monitor=phase2_early_stopping.get("monitor", "val_loss"),
-                    patience=phase2_early_stopping.get("patience", 4),
-                    restore_best_weights=True,
+                    patience=phase2_early_stopping.get("patience", 6),
+                    restore_best_weights=phase2_early_stopping.get(
+                        "restore_best_weights", True
+                    ),
                     mode=phase2_early_stopping.get("mode", "min"),
                     verbose=1,
                 )

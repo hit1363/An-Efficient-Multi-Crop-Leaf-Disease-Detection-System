@@ -13,6 +13,11 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from .runtime_profiles import apply_runtime_profile
+except ImportError:  # Script execution from the training directory.
+    from runtime_profiles import apply_runtime_profile
+
 
 ARCHITECTURES = (
     "mobilenet_v1",
@@ -73,7 +78,9 @@ def _is_pareto_frontier(rows):
     return frontier
 
 
-def compare_models(data_dir, output_dir, architectures=ARCHITECTURES, epochs=None):
+def compare_models(
+    data_dir, output_dir, architectures=ARCHITECTURES, epochs=None, platform=None
+):
     repo_root = Path(__file__).resolve().parents[1]
     data_dir = Path(data_dir).resolve()
     output_dir = Path(output_dir).resolve()
@@ -125,6 +132,18 @@ def compare_models(data_dir, output_dir, architectures=ARCHITECTURES, epochs=Non
             config["training"]["epochs"] = int(epochs)
             config["training"]["unfreeze_epoch"] = min(
                 int(config["training"]["unfreeze_epoch"]), int(epochs)
+            )
+        if platform:
+            config = apply_runtime_profile(config, mode="full", platform=platform)
+            print(
+                f"Kaggle runtime settings for {architecture}: "
+                f"mode={config['runtime']['mode']}, "
+                f"batch_size={config['dataset']['batch_size']}, "
+                f"distribution={config['performance']['distribution']}, "
+                f"multi_gpu={config['performance'].get('multi_gpu', False)}, "
+                f"cache_mode={config['dataset'].get('cache_mode', 'none')}, "
+                f"steps_per_execution={config['performance']['steps_per_execution']}, "
+                f"jit_compile={config['performance']['jit_compile']}"
             )
         config_path = output_dir / "configs" / f"{architecture}.yaml"
         config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -258,12 +277,29 @@ def main():
         help="Comma-separated architecture names; defaults to the thesis comparison set",
     )
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument(
+        "--platform",
+        choices=("kaggle",),
+        default=None,
+        help="Apply a hosted runtime profile to generated training configs",
+    )
     args = parser.parse_args()
     architectures = tuple(name.strip() for name in args.architectures.split(",") if name.strip())
     unknown = sorted(set(architectures) - set(ARCHITECTURES))
     if unknown:
         parser.error(f"Unsupported comparison architectures: {unknown}")
-    print(json.dumps(compare_models(args.data_dir, args.output_dir, architectures, args.epochs), indent=2))
+    print(
+        json.dumps(
+            compare_models(
+                args.data_dir,
+                args.output_dir,
+                architectures,
+                args.epochs,
+                platform=args.platform,
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

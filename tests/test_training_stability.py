@@ -14,6 +14,7 @@ from training.train import (
     build_metrics,
     compile_model,
     compile_fine_tune_model,
+    configure_runtime,
     create_fine_tune_optimizer,
     phase_one_heading,
     save_run_metadata,
@@ -114,7 +115,18 @@ def test_gradient_clipping_is_applied_in_both_training_phases():
     assert fine_tune_optimizer.clipnorm == pytest.approx(1.0)
 
 
-def test_weighted_categorical_crossentropy_completes_a_small_fit():
+def test_weighted_fit_uses_categorical_crossentropy():
+    config = _config()
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+
+    compile_model(model, config)
+
+    assert model.loss == "categorical_crossentropy"
+
+
+def test_fit_time_class_weights_complete_a_small_fit():
     model = tf.keras.Sequential(
         [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
     )
@@ -128,6 +140,102 @@ def test_weighted_categorical_crossentropy_completes_a_small_fit():
     )
 
     assert np.isfinite(history.history["loss"][0])
+
+
+def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
+    strategy = tf.distribute.get_strategy()
+    base_model = tf.keras.Sequential(
+        [
+            tf.keras.layers.InputLayer((4,)),
+            tf.keras.layers.Dense(3, activation="relu", name="features"),
+        ],
+        name="synthetic_base",
+    )
+    base_model.trainable = False
+    inputs = tf.keras.Input((4,))
+    outputs = tf.keras.layers.Dense(2, activation="softmax")(
+        base_model(inputs)
+    )
+    model = tf.keras.Model(inputs, outputs)
+    config = _config()
+    config["performance"] = {"jit_compile": False}
+    features = tf.constant(
+        [[0.0, 0.1, 0.2, 0.3], [1.0, 0.9, 0.8, 0.7],
+         [0.2, 0.3, 0.4, 0.5], [0.8, 0.7, 0.6, 0.5]],
+        dtype=tf.float32,
+    )
+    labels = tf.constant(
+        [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]],
+        dtype=tf.float32,
+    )
+    train_dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(2)
+    val_dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(2)
+    class_weights = {0: 1.0, 1: 3.0}
+
+    compile_model(model, config)
+    warmup_callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=6, restore_best_weights=True, mode="min"
+        )
+    ]
+    warmup_history = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=1,
+        class_weight=class_weights,
+        callbacks=warmup_callbacks,
+        verbose=0,
+    )
+    assert np.isfinite(warmup_history.history["loss"][0])
+    assert not base_model.trainable_weights
+
+    unfreeze_base_model(base_model, unfreeze_from_layer=0)
+    compile_fine_tune_model(model, config, strategy)
+    fine_tune_callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=6, restore_best_weights=True, mode="min"
+        )
+    ]
+    fine_tune_history = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        initial_epoch=1,
+        epochs=2,
+        class_weight=class_weights,
+        callbacks=fine_tune_callbacks,
+        verbose=0,
+    )
+
+    assert base_model.trainable_weights
+    assert np.isfinite(fine_tune_history.history["loss"][0])
+
+
+def test_runtime_warns_when_multiple_gpus_are_visible_but_strategy_is_single(
+    monkeypatch,
+):
+    warnings = []
+    logger = SimpleNamespace(
+        info=lambda *args: None,
+        warning=lambda *args: warnings.append(args),
+    )
+    monkeypatch.setattr(
+        tf.config, "list_physical_devices", lambda device_type: [object(), object()]
+    )
+    monkeypatch.setattr(tf.keras.mixed_precision, "set_global_policy", lambda _: None)
+
+    strategy = configure_runtime(
+        {
+            "performance": {
+                "mixed_precision": False,
+                "distribution": "single",
+                "multi_gpu": False,
+            }
+        },
+        logger,
+    )
+
+    assert strategy.num_replicas_in_sync == 1
+    assert any("Multiple GPUs are visible" in entry[0] for entry in warnings)
 
 
 def test_fine_tune_compile_creates_metrics_in_distribution_scope():
@@ -287,6 +395,10 @@ def test_run_metadata_reuses_supplied_split_counts(tmp_path):
     assert metadata["datasets"]["train"] == {
         "path": "/data/train",
         **split_counts["train"],
+    }
+    assert metadata["class_weights"]["applied_range"] == {
+        "min": pytest.approx(0.75),
+        "max": pytest.approx(1.5),
     }
 
 

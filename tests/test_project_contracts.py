@@ -103,6 +103,12 @@ def test_optimized_runtime_defaults_are_present():
         assert "terminate_on_nan: true" in config_text
         assert "distribution: auto" in config_text
 
+    benchmark = yaml.safe_load(
+        (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
+    )
+    assert benchmark["dataset"]["batch_size"] == 64
+    assert benchmark["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
+
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     train_text = (ROOT / "training" / "train.py").read_text(encoding="utf-8")
     assert "MirroredStrategy" in utils_text
@@ -134,12 +140,29 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         class_aware = config["augmentation"]["class_aware"]
         assert class_aware["enabled"] is True
         assert class_aware["max_train_samples"] == 500
+        assert class_aware["rotation_range"] == 20
+        assert class_aware["zoom_range"] == [0.9, 1.1]
+        assert class_aware["horizontal_flip"] is True
+        assert class_aware["vertical_flip"] is True
+        assert class_aware["contrast_range"] == 0.15
+        assert class_aware["brightness_range"] == [0.85, 1.15]
         assert config["callbacks"]["checkpoint"]["monitor"] == "val_loss"
         assert config["callbacks"]["checkpoint"]["mode"] == "min"
+        assert config["callbacks"]["checkpoint"]["save_best_only"] is True
         assert config["callbacks"]["early_stopping"]["patience"] == 6
+        assert config["callbacks"]["early_stopping"]["monitor"] == "val_loss"
+        assert config["callbacks"]["early_stopping"]["mode"] == "min"
+        assert config["callbacks"]["early_stopping"]["restore_best_weights"] is True
         assert config["callbacks"]["fine_tuning_early_stopping"]["patience"] == 6
+        assert config["callbacks"]["fine_tuning_early_stopping"]["monitor"] == "val_loss"
+        assert config["callbacks"]["fine_tuning_early_stopping"]["mode"] == "min"
+        assert config["callbacks"]["fine_tuning_early_stopping"]["restore_best_weights"] is True
+        assert config["class_weights"]["max_weight"] == 5.0
+        assert config["class_weights"]["normalize"] is True
         assert config["performance"]["mixed_precision"] is True
         assert config["performance"]["jit_compile"] is True
+        assert config["dataset"]["cache_mode"] == "auto"
+        assert config["dataset"]["cache_memory_limit_gb"] == 8.0
 
     for architecture in ("benchmark", "mobilenetv2", "mobilenetv3_small", "efficientnet_b0", "efficientnet_lite0"):
         config = yaml.safe_load(
@@ -191,6 +214,13 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert "--representative_data" in code
             assert "--arch" in code
             assert "train.py" in code and "--config" in code
+            if platform == "kaggle":
+                assert "apply_runtime_profile" in code
+                assert "platform='kaggle'" in code
+                assert "CUDA_VISIBLE_DEVICES" not in code
+                assert "os.environ.get('TRAINING_RUN_MODE', 'full')" in code
+                assert "multi_gpu=" in code
+                assert "cache_mode=" in code
 
             config = yaml.safe_load(
                 (ROOT / "training" / f"config_{architecture}.yaml").read_text(
@@ -200,6 +230,58 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
             assert config["dataset"]["cache_mode"] == "auto"
             assert config["dataset"]["cache_memory_limit_gb"] == 8.0
             assert config["performance"]["distribution"] == "auto"
+
+    generic_kaggle = json.loads(
+        (ROOT / "notebooks" / "kaggle_training_notebook.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    shell = InteractiveShell()
+    for notebook_path, notebook in (
+        ("kaggle_training_notebook.ipynb", generic_kaggle),
+        (
+            "kaggle_harmonized_comparison.ipynb",
+            json.loads(
+                (ROOT / "notebooks" / "kaggle_harmonized_comparison.ipynb").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        ),
+    ):
+        for index, cell in enumerate(notebook["cells"]):
+            if cell["cell_type"] != "code":
+                continue
+            source = "".join(cell.get("source", []))
+            transformed_source = shell.transform_cell(source)
+            compile(transformed_source, f"{notebook_path}:cell{index}", "exec")
+
+    generic_kaggle_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in generic_kaggle["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "apply_runtime_profile(cfg, mode='full', platform='kaggle')" in generic_kaggle_code
+    assert "config_mobilenetv2_kaggle_safe.yaml" in generic_kaggle_code
+    assert "config_efficientnet_b0_kaggle_safe.yaml" in generic_kaggle_code
+    assert "with open(cfg_path, 'w')" not in generic_kaggle_code
+    assert "CUDA_VISIBLE_DEVICES" not in generic_kaggle_code
+    assert "multi_gpu=" in generic_kaggle_code
+    assert "cache_mode=" in generic_kaggle_code
+    assert "TF_FORCE_GPU_ALLOW_GROWTH" in generic_kaggle_code
+    assert "-X faulthandler -u train.py" in generic_kaggle_code
+
+    harmonized_kaggle = (ROOT / "notebooks" / "kaggle_harmonized_comparison.ipynb").read_text(
+        encoding="utf-8"
+    )
+    assert "'--platform', 'kaggle'" in harmonized_kaggle
+    assert "TF_FORCE_GPU_ALLOW_GROWTH" in harmonized_kaggle
+    assert "CUDA_VISIBLE_DEVICES" not in harmonized_kaggle
+    compare_models_text = (ROOT / "training" / "compare_models.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Kaggle runtime settings for" in compare_models_text
+    assert "multi_gpu={config['performance'].get('multi_gpu', False)}" in compare_models_text
+    assert "cache_mode={config['dataset'].get('cache_mode', 'none')}" in compare_models_text
 
 
 def test_standalone_notebooks_separate_clone_and_dependency_install_cells():

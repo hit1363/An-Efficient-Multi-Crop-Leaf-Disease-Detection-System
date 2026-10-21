@@ -51,6 +51,26 @@ def apply_runtime_profile(config, mode="smoke", platform=None):
         runtime_config["callbacks"]["tensorboard"]["enabled"] = False
         runtime_config["metrics"] = ["accuracy"]
 
+    # Kaggle's two-T4 runs previously crashed with mirrored execution plus XLA.
+    # Keep both GPUs visible and use MirroredStrategy when available, while
+    # leaving XLA off. A global batch of 64 gives 32 examples per T4; the batch
+    # selector falls back to 32 for a single-GPU session and 16 for CPU-only.
+    # Apply this override to both smoke and full runs; shared configs retain
+    # their XLA setting for compatible environments.
+    if str(platform or "").strip().lower() == "kaggle":
+        dataset = runtime_config["dataset"]
+        dataset["batch_size"] = 64
+        dataset["batch_size_fallbacks"] = [64, 32, 16]
+        dataset["auto_batch_fallback"] = True
+        runtime_config["performance"].update(
+            {
+                "steps_per_execution": 1,
+                "jit_compile": False,
+                "distribution": "auto",
+                "multi_gpu": True,
+            }
+        )
+
     runtime_config.setdefault("runtime", {}).update(
         {"mode": normalized_mode, "platform": platform}
     )

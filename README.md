@@ -92,6 +92,15 @@ python training/train.py --config training/config_mobilenetv3_small.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
+Training configs use bounded, normalized weighted categorical cross-entropy by
+default, with class weights computed from the training split. This emphasizes
+minority classes without applying the weights twice through Keras
+`class_weight`. Class-aware augmentation is enabled for underrepresented
+classes, and validation-loss early stopping restores the best checkpoint
+(patience 6). Pretrained backbones use a short frozen-head warmup before
+fine-tuning; ShuffleNetV2 is trained end-to-end because its backbone is
+randomly initialized.
+
 Run the full mobile model comparison after preparing the benchmark:
 
 ```bash

@@ -14,8 +14,8 @@ dataset:
   train_dir: "../dataset/processed_harmonized/train"
   val_dir: "../dataset/processed_harmonized/val"
   test_dir: "../dataset/processed_harmonized/test"
-  batch_size: 32
-  batch_size_fallbacks: [32, 16, 8]
+  batch_size: 64
+  batch_size_fallbacks: [64, 32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
   cache_mode: "auto"
@@ -86,6 +86,7 @@ callbacks:
     monitor: "val_loss"
     patience: 6
     mode: "min"
+    restore_best_weights: true
   tensorboard:
     enabled: false
   csv_logger:

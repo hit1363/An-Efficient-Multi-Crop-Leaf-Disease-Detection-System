@@ -84,7 +84,7 @@ lr_schedule:
 
 # Loss Function
 loss:
-  name: "categorical_crossentropy" # Options: categorical_crossentropy, focal_loss
+  name: "categorical_crossentropy" # Fit-time class weights provide weighted cross-entropy.
   # For focal_loss only:
   # gamma: 2.0        # focusing parameter (higher = more focus on hard examples)
   # alpha: 0.25       # weight-balancing parameter
@@ -120,6 +120,7 @@ callbacks:
     monitor: "val_loss"
     patience: 6
     mode: "min"
+    restore_best_weights: true
 
   # TensorBoard
   tensorboard:
