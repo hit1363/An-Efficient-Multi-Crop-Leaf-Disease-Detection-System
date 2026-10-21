@@ -126,6 +126,27 @@ python quantization/post_training_quant.py \
 
 Use one of the model-specific notebooks named `colab_<model>_training.ipynb` or `kaggle_<model>_training.ipynb`. Each standalone notebook reads the platform dataset, trains one model, evaluates it, exports dynamic-range and full INT8 TFLite models, and benchmarks CPU inference. The existing combined notebooks remain available for backward compatibility.
 
+Hosted notebooks support two runtime profiles through `TRAINING_RUN_MODE`:
+
+- `smoke` (the default) uses a short run, fast startup settings, moderate
+  execution batching, no class-aware augmentation, and no TensorBoard
+  histogram work. Use it to verify the dataset, GPU, model, and export path.
+- `full` preserves the model-specific epoch and fine-tuning settings for final
+  accuracy measurements.
+
+Set the mode before running the training cell:
+
+```python
+import os
+os.environ["TRAINING_RUN_MODE"] = "full"  # or "smoke"
+```
+
+For a balanced workflow, run `smoke` first and then rerun the notebook from
+the configuration cell with `full`. EfficientNet-Lite0 benefits from a
+persistent TensorFlow Hub cache; ShuffleNetV2 0.5x is randomly initialized in
+this project and therefore requires its own full-training schedule rather than
+the transfer-learning assumptions used by the ImageNet-backed models.
+
 ## Preprocessing Alignment
 
 Training and quantization use TensorFlow preprocess_input for the selected architecture. The Flutter app must match the same normalization:
