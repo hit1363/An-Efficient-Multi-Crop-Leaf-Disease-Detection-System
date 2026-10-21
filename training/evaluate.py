@@ -149,7 +149,11 @@ def load_test_dataset(
     class_names=None,
 ):
     """Load test dataset"""
-    source_class_names = _dataset_class_names(test_dir, class_names)
+    source_class_names = (
+        _dataset_class_names(test_dir, class_names)
+        if os.path.isdir(test_dir)
+        else class_names
+    )
     canonical_class_names = class_names
     if source_class_names is not None and canonical_class_names is None:
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

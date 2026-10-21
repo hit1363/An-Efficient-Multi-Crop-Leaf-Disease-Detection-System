@@ -75,9 +75,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 # Include only folders that contain actual Python package code
-include = ["models*", "training*", "quantization*"]
-# Exclude folders that are only for data, notebooks, or outputs
-exclude = ["dataset*", "notebooks*", "results*"]
+include = ["dataset*", "models*", "training*", "quantization*"]
+# Exclude folders that are only for notebooks or generated outputs
+exclude = ["notebooks*", "results*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

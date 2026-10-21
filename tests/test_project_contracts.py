@@ -252,10 +252,10 @@ def test_all_colab_notebooks_include_kaggle_dataset_setup():
         assert "files.upload()" in code, path
         assert "mdhasibultamim/multi-crop-leaf-disease" in code, path
         assert "zipfile.ZipFile" in code, path
-        assert "KAGGLE_DATASET_BASE" in code, path
-        assert "%pip install -q kaggle" in code, path
-        assert "kaggle datasets download" in code, path
-        assert "DATASET_BASE = os.path.join(KAGGLE_DATASET_BASE, 'processed')" in code, path
+        assert "pip\", \"install\", \"-q\", \"kaggle\"" in code, path
+        assert "\"kaggle\", \"datasets\", \"download\"" in code, path
+        assert "DATASET_PATH = DATA_ROOT / \"processed\"" in code, path
+        assert "DATASET_BASE = str(DATASET_PATH)" in code, path
         for split in ("train", "val", "test"):
             assert f'"{split}"' in code, path
 
