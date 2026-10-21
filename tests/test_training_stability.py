@@ -11,11 +11,13 @@ from training.model import unfreeze_base_model
 from training.train import (
     _estimated_split_counts,
     _finite_dataset_steps,
+    _fit_verbosity,
     build_metrics,
     compile_model,
     compile_fine_tune_model,
     configure_runtime,
     create_fine_tune_optimizer,
+    EpochThroughputLogger,
     phase_one_heading,
     save_run_metadata,
     select_final_weights,
@@ -29,7 +31,9 @@ from training.utils import (
     get_minority_class_indices,
     get_training_class_counts,
     get_checkpoint_path,
+    get_epoch_log_mode,
     load_dataset,
+    setup_callbacks,
     validate_dataset_splits,
 )
 from dataset.taxonomy import CANONICAL_CLASSES, LABEL_ALIASES
@@ -142,7 +146,7 @@ def test_fit_time_class_weights_complete_a_small_fit():
     assert np.isfinite(history.history["loss"][0])
 
 
-def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
+def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):
     strategy = tf.distribute.get_strategy()
     base_model = tf.keras.Sequential(
         [
@@ -158,6 +162,7 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
     )
     model = tf.keras.Model(inputs, outputs)
     config = _config()
+    config["training"]["log_mode"] = "summary"
     config["performance"] = {"jit_compile": False}
     features = tf.constant(
         [[0.0, 0.1, 0.2, 0.3], [1.0, 0.9, 0.8, 0.7],
@@ -176,7 +181,8 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
     warmup_callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss", patience=6, restore_best_weights=True, mode="min"
-        )
+        ),
+        EpochThroughputLogger(samples=4, log_mode="summary"),
     ]
     warmup_history = model.fit(
         train_dataset,
@@ -194,7 +200,8 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
     fine_tune_callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss", patience=6, restore_best_weights=True, mode="min"
-        )
+        ),
+        EpochThroughputLogger(samples=4, log_mode="summary"),
     ]
     fine_tune_history = model.fit(
         train_dataset,
@@ -208,6 +215,56 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases():
 
     assert base_model.trainable_weights
     assert np.isfinite(fine_tune_history.history["loss"][0])
+    summary_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("Epoch ")
+    ]
+    assert len(summary_lines) == 2
+    assert summary_lines[0].startswith("Epoch 1/1 - loss:")
+    assert "val_loss:" in summary_lines[0]
+    assert "val_accuracy:" in summary_lines[0]
+    assert "lr:" in summary_lines[0]
+    assert "examples_per_second:" in summary_lines[0]
+    assert summary_lines[1].startswith("Epoch 2/2 - loss:")
+
+
+def test_summary_mode_silences_keras_callback_chatter(tmp_path):
+    config = {
+        "training": {"log_mode": "summary"},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "optimizer": {"learning_rate": 1e-3},
+        "lr_schedule": {"type": "cosine_decay", "decay_epochs": 2},
+        "callbacks": {
+            "checkpoint": {
+                "enabled": True,
+                "directory": str(tmp_path),
+                "save_weights_only": True,
+            },
+            "early_stopping": {"enabled": True},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    callbacks = setup_callbacks(config)
+
+    assert callbacks
+    assert all(callback.verbose == 0 for callback in callbacks)
+    assert get_epoch_log_mode(config) == "summary"
+    assert _fit_verbosity(get_epoch_log_mode(config)) == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_verbosity"), [("summary", 0), ("progress", 1)]
+)
+def test_training_log_mode_controls_keras_batch_progress(mode, expected_verbosity):
+    assert _fit_verbosity(mode) == expected_verbosity
+
+
+def test_training_log_mode_rejects_unknown_value():
+    with pytest.raises(ValueError, match="training.log_mode"):
+        get_epoch_log_mode({"training": {"log_mode": "compact"}})
 
 
 def test_runtime_warns_when_multiple_gpus_are_visible_but_strategy_is_single(

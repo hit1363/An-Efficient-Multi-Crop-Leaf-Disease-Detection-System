@@ -39,6 +39,7 @@ augmentation:
 
 training:
   epochs: 50
+  log_mode: summary # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100
   unfreeze_epoch: 5

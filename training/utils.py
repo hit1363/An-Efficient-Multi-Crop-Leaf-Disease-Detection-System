@@ -1092,6 +1092,20 @@ def save_model_checkpoint(model, config, checkpoint_name="best_model"):
         model.save(checkpoint_path)
     return checkpoint_path
 
+
+def get_epoch_log_mode(config):
+    """Return and validate the configured Keras training output mode."""
+    mode = str(
+        config.get("training", {}).get("log_mode", "summary")
+    ).strip().lower()
+    if mode not in {"summary", "progress"}:
+        raise ValueError(
+            "training.log_mode must be either 'summary' or 'progress'; "
+            f"got {mode!r}"
+        )
+    return mode
+
+
 def setup_callbacks(
     config,
     csv_append=None,
@@ -1110,6 +1124,7 @@ def setup_callbacks(
     callbacks = []
     callback_config = config.get("callbacks", {})
     performance_config = config.get("performance", {})
+    callback_verbose = 1 if get_epoch_log_mode(config) == "progress" else 0
 
     if performance_config.get("terminate_on_nan", True):
         callbacks.append(keras.callbacks.TerminateOnNaN())
@@ -1138,7 +1153,7 @@ def setup_callbacks(
                 save_weights_only=save_weights_only,
                 mode=checkpoint_config.get("mode", "max"),
                 save_freq=checkpoint_config.get("save_freq", "epoch"),
-                verbose=1,
+                verbose=callback_verbose,
             )
         )
 
@@ -1151,7 +1166,7 @@ def setup_callbacks(
                 patience=es_config.get("patience", 10),
                 restore_best_weights=es_config.get("restore_best_weights", True),
                 mode=es_config.get("mode", "min"),
-                verbose=1,
+                verbose=callback_verbose,
             )
         )
 
@@ -1168,7 +1183,7 @@ def setup_callbacks(
                 factor=lr_config.get("factor", 0.5),
                 patience=lr_config.get("patience", 5),
                 min_lr=lr_config.get("min_lr", 1e-7),
-                verbose=1,
+                verbose=callback_verbose,
             )
         )
     elif lr_type == "exponential_decay":
@@ -1182,7 +1197,7 @@ def setup_callbacks(
             return initial_lr * (decay_rate ** (exponent / max(decay_epochs, 1.0)))
 
         callbacks.append(
-            keras.callbacks.LearningRateScheduler(schedule, verbose=1)
+            keras.callbacks.LearningRateScheduler(schedule, verbose=callback_verbose)
         )
     elif lr_type == "cosine_decay":
         decay_epochs = float(
@@ -1196,7 +1211,7 @@ def setup_callbacks(
             return initial_lr * (alpha + (1.0 - alpha) * cosine)
 
         callbacks.append(
-            keras.callbacks.LearningRateScheduler(schedule, verbose=1)
+            keras.callbacks.LearningRateScheduler(schedule, verbose=callback_verbose)
         )
 
     # TensorBoard

@@ -41,6 +41,17 @@ def test_full_profile_preserves_model_settings():
     assert full["performance"]["jit_compile"] is True
     assert full["training"]["epochs"] == 35
     assert full["runtime"] == {"mode": "full", "platform": "colab"}
+    assert full["training"]["log_mode"] == "summary"
+
+
+def test_runtime_profile_preserves_explicit_progress_logging():
+    runtime = apply_runtime_profile(
+        {"training": {"epochs": 10, "log_mode": "progress"}},
+        "full",
+        platform="kaggle",
+    )
+
+    assert runtime["training"]["log_mode"] == "progress"
 
 
 @pytest.mark.parametrize("mode", ["smoke", "full"])

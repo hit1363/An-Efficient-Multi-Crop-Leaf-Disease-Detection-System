@@ -135,6 +135,7 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
                 encoding="utf-8"
             )
         )
+        assert config["training"]["log_mode"] == "summary"
         assert config["loss"]["name"] == "categorical_crossentropy"
         assert config["class_weights"]["enabled"] is True
         class_aware = config["augmentation"]["class_aware"]

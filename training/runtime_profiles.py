@@ -25,6 +25,7 @@ def apply_runtime_profile(config, mode="smoke", platform=None):
     runtime_config.setdefault("performance", {})
     runtime_config.setdefault("training", {})
     runtime_config.setdefault("callbacks", {}).setdefault("tensorboard", {})
+    runtime_config["training"].setdefault("log_mode", "summary")
 
     if normalized_mode == "smoke":
         dataset = runtime_config["dataset"]

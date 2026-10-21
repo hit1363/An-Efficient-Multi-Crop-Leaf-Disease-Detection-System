@@ -35,6 +35,7 @@ try:
         validate_dataset_splits,
         choose_batch_size,
         validate_dataset_batch,
+        get_epoch_log_mode,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -54,6 +55,7 @@ except ImportError:
         validate_dataset_splits,
         choose_batch_size,
         validate_dataset_batch,
+        get_epoch_log_mode,
     )
 
 
@@ -232,6 +234,11 @@ def phase_one_heading(freeze_base):
     if freeze_base:
         return "Phase 1: Training classifier head (base frozen)"
     return "Phase 1: Training full model (backbone trainable)"
+
+
+def _fit_verbosity(log_mode):
+    """Select Keras output verbosity for compact or live-progress logging."""
+    return 0 if log_mode == "summary" else 1
 
 
 def _git_revision(repo_dir):
@@ -497,18 +504,26 @@ def create_fine_tune_optimizer(config):
 
 
 class EpochThroughputLogger(keras.callbacks.Callback):
-    """Log training examples per second for runtime comparisons."""
+    """Record throughput and optionally emit a compact per-epoch summary."""
 
-    def __init__(self, samples):
+    def __init__(self, samples, log_mode="progress"):
         super().__init__()
         self.samples = max(0, int(samples))
+        self.log_mode = log_mode
         self.epoch_started = None
         self.train_elapsed = None
+        self.epoch_learning_rate = None
 
     def on_epoch_begin(self, epoch, logs=None):
         del epoch, logs
         self.epoch_started = time.perf_counter()
         self.train_elapsed = None
+        try:
+            self.epoch_learning_rate = float(
+                keras.backend.get_value(self.model.optimizer.learning_rate)
+            )
+        except (AttributeError, TypeError, ValueError):
+            self.epoch_learning_rate = None
 
     def on_test_begin(self, logs=None):
         del logs
@@ -516,19 +531,51 @@ class EpochThroughputLogger(keras.callbacks.Callback):
             self.train_elapsed = max(time.perf_counter() - self.epoch_started, 1e-9)
 
     def on_epoch_end(self, epoch, logs=None):
-        del epoch
         elapsed = self.train_elapsed or max(
             time.perf_counter() - self.epoch_started, 1e-9
         )
         throughput = self.samples / elapsed
         if logs is not None:
             logs["examples_per_second"] = throughput
-        print(f" - examples_per_second: {throughput:.1f}")
+        if self.log_mode == "summary":
+            metrics = logs or {}
+            total_epochs = self.params.get("epochs", epoch + 1)
+            fields = [f"Epoch {epoch + 1}/{total_epochs}"]
+            for label, candidates in (
+                ("loss", ("loss",)),
+                (
+                    "accuracy",
+                    ("accuracy", "categorical_accuracy", "sparse_categorical_accuracy"),
+                ),
+                ("val_loss", ("val_loss",)),
+                (
+                    "val_accuracy",
+                    (
+                        "val_accuracy",
+                        "val_categorical_accuracy",
+                        "val_sparse_categorical_accuracy",
+                    ),
+                ),
+            ):
+                value = next(
+                    (metrics[key] for key in candidates if key in metrics), None
+                )
+                if value is not None:
+                    try:
+                        fields.append(f"{label}: {float(value):.4f}")
+                    except (TypeError, ValueError):
+                        continue
+            if self.epoch_learning_rate is not None:
+                fields.append(f"lr: {self.epoch_learning_rate:.3e}")
+            fields.append(f"examples_per_second: {throughput:.1f}")
+            print(" - ".join(fields), flush=True)
+        else:
+            print(f" - examples_per_second: {throughput:.1f}", flush=True)
 
 
-def _add_throughput_callback(callbacks, sample_count):
+def _add_throughput_callback(callbacks, sample_count, log_mode="progress"):
     """Place throughput before CSVLogger so the rate is persisted in history."""
-    throughput_callback = EpochThroughputLogger(sample_count)
+    throughput_callback = EpochThroughputLogger(sample_count, log_mode=log_mode)
     csv_logger_index = next(
         (
             index
@@ -631,6 +678,8 @@ def train_model(config_path="config.yaml"):
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
+    config.setdefault("training", {}).setdefault("log_mode", "summary")
+    log_mode = get_epoch_log_mode(config)
 
     # Setup logging
     logger = setup_logging(config)
@@ -865,7 +914,9 @@ def train_model(config_path="config.yaml"):
     # Setup callbacks
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config, include_throughput=False)
-    _add_throughput_callback(callbacks, split_counts["train"]["total"])
+    _add_throughput_callback(
+        callbacks, split_counts["train"]["total"], log_mode=log_mode
+    )
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
 
@@ -883,6 +934,7 @@ def train_model(config_path="config.yaml"):
         class_weight=class_weights,
         steps_per_epoch=train_steps,
         validation_steps=val_steps,
+        verbose=_fit_verbosity(log_mode),
     )
 
     # The last Phase 1 epoch is not necessarily the best validation point.
@@ -926,11 +978,13 @@ def train_model(config_path="config.yaml"):
                         "restore_best_weights", True
                     ),
                     mode=phase2_early_stopping.get("mode", "min"),
-                    verbose=1,
+                    verbose=_fit_verbosity(log_mode),
                 )
             )
         _add_throughput_callback(
-            phase2_callbacks, split_counts["train"]["total"]
+            phase2_callbacks,
+            split_counts["train"]["total"],
+            log_mode=log_mode,
         )
         phase2_best = BestValidationWeights()
         phase2_callbacks.append(phase2_best)
@@ -945,6 +999,7 @@ def train_model(config_path="config.yaml"):
             class_weight=class_weights,
             steps_per_epoch=train_steps,
             validation_steps=val_steps,
+            verbose=_fit_verbosity(log_mode),
         )
         final_weights, selected_phase, selected_loss = select_final_weights(
             phase1_best, phase1_best_weights, phase2_best
