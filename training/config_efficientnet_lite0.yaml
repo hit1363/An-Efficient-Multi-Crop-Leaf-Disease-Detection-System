@@ -19,22 +19,22 @@ dataset:
   train_dir: "../dataset/processed_harmonized/train"
   val_dir: "../dataset/processed_harmonized/val"
   test_dir: "../dataset/processed_harmonized/test"
-  batch_size: 64
-  batch_size_fallbacks: [64, 32, 16]
+  batch_size: 32
+  batch_size_fallbacks: [32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
-  cache_mode: "auto"
+  cache_mode: "none"
   cache_memory_limit_gb: 8.0
 
 # Data Augmentation
 augmentation:
-  rotation_range: 20
+  rotation_range: 25
   zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
   brightness_range: [0.9, 1.1]
   class_aware:
-    enabled: true
+    enabled: false
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]
@@ -47,17 +47,17 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 50
+  epochs: 10
   log_mode: summary # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100 # Layer index to start unfreezing from
-  unfreeze_epoch: 5 # Train the head briefly before fine-tuning
-  fine_tune_learning_rate: 0.0001
+  unfreeze_epoch: 6 # Train the head briefly before fine-tuning
+  fine_tune_learning_rate: 0.000005
 
 # Optimizer Settings
 optimizer:
   name: "adam" # Options: adam, sgd, rmsprop
-  learning_rate: 0.001
+  learning_rate: 0.0003
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
@@ -72,8 +72,8 @@ optimizer:
 lr_schedule:
   type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
   monitor: "val_loss"
-  factor: 0.5
-  patience: 5
+  factor: 0.2
+  patience: 1
   min_lr: 1.0e-7
   # For exponential_decay:
   # decay_steps: 1000
@@ -93,7 +93,7 @@ loss:
 
 # Class Weights (for imbalanced dataset)
 class_weights:
-  enabled: true
+  enabled: false
   auto_compute: true # Automatically compute from dataset
   max_weight: 5.0
   normalize: true
@@ -114,12 +114,12 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 6
+    patience: 2
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
     monitor: "val_loss"
-    patience: 6
+    patience: 2
     mode: "min"
     restore_best_weights: true
 

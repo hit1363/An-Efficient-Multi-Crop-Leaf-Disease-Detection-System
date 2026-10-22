@@ -5,7 +5,7 @@ model:
   input_shape: [224, 224, 3]
   num_classes: 72
   weights: "imagenet"
-  dropout_rate: 0.35
+  dropout_rate: 0.5
   classifier_units: 256
   # Normalize image tensors in the dataset pipeline to [-1, 1].
   include_preprocessing: false
@@ -15,21 +15,21 @@ dataset:
   train_dir: "../dataset/processed_harmonized/train"
   val_dir: "../dataset/processed_harmonized/val"
   test_dir: "../dataset/processed_harmonized/test"
-  batch_size: 128
-  batch_size_fallbacks: [128, 64, 32]
+  batch_size: 32
+  batch_size_fallbacks: [32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
-  cache_mode: "auto"
+  cache_mode: "none"
   cache_memory_limit_gb: 8.0
 
 augmentation:
-  rotation_range: 15
-  zoom_range: [0.95, 1.05]
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
   brightness_range: [0.9, 1.1]
   class_aware:
-    enabled: true
+    enabled: false
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]
@@ -41,21 +41,16 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 35
+  epochs: 10
   log_mode: summary # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100
-  unfreeze_epoch: 5
-  fine_tune_learning_rate: 0.00005
-  fine_tune_optimizer:
-    name: "sgd"
-    momentum: 0.9
-    clipnorm: 1.0
-    decay: 1.0e-5
+  unfreeze_epoch: 6
+  fine_tune_learning_rate: 0.000005
 
 optimizer:
   name: "adam"
-  learning_rate: 0.001
+  learning_rate: 0.0003
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
@@ -65,15 +60,15 @@ optimizer:
 lr_schedule:
   type: "reduce_on_plateau"
   monitor: "val_loss"
-  factor: 0.5
-  patience: 4
+  factor: 0.2
+  patience: 1
   min_lr: 1.0e-7
 
 loss:
   name: "categorical_crossentropy"
 
 class_weights:
-  enabled: true
+  enabled: false
   auto_compute: true
   max_weight: 5.0
   normalize: true
@@ -90,12 +85,12 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 6
+    patience: 2
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
     monitor: "val_loss"
-    patience: 6
+    patience: 2
     mode: "min"
     restore_best_weights: true
   tensorboard:
