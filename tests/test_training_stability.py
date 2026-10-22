@@ -12,6 +12,7 @@ from training.train import (
     _estimated_split_counts,
     _finite_dataset_steps,
     _fit_verbosity,
+    _fit_sample_count,
     _resolve_fit_step_counts,
     _should_skip_final_export,
     build_metrics,
@@ -19,6 +20,7 @@ from training.train import (
     compile_fine_tune_model,
     configure_runtime,
     create_fine_tune_optimizer,
+    BatchProgressLogger,
     EpochThroughputLogger,
     DiagnosticBatchProgress,
     phase_one_heading,
@@ -162,6 +164,14 @@ def test_diagnostic_step_caps_do_not_change_full_split_counts():
 
     assert fit_steps == (8, 2)
     assert (full_train_steps, full_validation_steps) == (2524, 542)
+    full_counts = {"total": 80746, "classes": {"rare": 350, "common": 80396}}
+    assert _fit_sample_count(
+        full_counts["total"], fit_steps[0], batch_size=64, diagnostic=True
+    ) == 512
+    assert full_counts["total"] == 80746
+    assert _fit_sample_count(
+        full_counts["total"], full_train_steps, batch_size=64
+    ) == 80746
     assert _resolve_fit_step_counts(2524, 542, {}) == (2524, 542)
     with pytest.raises(ValueError, match="positive integer"):
         _resolve_fit_step_counts(2524, 542, {"max_train_steps": 0})
@@ -216,6 +226,48 @@ def test_diagnostic_fit_reports_batch_boundaries_and_skips_final_export(
     assert np.isfinite(history.history["loss"][0])
     assert _should_skip_final_export({"runtime": {"diagnostic": True}})
     assert not _should_skip_final_export({"runtime": {"diagnostic": False}})
+
+
+def test_batch_progress_is_sparse_flushed_and_works_with_grouped_steps(capsys):
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+    config = _config()
+    config["performance"] = {"steps_per_execution": 8, "jit_compile": False}
+    compile_model(model, config)
+
+    features = tf.reshape(tf.range(72 * 4, dtype=tf.float32) / 100.0, (72, 4))
+    labels = tf.one_hot(tf.range(72) % 2, depth=2)
+    train_dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(1)
+    val_dataset = tf.data.Dataset.from_tensor_slices((features[:16], labels[:16])).batch(1)
+    progress = BatchProgressLogger(
+        train_steps=72,
+        validation_steps=16,
+        interval=64,
+        steps_per_execution=8,
+    )
+
+    history = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=1,
+        steps_per_epoch=72,
+        validation_steps=16,
+        callbacks=[progress],
+        verbose=0,
+    )
+
+    output = capsys.readouterr().out
+    output_lines = output.splitlines()
+    assert "Train batch 1/72 started" in output_lines
+    assert "Train progress: 8/72 batches completed" in output_lines
+    assert "Train progress: 64/72 batches completed" in output_lines
+    assert "Train progress: 72/72 batches completed" in output_lines
+    assert "Validation batch 1/16 started" in output_lines
+    assert "Validation progress: 8/16 batches completed" in output_lines
+    assert "Validation progress: 16/16 batches completed" in output_lines
+    assert "\r" not in output
+    assert np.isfinite(history.history["loss"][0])
 
 
 def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):

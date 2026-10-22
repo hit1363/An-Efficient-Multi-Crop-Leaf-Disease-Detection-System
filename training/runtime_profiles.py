@@ -91,6 +91,8 @@ def apply_runtime_profile(
                 "multi_gpu": True,
             }
         )
+        if normalized_mode == "full":
+            runtime_config["training"].setdefault("progress_log_interval", 64)
 
     # Keep diagnosis opt-in and isolated from ordinary full runs. These caps
     # affect fit() only; dataset counts and class weights still use the full
@@ -110,7 +112,9 @@ def apply_runtime_profile(
         runtime_config["performance"].update(
             {"steps_per_execution": 1, "finite_batch_check": False}
         )
-        runtime_config["training"].update({"epochs": 1, "log_mode": "progress"})
+        # The custom callback prints every diagnostic batch; keep Keras's
+        # carriage-return progress bar and callback chatter disabled.
+        runtime_config["training"].update({"epochs": 1, "log_mode": "summary"})
         runtime.update(
             {
                 "diagnostic": True,

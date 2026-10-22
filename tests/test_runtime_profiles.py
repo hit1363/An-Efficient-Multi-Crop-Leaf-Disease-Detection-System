@@ -52,6 +52,7 @@ def test_runtime_profile_preserves_explicit_progress_logging():
     )
 
     assert runtime["training"]["log_mode"] == "progress"
+    assert runtime["training"]["progress_log_interval"] == 64
 
 
 @pytest.mark.parametrize("mode", ["smoke", "full"])
@@ -145,12 +146,14 @@ def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
     assert diagnostic["performance"]["steps_per_execution"] == 1
     assert diagnostic["performance"]["finite_batch_check"] is False
     assert diagnostic["training"]["epochs"] == 1
-    assert diagnostic["training"]["log_mode"] == "progress"
+    assert diagnostic["training"]["log_mode"] == "summary"
+    assert diagnostic["training"]["progress_log_interval"] == 64
     assert diagnostic["runtime"]["diagnostic"] is True
     assert diagnostic["runtime"]["max_train_steps"] == 8
     assert diagnostic["runtime"]["max_validation_steps"] == 2
     assert normal["dataset"]["cache_mode"] == "auto"
     assert normal["performance"]["steps_per_execution"] == 8
+    assert normal["training"]["progress_log_interval"] == 64
     assert "diagnostic" not in normal["runtime"]
     assert config["dataset"]["shuffle_buffer"] == 1000
 

@@ -260,6 +260,20 @@ def _resolve_fit_step_counts(train_steps, validation_steps, runtime_config):
     )
 
 
+def _fit_sample_count(
+    full_train_count, fit_train_steps, batch_size, diagnostic=False
+):
+    """Return the examples processed by fit, without changing split metadata."""
+    full_train_count = max(0, int(full_train_count))
+    if not diagnostic:
+        return full_train_count
+    batch_size = int(batch_size)
+    if batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    fit_examples = max(0, int(fit_train_steps)) * batch_size
+    return min(full_train_count, fit_examples)
+
+
 def _should_skip_final_export(config):
     """Return whether a diagnostic run should stop after validating training."""
     return bool(config.get("runtime", {}).get("diagnostic", False))
@@ -631,6 +645,83 @@ class DiagnosticBatchProgress(keras.callbacks.Callback):
         )
 
 
+class BatchProgressLogger(keras.callbacks.Callback):
+    """Print sparse, flushed progress at Keras execution-group boundaries."""
+
+    def __init__(
+        self,
+        train_steps,
+        validation_steps,
+        interval=64,
+        steps_per_execution=1,
+    ):
+        super().__init__()
+        self.train_steps = int(train_steps)
+        self.validation_steps = int(validation_steps)
+        self.interval = int(interval)
+        self.steps_per_execution = int(steps_per_execution)
+        if self.interval < 1:
+            raise ValueError("progress interval must be a positive integer")
+        if self.steps_per_execution < 1:
+            raise ValueError("steps_per_execution must be a positive integer")
+        self._train_execution_reported = False
+        self._validation_execution_reported = False
+
+    @staticmethod
+    def _completed_batches(batch, total_steps):
+        # With steps_per_execution > 1, Keras reports the final step index of
+        # each execution group from on_*_batch_end.
+        return min(int(batch) + 1, int(total_steps))
+
+    def on_epoch_begin(self, epoch, logs=None):
+        del epoch, logs
+        self._train_execution_reported = False
+        self._validation_execution_reported = False
+
+    def on_train_batch_begin(self, batch, logs=None):
+        del logs
+        if int(batch) == 0:
+            print(f"Train batch 1/{self.train_steps} started", flush=True)
+
+    def on_train_batch_end(self, batch, logs=None):
+        del logs
+        completed = self._completed_batches(batch, self.train_steps)
+        first_execution = min(self.steps_per_execution, self.train_steps)
+        if (
+            not self._train_execution_reported
+            or completed % self.interval == 0
+            or completed >= self.train_steps
+        ):
+            print(
+                f"Train progress: {completed}/{self.train_steps} batches completed",
+                flush=True,
+            )
+        self._train_execution_reported = completed >= first_execution
+
+    def on_test_batch_begin(self, batch, logs=None):
+        del logs
+        if int(batch) == 0:
+            print(
+                f"Validation batch 1/{self.validation_steps} started", flush=True
+            )
+
+    def on_test_batch_end(self, batch, logs=None):
+        del logs
+        completed = self._completed_batches(batch, self.validation_steps)
+        first_execution = min(self.steps_per_execution, self.validation_steps)
+        if (
+            not self._validation_execution_reported
+            or completed % self.interval == 0
+            or completed >= self.validation_steps
+        ):
+            print(
+                "Validation progress: "
+                f"{completed}/{self.validation_steps} batches completed",
+                flush=True,
+            )
+        self._validation_execution_reported = completed >= first_execution
+
+
 def _add_throughput_callback(callbacks, sample_count, log_mode="progress"):
     """Place throughput before CSVLogger so the rate is persisted in history."""
     throughput_callback = EpochThroughputLogger(sample_count, log_mode=log_mode)
@@ -738,6 +829,12 @@ def train_model(config_path="config.yaml"):
     config = resolve_config_paths(config, config_path)
     config.setdefault("training", {}).setdefault("log_mode", "summary")
     log_mode = get_epoch_log_mode(config)
+    if config.get("runtime", {}).get("diagnostic", False):
+        progress_setting = "diagnostic-every-batch"
+    else:
+        progress_setting = config.get("training", {}).get(
+            "progress_log_interval", "summary-only"
+        )
 
     # Setup logging
     logger = setup_logging(config)
@@ -746,10 +843,11 @@ def train_model(config_path="config.yaml"):
     logger.info(f"Configuration: {arch}")
     logger.info(
         "Training throughput settings: cache_mode=%s, cache_dtype=%s, "
-        "steps_per_execution=%s",
+        "steps_per_execution=%s, progress_log_interval=%s",
         config.get("dataset", {}).get("cache_mode", "none"),
         config.get("dataset", {}).get("cache_dtype", "float32"),
         config.get("performance", {}).get("steps_per_execution", 1),
+        progress_setting,
     )
 
     runtime_strategy = configure_runtime(config, logger)
@@ -826,6 +924,14 @@ def train_model(config_path="config.yaml"):
         train_steps,
         val_steps,
         config.get("runtime", {}),
+    )
+    diagnostic_run = bool(config.get("runtime", {}).get("diagnostic", False))
+    full_train_count = sum(training_class_counts.values())
+    fit_sample_count = _fit_sample_count(
+        full_train_count,
+        fit_train_steps,
+        config["dataset"]["batch_size"],
+        diagnostic=diagnostic_run,
     )
     if config.get("performance", {}).get("finite_batch_check", False):
         validate_dataset_batch(train_ds, logger)
@@ -985,11 +1091,33 @@ def train_model(config_path="config.yaml"):
     # Setup callbacks
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config, include_throughput=False)
-    _add_throughput_callback(
-        callbacks, split_counts["train"]["total"], log_mode=log_mode
-    )
+    _add_throughput_callback(callbacks, fit_sample_count, log_mode=log_mode)
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
+    if diagnostic_run:
+        callbacks.insert(
+            0,
+            DiagnosticBatchProgress(
+                train_steps=fit_train_steps,
+                validation_steps=fit_val_steps,
+            ),
+        )
+    else:
+        progress_interval = int(
+            config.get("training", {}).get("progress_log_interval", 0) or 0
+        )
+        if progress_interval > 0:
+            callbacks.insert(
+                0,
+                BatchProgressLogger(
+                    train_steps=fit_train_steps,
+                    validation_steps=fit_val_steps,
+                    interval=progress_interval,
+                    steps_per_execution=config.get("performance", {}).get(
+                        "steps_per_execution", 1
+                    ),
+                ),
+            )
 
     # Phase 1 either warms up the classifier head or trains a randomly
     # initialized backbone end-to-end, depending on freeze_base.
@@ -1054,11 +1182,27 @@ def train_model(config_path="config.yaml"):
             )
         _add_throughput_callback(
             phase2_callbacks,
-            split_counts["train"]["total"],
+            fit_sample_count,
             log_mode=log_mode,
         )
         phase2_best = BestValidationWeights()
         phase2_callbacks.append(phase2_best)
+        if not diagnostic_run:
+            progress_interval = int(
+                config.get("training", {}).get("progress_log_interval", 0) or 0
+            )
+            if progress_interval > 0:
+                phase2_callbacks.insert(
+                    0,
+                    BatchProgressLogger(
+                        train_steps=fit_train_steps,
+                        validation_steps=fit_val_steps,
+                        interval=progress_interval,
+                        steps_per_execution=config.get("performance", {}).get(
+                            "steps_per_execution", 1
+                        ),
+                    ),
+                )
 
         # Continue training
         history2 = model.fit(
