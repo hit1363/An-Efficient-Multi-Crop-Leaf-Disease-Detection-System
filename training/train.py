@@ -515,7 +515,10 @@ class EpochThroughputLogger(keras.callbacks.Callback):
         self.epoch_learning_rate = None
 
     def on_epoch_begin(self, epoch, logs=None):
-        del epoch, logs
+        del logs
+        if self.log_mode == "summary":
+            total_epochs = self.params.get("epochs", epoch + 1)
+            print(f"Epoch {epoch + 1}/{total_epochs} started", flush=True)
         self.epoch_started = time.perf_counter()
         self.train_elapsed = None
         try:
@@ -686,6 +689,13 @@ def train_model(config_path="config.yaml"):
     logger.info("Starting training...")
     arch = config.get("model", {}).get("architecture", "unknown")
     logger.info(f"Configuration: {arch}")
+    logger.info(
+        "Training throughput settings: cache_mode=%s, cache_dtype=%s, "
+        "steps_per_execution=%s",
+        config.get("dataset", {}).get("cache_mode", "none"),
+        config.get("dataset", {}).get("cache_dtype", "float32"),
+        config.get("performance", {}).get("steps_per_execution", 1),
+    )
 
     runtime_strategy = configure_runtime(config, logger)
     runtime_info = {
@@ -751,6 +761,7 @@ def train_model(config_path="config.yaml"):
         shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
         cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
         cache_memory_limit_gb=config.get("dataset", {}).get("cache_memory_limit_gb", 8.0),
+        cache_dtype=config.get("dataset", {}).get("cache_dtype", "float32"),
         deterministic=config.get("performance", {}).get("deterministic", False),
         class_names=expected_class_names,
     )

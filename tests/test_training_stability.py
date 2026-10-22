@@ -25,6 +25,7 @@ from training.train import (
 from training.export import make_float32_inference_model
 from training.utils import (
     _dataset_class_names,
+    _estimate_dataset_cache_gb,
     compute_class_weights,
     compute_class_weights_from_counts,
     create_augmentation_layer,
@@ -215,11 +216,12 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):
 
     assert base_model.trainable_weights
     assert np.isfinite(fine_tune_history.history["loss"][0])
-    summary_lines = [
-        line
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith("Epoch ")
-    ]
+    output_lines = capsys.readouterr().out.splitlines()
+    start_lines = [line for line in output_lines if line.endswith(" started")]
+    summary_lines = [line for line in output_lines if " - loss:" in line]
+    assert len(start_lines) == 2
+    assert start_lines[0] == "Epoch 1/1 started"
+    assert start_lines[1] == "Epoch 2/2 started"
     assert len(summary_lines) == 2
     assert summary_lines[0].startswith("Epoch 1/1 - loss:")
     assert "val_loss:" in summary_lines[0]
@@ -227,6 +229,33 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):
     assert "lr:" in summary_lines[0]
     assert "examples_per_second:" in summary_lines[0]
     assert summary_lines[1].startswith("Epoch 2/2 - loss:")
+
+
+def test_cache_size_estimate_uses_cache_and_label_dtypes():
+    float32_gb = _estimate_dataset_cache_gb(
+        100,
+        50,
+        (224, 224),
+        cache_dtype="float32",
+        label_count=72,
+    )
+    float16_gb = _estimate_dataset_cache_gb(
+        100,
+        50,
+        (224, 224),
+        cache_dtype="float16",
+        label_count=72,
+    )
+    image_only_float32_gb = _estimate_dataset_cache_gb(
+        100, 50, (224, 224), cache_dtype="float32"
+    )
+    image_only_float16_gb = _estimate_dataset_cache_gb(
+        100, 50, (224, 224), cache_dtype="float16"
+    )
+
+    assert image_only_float16_gb == pytest.approx(image_only_float32_gb / 2)
+    assert float16_gb < float32_gb
+    assert float16_gb > float32_gb / 2  # labels remain float32 in the cache
 
 
 def test_summary_mode_silences_keras_callback_chatter(tmp_path):
@@ -250,7 +279,10 @@ def test_summary_mode_silences_keras_callback_chatter(tmp_path):
     callbacks = setup_callbacks(config)
 
     assert callbacks
-    assert all(callback.verbose == 0 for callback in callbacks)
+    assert all(getattr(callback, "verbose", 0) == 0 for callback in callbacks)
+    assert "ThroughputCallback" not in {
+        type(callback).__name__ for callback in callbacks
+    }
     assert get_epoch_log_mode(config) == "summary"
     assert _fit_verbosity(get_epoch_log_mode(config)) == 0
 
@@ -387,19 +419,25 @@ def test_class_aware_pipeline_replaces_only_minority_training_images(tmp_path):
         minority_augmentation=minority,
         minority_class_indices=[1],
         shuffle_buffer=0,
-        cache_mode="none",
+        cache_mode="memory",
+        cache_dtype="float16",
     )
 
-    train_images, train_labels = next(iter(train_ds))
+    train_batches = list(train_ds.as_numpy_iterator())
+    val_batches = list(val_ds.as_numpy_iterator())
+    train_images, train_labels = train_batches[0]
     values_by_label = {
         int(label): float(tf.reduce_mean(train_images[index]).numpy())
         for index, label in enumerate(tf.argmax(train_labels, axis=-1).numpy())
     }
-    val_images, _ = next(iter(val_ds))
+    val_images, val_labels = val_batches[0]
 
     assert class_names == ["common", "rare"]
     assert values_by_label == {0: 1.0, 1: 10.0}
-    assert float(tf.reduce_max(val_images).numpy()) == 0.0
+    assert train_images.dtype == np.float32
+    assert val_images.dtype == np.float32
+    assert float(np.max(val_images)) == 0.0
+    assert np.array_equal(train_labels, val_labels)
 
 
 def test_run_metadata_reuses_supplied_split_counts(tmp_path):

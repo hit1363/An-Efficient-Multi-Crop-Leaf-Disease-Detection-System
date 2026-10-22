@@ -236,6 +236,44 @@ def _normalize_cache_mode(cache_mode):
     raise ValueError("dataset.cache_mode must be one of: none, memory, disk, auto")
 
 
+def _normalize_cache_dtype(cache_dtype):
+    """Normalize supported floating-point cache storage types."""
+    try:
+        dtype = tf.as_dtype(cache_dtype)
+    except TypeError as exc:
+        raise ValueError(
+            "dataset.cache_dtype must be either 'float16' or 'float32'"
+        ) from exc
+    if dtype not in (tf.float16, tf.float32):
+        raise ValueError("dataset.cache_dtype must be either 'float16' or 'float32'")
+    return dtype.name
+
+
+def _estimate_dataset_cache_gb(
+    train_count,
+    val_count,
+    image_size,
+    cache_dtype="float32",
+    label_count=0,
+    label_dtype="float32",
+    headroom=1.25,
+):
+    """Estimate cache footprint, including image and categorical-label tensors."""
+    image_dtype = tf.as_dtype(_normalize_cache_dtype(cache_dtype))
+    label_dtype = tf.as_dtype(label_dtype)
+    height, width = image_size[:2]
+    per_example_bytes = (
+        int(height) * int(width) * 3 * int(image_dtype.size)
+        + int(label_count) * int(label_dtype.size)
+    )
+    return (
+        (int(train_count) + int(val_count))
+        * per_example_bytes
+        / (1024**3)
+        * float(headroom)
+    )
+
+
 def setup_logging(config):
     """Setup logging configuration"""
     log_config = config.get("logging", {})
@@ -355,6 +393,7 @@ def _resolve_cache_mode(
     image_size,
     batch_size,
     memory_limit_gb=8.0,
+    cache_dtype="float32",
 ):
     """Resolve ``auto`` caching without risking an uncontrolled RAM cache."""
     requested = _normalize_cache_mode(cache_mode)
@@ -372,14 +411,20 @@ def _resolve_cache_mode(
     except (AttributeError, TypeError, ValueError):
         train_count = val_count = -1
 
-    # The cache is created before augmentation and preprocessing, so estimate
-    # the raw uint8 image footprint. Keep a generous headroom factor for TF
-    # bookkeeping and the rest of the notebook process.
+    # Cache creation is before augmentation and preprocessing. Account for the
+    # configured image storage dtype, categorical labels, and tf.data overhead.
     required_gb = 0.0
     if train_count >= 0 and val_count >= 0:
-        height, width = image_size[:2]
-        required_gb = (train_count + val_count) * height * width * 3 / (1024**3)
-        required_gb *= 1.25
+        label_spec = train_ds.element_spec[1]
+        label_count = label_spec.shape[-1] if label_spec.shape.rank else 1
+        required_gb = _estimate_dataset_cache_gb(
+            train_count,
+            val_count,
+            image_size,
+            cache_dtype=cache_dtype,
+            label_count=label_count or 1,
+            label_dtype=label_spec.dtype,
+        )
 
     available_gb = _available_host_memory_gb()
     # Available RAM is not the same as safe cache capacity: TensorFlow,
@@ -422,6 +467,7 @@ def load_dataset(
     shuffle_buffer=1000,
     cache_mode="none",
     cache_memory_limit_gb=8.0,
+    cache_dtype="float32",
     deterministic=False,
     class_names=None,
 ):
@@ -446,6 +492,8 @@ def load_dataset(
             "memory" to keep cached batches in RAM, "disk" to cache to a
             writable filesystem path, or "auto" to select RAM only when the
             estimated footprint is safe and otherwise use disk/no cache.
+        cache_dtype: Floating-point dtype used to store cached images. Float16
+            halves cache I/O and disk use; yielded images are restored to float32.
 
     Returns:
         train_ds, val_ds, class_names
@@ -492,6 +540,7 @@ def load_dataset(
     options = tf.data.Options()
     options.experimental_deterministic = bool(deterministic)
 
+    cache_dtype = _normalize_cache_dtype(cache_dtype)
     cache_mode = _resolve_cache_mode(
         cache_mode,
         train_ds,
@@ -499,14 +548,25 @@ def load_dataset(
         image_size,
         batch_size,
         memory_limit_gb=cache_memory_limit_gb,
+        cache_dtype=cache_dtype,
     )
     logger = logging.getLogger(__name__)
 
     # Cache decoded/resized batches before augmentation so augmentation remains
-    # stochastic on every epoch while image decoding happens only once.
+    # stochastic on every epoch while image decoding happens only once. Cast
+    # before caching and restore float32 immediately after the cache boundary.
     if cache_mode == "disk":
         height, width = image_size[:2]
-        cache_key = f"v2_{height}x{width}_b{int(batch_size)}"
+        cache_key = f"v3_{height}x{width}_b{int(batch_size)}_{cache_dtype}"
+        if cache_dtype != "float32":
+            train_ds = train_ds.map(
+                lambda x, y: (tf.cast(x, cache_dtype), y),
+                num_parallel_calls=AUTOTUNE,
+            )
+            val_ds = val_ds.map(
+                lambda x, y: (tf.cast(x, cache_dtype), y),
+                num_parallel_calls=AUTOTUNE,
+            )
         train_cache = _dataset_cache_path("train_cache", cache_key)
         val_cache = _dataset_cache_path("val_cache", cache_key)
         if train_cache and val_cache:
@@ -515,9 +575,37 @@ def load_dataset(
         else:
             logger.warning("Disk cache is unavailable; continuing without caching.")
             cache_mode = "none"
+            if cache_dtype != "float32":
+                train_ds = train_ds.map(
+                    lambda x, y: (tf.cast(x, tf.float32), y),
+                    num_parallel_calls=AUTOTUNE,
+                )
+                val_ds = val_ds.map(
+                    lambda x, y: (tf.cast(x, tf.float32), y),
+                    num_parallel_calls=AUTOTUNE,
+                )
     elif cache_mode == "memory":
+        if cache_dtype != "float32":
+            train_ds = train_ds.map(
+                lambda x, y: (tf.cast(x, cache_dtype), y),
+                num_parallel_calls=AUTOTUNE,
+            )
+            val_ds = val_ds.map(
+                lambda x, y: (tf.cast(x, cache_dtype), y),
+                num_parallel_calls=AUTOTUNE,
+            )
         train_ds = train_ds.cache()
         val_ds = val_ds.cache()
+
+    if cache_mode in {"disk", "memory"} and cache_dtype != "float32":
+        train_ds = train_ds.map(
+            lambda x, y: (tf.cast(x, tf.float32), y),
+            num_parallel_calls=AUTOTUNE,
+        )
+        val_ds = val_ds.map(
+            lambda x, y: (tf.cast(x, tf.float32), y),
+            num_parallel_calls=AUTOTUNE,
+        )
 
     # Shuffle batches after caching so cached datasets still reshuffle each
     # epoch. The source dataset is already batched, avoiding the expensive
@@ -590,11 +678,12 @@ def load_dataset(
 
     logger.info(
         "Dataset pipeline: batch_size=%d, train_steps=%s, val_steps=%s, "
-        "cache_mode=%s, shuffle_batch_buffer=%d",
+        "cache_mode=%s, cache_dtype=%s, shuffle_batch_buffer=%d",
         batch_size,
         train_ds.cardinality(),
         val_ds.cardinality(),
         cache_mode,
+        cache_dtype if cache_mode in {"disk", "memory"} else "float32 (cache inactive)",
         max(1, int(np.ceil(shuffle_buffer / batch_size))) if shuffle_buffer else 0,
     )
 
@@ -1129,7 +1218,11 @@ def setup_callbacks(
     if performance_config.get("terminate_on_nan", True):
         callbacks.append(keras.callbacks.TerminateOnNaN())
 
-    if include_throughput and performance_config.get("log_throughput", True):
+    if (
+        include_throughput
+        and performance_config.get("log_throughput", True)
+        and get_epoch_log_mode(config) == "progress"
+    ):
         callbacks.append(
             ThroughputCallback(
                 batch_size=config.get("dataset", {}).get("batch_size", 32),

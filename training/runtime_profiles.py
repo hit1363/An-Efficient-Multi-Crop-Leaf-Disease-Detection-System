@@ -6,7 +6,9 @@ from copy import deepcopy
 SUPPORTED_MODES = frozenset({"smoke", "full"})
 
 
-def apply_runtime_profile(config, mode="smoke", platform=None):
+def apply_runtime_profile(
+    config, mode="smoke", platform=None, steps_per_execution=None
+):
     """Apply a hosted-training profile without mutating the source config.
 
     ``smoke`` prioritizes fast startup and a quick end-to-end validation.
@@ -63,9 +65,20 @@ def apply_runtime_profile(config, mode="smoke", platform=None):
         dataset["batch_size"] = 64
         dataset["batch_size_fallbacks"] = [64, 32, 16]
         dataset["auto_batch_fallback"] = True
+        configured_execution = runtime_config["performance"].get(
+            "kaggle_steps_per_execution", 8
+        )
+        execution_steps = (
+            configured_execution
+            if steps_per_execution is None
+            else steps_per_execution
+        )
+        if int(execution_steps) < 1:
+            raise ValueError("steps_per_execution must be a positive integer")
+        dataset["cache_dtype"] = "float16"
         runtime_config["performance"].update(
             {
-                "steps_per_execution": 1,
+                "steps_per_execution": int(execution_steps),
                 "jit_compile": False,
                 "distribution": "auto",
                 "multi_gpu": True,

@@ -77,17 +77,41 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
     assert runtime["dataset"]["batch_size"] == 64
     assert runtime["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
     assert runtime["dataset"]["auto_batch_fallback"] is True
-    assert runtime["performance"]["steps_per_execution"] == 1
+    assert runtime["performance"]["steps_per_execution"] == 8
     assert runtime["performance"]["jit_compile"] is False
     assert runtime["performance"]["distribution"] == "auto"
     assert runtime["performance"]["multi_gpu"] is True
     assert runtime["performance"]["mixed_precision"] is True
+    assert runtime["dataset"]["cache_dtype"] == "float16"
     assert config["dataset"]["batch_size"] == 128
     assert runtime["augmentation"]["class_aware"]["enabled"] is (
         mode == "full"
     )
     if mode == "full":
         assert runtime["dataset"]["cache_mode"] == "auto"
+
+
+def test_kaggle_profile_preserves_explicit_steps_per_execution_override():
+    runtime = apply_runtime_profile(
+        {"dataset": {"batch_size": 128}},
+        "full",
+        platform="kaggle",
+        steps_per_execution=4,
+    )
+
+    assert runtime["performance"]["steps_per_execution"] == 4
+    assert runtime["dataset"]["batch_size"] == 64
+    assert runtime["performance"]["jit_compile"] is False
+
+
+def test_kaggle_profile_uses_configured_execution_override():
+    runtime = apply_runtime_profile(
+        {"performance": {"kaggle_steps_per_execution": 3}},
+        "full",
+        platform="kaggle",
+    )
+
+    assert runtime["performance"]["steps_per_execution"] == 3
 
 
 @pytest.mark.parametrize(
