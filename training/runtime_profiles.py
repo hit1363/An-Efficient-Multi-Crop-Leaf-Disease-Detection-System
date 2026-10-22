@@ -7,7 +7,8 @@ SUPPORTED_MODES = frozenset({"smoke", "full"})
 
 
 def apply_runtime_profile(
-    config, mode="smoke", platform=None, steps_per_execution=None
+    config, mode="smoke", platform=None, steps_per_execution=None,
+    diagnostic=False,
 ):
     """Apply a hosted-training profile without mutating the source config.
 
@@ -19,6 +20,12 @@ def apply_runtime_profile(
         raise ValueError(
             f"Unsupported training mode {mode!r}; expected one of "
             f"{sorted(SUPPORTED_MODES)}."
+        )
+
+    normalized_platform = str(platform or "").strip().lower()
+    if diagnostic and (normalized_mode != "full" or normalized_platform != "kaggle"):
+        raise ValueError(
+            "The training diagnostic is supported only for full Kaggle runs."
         )
 
     runtime_config = deepcopy(config)
@@ -60,7 +67,7 @@ def apply_runtime_profile(
     # selector falls back to 32 for a single-GPU session and 16 for CPU-only.
     # Apply this override to both smoke and full runs; shared configs retain
     # their XLA setting for compatible environments.
-    if str(platform or "").strip().lower() == "kaggle":
+    if normalized_platform == "kaggle":
         dataset = runtime_config["dataset"]
         dataset["batch_size"] = 64
         dataset["batch_size_fallbacks"] = [64, 32, 16]
@@ -85,7 +92,32 @@ def apply_runtime_profile(
             }
         )
 
-    runtime_config.setdefault("runtime", {}).update(
-        {"mode": normalized_mode, "platform": platform}
-    )
+    # Keep diagnosis opt-in and isolated from ordinary full runs. These caps
+    # affect fit() only; dataset counts and class weights still use the full
+    # training split.
+    runtime = runtime_config.setdefault("runtime", {})
+    for key in ("diagnostic", "max_train_steps", "max_validation_steps"):
+        runtime.pop(key, None)
+    if diagnostic:
+        dataset = runtime_config["dataset"]
+        dataset.update(
+            {
+                "cache_mode": "none",
+                "cache_dtype": "float32",
+                "shuffle_buffer": int(dataset.get("batch_size", 64)),
+            }
+        )
+        runtime_config["performance"].update(
+            {"steps_per_execution": 1, "finite_batch_check": False}
+        )
+        runtime_config["training"].update({"epochs": 1, "log_mode": "progress"})
+        runtime.update(
+            {
+                "diagnostic": True,
+                "max_train_steps": 8,
+                "max_validation_steps": 2,
+            }
+        )
+
+    runtime.update({"mode": normalized_mode, "platform": platform})
     return runtime_config

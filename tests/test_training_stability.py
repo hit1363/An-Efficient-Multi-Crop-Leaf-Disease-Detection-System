@@ -12,12 +12,15 @@ from training.train import (
     _estimated_split_counts,
     _finite_dataset_steps,
     _fit_verbosity,
+    _resolve_fit_step_counts,
+    _should_skip_final_export,
     build_metrics,
     compile_model,
     compile_fine_tune_model,
     configure_runtime,
     create_fine_tune_optimizer,
     EpochThroughputLogger,
+    DiagnosticBatchProgress,
     phase_one_heading,
     save_run_metadata,
     select_final_weights,
@@ -145,6 +148,74 @@ def test_fit_time_class_weights_complete_a_small_fit():
     )
 
     assert np.isfinite(history.history["loss"][0])
+
+
+def test_diagnostic_step_caps_do_not_change_full_split_counts():
+    full_train_steps = 2524
+    full_validation_steps = 542
+
+    fit_steps = _resolve_fit_step_counts(
+        full_train_steps,
+        full_validation_steps,
+        {"max_train_steps": 8, "max_validation_steps": 2},
+    )
+
+    assert fit_steps == (8, 2)
+    assert (full_train_steps, full_validation_steps) == (2524, 542)
+    assert _resolve_fit_step_counts(2524, 542, {}) == (2524, 542)
+    with pytest.raises(ValueError, match="positive integer"):
+        _resolve_fit_step_counts(2524, 542, {"max_train_steps": 0})
+
+
+def test_diagnostic_fit_reports_batch_boundaries_and_skips_final_export(
+    tmp_path, capsys
+):
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+    config = _config()
+    config["performance"] = {"steps_per_execution": 1, "jit_compile": False}
+    compile_model(model, config)
+
+    features = tf.reshape(tf.range(32, dtype=tf.float32) / 32.0, (8, 4))
+    labels = tf.constant(
+        [[1.0, 0.0], [0.0, 1.0]] * 4,
+        dtype=tf.float32,
+    )
+    train_dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(1)
+    val_dataset = tf.data.Dataset.from_tensor_slices((features[:2], labels[:2])).batch(1)
+    checkpoint_path = tmp_path / "diagnostic.weights.h5"
+    callbacks = [
+        DiagnosticBatchProgress(train_steps=8, validation_steps=2),
+        tf.keras.callbacks.ModelCheckpoint(
+            str(checkpoint_path), save_weights_only=True, monitor="val_loss"
+        ),
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=6, mode="min", restore_best_weights=True
+        ),
+        EpochThroughputLogger(samples=8, log_mode="progress"),
+    ]
+
+    history = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=1,
+        steps_per_epoch=8,
+        validation_steps=2,
+        class_weight={0: 1.0, 1: 2.0},
+        callbacks=callbacks,
+        verbose=0,
+    )
+
+    output_lines = capsys.readouterr().out.splitlines()
+    assert sum("Diagnostic train batch " in line and " started" in line for line in output_lines) == 8
+    assert sum("Diagnostic train batch " in line and " completed" in line for line in output_lines) == 8
+    assert sum("Diagnostic validation batch " in line and " started" in line for line in output_lines) == 2
+    assert sum("Diagnostic validation batch " in line and " completed" in line for line in output_lines) == 2
+    assert checkpoint_path.exists()
+    assert np.isfinite(history.history["loss"][0])
+    assert _should_skip_final_export({"runtime": {"diagnostic": True}})
+    assert not _should_skip_final_export({"runtime": {"diagnostic": False}})
 
 
 def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):

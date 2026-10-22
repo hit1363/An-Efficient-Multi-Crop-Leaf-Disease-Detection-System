@@ -241,6 +241,30 @@ def _fit_verbosity(log_mode):
     return 0 if log_mode == "summary" else 1
 
 
+def _resolve_fit_step_counts(train_steps, validation_steps, runtime_config):
+    """Apply optional diagnostic caps without changing dataset cardinalities."""
+    def resolve(value, name):
+        if value is None:
+            return train_steps if name == "training" else validation_steps
+        try:
+            value = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} step cap must be a positive integer") from exc
+        if value <= 0:
+            raise ValueError(f"{name} step cap must be a positive integer")
+        return value
+
+    return (
+        resolve(runtime_config.get("max_train_steps"), "training"),
+        resolve(runtime_config.get("max_validation_steps"), "validation"),
+    )
+
+
+def _should_skip_final_export(config):
+    """Return whether a diagnostic run should stop after validating training."""
+    return bool(config.get("runtime", {}).get("diagnostic", False))
+
+
 def _git_revision(repo_dir):
     """Return the checked-out Git revision when the runtime has Git metadata."""
     try:
@@ -576,6 +600,37 @@ class EpochThroughputLogger(keras.callbacks.Callback):
             print(f" - examples_per_second: {throughput:.1f}", flush=True)
 
 
+class DiagnosticBatchProgress(keras.callbacks.Callback):
+    """Emit deterministic batch boundaries for short diagnostic runs."""
+
+    def __init__(self, train_steps, validation_steps):
+        super().__init__()
+        self.train_steps = int(train_steps)
+        self.validation_steps = int(validation_steps)
+
+    def on_train_batch_begin(self, batch, logs=None):
+        del logs
+        print(f"Diagnostic train batch {batch + 1}/{self.train_steps} started", flush=True)
+
+    def on_train_batch_end(self, batch, logs=None):
+        del logs
+        print(f"Diagnostic train batch {batch + 1}/{self.train_steps} completed", flush=True)
+
+    def on_test_batch_begin(self, batch, logs=None):
+        del logs
+        print(
+            f"Diagnostic validation batch {batch + 1}/{self.validation_steps} started",
+            flush=True,
+        )
+
+    def on_test_batch_end(self, batch, logs=None):
+        del logs
+        print(
+            f"Diagnostic validation batch {batch + 1}/{self.validation_steps} completed",
+            flush=True,
+        )
+
+
 def _add_throughput_callback(callbacks, sample_count, log_mode="progress"):
     """Place throughput before CSVLogger so the rate is persisted in history."""
     throughput_callback = EpochThroughputLogger(sample_count, log_mode=log_mode)
@@ -767,14 +822,19 @@ def train_model(config_path="config.yaml"):
     )
     train_steps = _finite_dataset_steps(train_ds, "training")
     val_steps = _finite_dataset_steps(val_ds, "validation")
+    fit_train_steps, fit_val_steps = _resolve_fit_step_counts(
+        train_steps,
+        val_steps,
+        config.get("runtime", {}),
+    )
     if config.get("performance", {}).get("finite_batch_check", False):
         validate_dataset_batch(train_ds, logger)
     train_ds = train_ds.repeat()
     logger.info(
         "Using repeated training dataset with explicit steps_per_epoch=%d and "
         "validation_steps=%d",
-        train_steps,
-        val_steps,
+        fit_train_steps,
+        fit_val_steps,
     )
 
     logger.info(f"Found {len(class_names)} classes")
@@ -943,8 +1003,8 @@ def train_model(config_path="config.yaml"):
         epochs=initial_epochs,
         callbacks=callbacks,
         class_weight=class_weights,
-        steps_per_epoch=train_steps,
-        validation_steps=val_steps,
+        steps_per_epoch=fit_train_steps,
+        validation_steps=fit_val_steps,
         verbose=_fit_verbosity(log_mode),
     )
 
@@ -1008,8 +1068,8 @@ def train_model(config_path="config.yaml"):
             epochs=total_epochs,
             callbacks=phase2_callbacks,
             class_weight=class_weights,
-            steps_per_epoch=train_steps,
-            validation_steps=val_steps,
+            steps_per_epoch=fit_train_steps,
+            validation_steps=fit_val_steps,
             verbose=_fit_verbosity(log_mode),
         )
         final_weights, selected_phase, selected_loss = select_final_weights(
@@ -1031,6 +1091,10 @@ def train_model(config_path="config.yaml"):
         for key, values in history2.history.items():
             merged_history.setdefault(key, []).extend(values)
     history1.history = merged_history
+
+    if _should_skip_final_export(config):
+        logger.info("Diagnostic run complete; skipping final model exports.")
+        return model, history1
 
     # Save final model
     logger.info("Saving final model...")

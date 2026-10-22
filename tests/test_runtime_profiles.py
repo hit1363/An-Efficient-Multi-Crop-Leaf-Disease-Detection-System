@@ -114,6 +114,55 @@ def test_kaggle_profile_uses_configured_execution_override():
     assert runtime["performance"]["steps_per_execution"] == 3
 
 
+def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
+    config = {
+        "dataset": {
+            "batch_size": 64,
+            "cache_mode": "auto",
+            "shuffle_buffer": 1000,
+        },
+        "augmentation": {"class_aware": {"enabled": True, "max_train_samples": 500}},
+        "class_weights": {"enabled": True, "max_weight": 8.0, "normalize": True},
+        "performance": {"mixed_precision": True, "jit_compile": True},
+        "training": {"epochs": 50, "log_mode": "summary"},
+    }
+
+    diagnostic = apply_runtime_profile(
+        config, "full", platform="kaggle", diagnostic=True
+    )
+    normal = apply_runtime_profile(config, "full", platform="kaggle")
+
+    assert diagnostic["dataset"]["batch_size"] == 64
+    assert diagnostic["dataset"]["cache_mode"] == "none"
+    assert diagnostic["dataset"]["cache_dtype"] == "float32"
+    assert diagnostic["dataset"]["shuffle_buffer"] == 64
+    assert diagnostic["augmentation"]["class_aware"]["enabled"] is True
+    assert diagnostic["class_weights"] == config["class_weights"]
+    assert diagnostic["performance"]["mixed_precision"] is True
+    assert diagnostic["performance"]["distribution"] == "auto"
+    assert diagnostic["performance"]["multi_gpu"] is True
+    assert diagnostic["performance"]["jit_compile"] is False
+    assert diagnostic["performance"]["steps_per_execution"] == 1
+    assert diagnostic["performance"]["finite_batch_check"] is False
+    assert diagnostic["training"]["epochs"] == 1
+    assert diagnostic["training"]["log_mode"] == "progress"
+    assert diagnostic["runtime"]["diagnostic"] is True
+    assert diagnostic["runtime"]["max_train_steps"] == 8
+    assert diagnostic["runtime"]["max_validation_steps"] == 2
+    assert normal["dataset"]["cache_mode"] == "auto"
+    assert normal["performance"]["steps_per_execution"] == 8
+    assert "diagnostic" not in normal["runtime"]
+    assert config["dataset"]["shuffle_buffer"] == 1000
+
+
+@pytest.mark.parametrize(
+    ("mode", "platform"), [("smoke", "kaggle"), ("full", "colab")]
+)
+def test_diagnostic_profile_rejects_unsupported_runtime(mode, platform):
+    with pytest.raises(ValueError, match="only for full Kaggle"):
+        apply_runtime_profile({}, mode, platform=platform, diagnostic=True)
+
+
 @pytest.mark.parametrize(
     ("runtime", "expected_batch"),
     [
