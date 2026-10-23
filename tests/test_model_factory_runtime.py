@@ -56,10 +56,12 @@ def test_efficientnet_b0_builds_with_mixed_precision():
             weights=None,
         )
 
+        assert tf.keras.mixed_precision.global_policy().name == "mixed_float16"
         output = model(tf.zeros((1, 64, 64, 3)), training=False)
 
         assert base_model.compute_dtype == "float32"
         assert tuple(output.shape) == (1, 5)
         assert output.dtype == tf.float32
+        assert bool(tf.reduce_all(tf.math.is_finite(output)))
     finally:
         tf.keras.mixed_precision.set_global_policy(previous_policy)

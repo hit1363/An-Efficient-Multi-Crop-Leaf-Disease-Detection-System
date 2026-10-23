@@ -261,17 +261,23 @@ def create_efficientnet_b0_model(
         "[model] Using tf.keras.applications.EfficientNetB0 "
         "with ImageNet weights."
     )
-    base_model = tf.keras.applications.EfficientNetB0(
-        include_top=False,
-        weights=weights,
-        input_shape=input_shape,
-        # Legacy tf.keras EfficientNet preprocessing multiplies by float32
-        # constants that are incompatible with a mixed_float16 input.
-        dtype="float32",
-    )
+    # Legacy tf.keras EfficientNet preprocessing multiplies by float32
+    # constants. Its internal Input layer still inherits the global policy,
+    # so an explicit dtype argument alone does not prevent mixed_float16 from
+    # creating a float16 input. Build the complete backbone under float32.
+    previous_policy = tf.keras.mixed_precision.global_policy()
+    tf.keras.mixed_precision.set_global_policy("float32")
+    try:
+        base_model = tf.keras.applications.EfficientNetB0(
+            include_top=False,
+            weights=weights,
+            input_shape=input_shape,
+        )
+    finally:
+        tf.keras.mixed_precision.set_global_policy(previous_policy)
     base_model.trainable = False
 
-    inputs = tf.keras.Input(shape=input_shape)
+    inputs = tf.keras.Input(shape=input_shape, dtype="float32")
     x = base_model(inputs, training=False)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     regularizer = tf.keras.regularizers.l2(l2_regularization) if l2_regularization else None
