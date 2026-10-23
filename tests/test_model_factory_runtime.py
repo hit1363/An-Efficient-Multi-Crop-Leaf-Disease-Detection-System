@@ -43,3 +43,23 @@ def test_factory_builds_and_runs_forward_pass(architecture, kwargs):
     unfreeze_base_model(base_model, unfreeze_from_layer=0)
     assert any(weight.trainable for weight in base_model.weights)
 
+
+def test_efficientnet_b0_builds_with_mixed_precision():
+    previous_policy = tf.keras.mixed_precision.global_policy()
+    try:
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        model, base_model = get_model(
+            architecture="efficientnet_b0",
+            input_shape=(64, 64, 3),
+            num_classes=5,
+            dropout_rate=0.1,
+            weights=None,
+        )
+
+        output = model(tf.zeros((1, 64, 64, 3)), training=False)
+
+        assert base_model.compute_dtype == "float32"
+        assert tuple(output.shape) == (1, 5)
+        assert output.dtype == tf.float32
+    finally:
+        tf.keras.mixed_precision.set_global_policy(previous_policy)

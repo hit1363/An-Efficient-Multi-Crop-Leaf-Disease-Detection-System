@@ -265,6 +265,9 @@ def create_efficientnet_b0_model(
         include_top=False,
         weights=weights,
         input_shape=input_shape,
+        # Legacy tf.keras EfficientNet preprocessing multiplies by float32
+        # constants that are incompatible with a mixed_float16 input.
+        dtype="float32",
     )
     base_model.trainable = False
 
