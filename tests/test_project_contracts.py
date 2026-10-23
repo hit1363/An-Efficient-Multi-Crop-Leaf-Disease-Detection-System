@@ -135,7 +135,6 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
                 encoding="utf-8"
             )
         )
-        assert config["training"]["log_mode"] == "summary"
         assert config["loss"]["name"] == "categorical_crossentropy"
         assert config["class_weights"]["enabled"] is True
         class_aware = config["augmentation"]["class_aware"]
@@ -173,6 +172,24 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         )
         assert config["training"]["freeze_base"] is True
         assert config["training"]["unfreeze_epoch"] == 5
+
+
+def test_all_model_configs_use_live_progress_logging():
+    architectures = (
+        "benchmark",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+    )
+    for architecture in architectures:
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["training"]["log_mode"] == "progress"
 
 
 def test_mobilenetv3_uses_explicit_finite_input_preprocessing():

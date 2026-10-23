@@ -44,7 +44,7 @@ augmentation:
 # Training Settings
 training:
   epochs: 10
-  log_mode: summary # Options: summary (one line per epoch) or progress (live batches)
+  log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 130 # Keep early generic features frozen
   unfreeze_epoch: 6 # Train the head briefly before fine-tuning

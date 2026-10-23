@@ -241,6 +241,18 @@ def _fit_verbosity(log_mode):
     return 0 if log_mode == "summary" else 1
 
 
+def _add_keras_progress_logger(callbacks, log_mode):
+    """Put Keras' progress bar last so end-of-epoch metrics include custom logs."""
+    if log_mode == "progress":
+        callbacks.append(
+            keras.callbacks.ProgbarLogger(
+                count_mode="steps",
+                stateful_metrics={"lr", "examples_per_second"},
+            )
+        )
+    return callbacks
+
+
 def _resolve_fit_step_counts(train_steps, validation_steps, runtime_config):
     """Apply optional diagnostic caps without changing dataset cardinalities."""
     def resolve(value, name):
@@ -578,6 +590,8 @@ class EpochThroughputLogger(keras.callbacks.Callback):
         throughput = self.samples / elapsed
         if logs is not None:
             logs["examples_per_second"] = throughput
+            if self.log_mode == "progress" and self.epoch_learning_rate is not None:
+                logs["lr"] = self.epoch_learning_rate
         if self.log_mode == "summary":
             metrics = logs or {}
             total_epochs = self.params.get("epochs", epoch + 1)
@@ -1106,7 +1120,7 @@ def train_model(config_path="config.yaml"):
         progress_interval = int(
             config.get("training", {}).get("progress_log_interval", 0) or 0
         )
-        if progress_interval > 0:
+        if progress_interval > 0 and log_mode != "progress":
             callbacks.insert(
                 0,
                 BatchProgressLogger(
@@ -1118,6 +1132,8 @@ def train_model(config_path="config.yaml"):
                     ),
                 ),
             )
+    if not diagnostic_run:
+        _add_keras_progress_logger(callbacks, log_mode)
 
     # Phase 1 either warms up the classifier head or trains a randomly
     # initialized backbone end-to-end, depending on freeze_base.
@@ -1191,7 +1207,7 @@ def train_model(config_path="config.yaml"):
             progress_interval = int(
                 config.get("training", {}).get("progress_log_interval", 0) or 0
             )
-            if progress_interval > 0:
+            if progress_interval > 0 and log_mode != "progress":
                 phase2_callbacks.insert(
                     0,
                     BatchProgressLogger(
@@ -1203,6 +1219,7 @@ def train_model(config_path="config.yaml"):
                         ),
                     ),
                 )
+            _add_keras_progress_logger(phase2_callbacks, log_mode)
 
         # Continue training
         history2 = model.fit(

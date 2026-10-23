@@ -13,6 +13,7 @@ from training.train import (
     _finite_dataset_steps,
     _fit_verbosity,
     _fit_sample_count,
+    _add_keras_progress_logger,
     _resolve_fit_step_counts,
     _should_skip_final_export,
     build_metrics,
@@ -415,6 +416,56 @@ def test_summary_mode_silences_keras_callback_chatter(tmp_path):
 )
 def test_training_log_mode_controls_keras_batch_progress(mode, expected_verbosity):
     assert _fit_verbosity(mode) == expected_verbosity
+
+
+def test_progress_logging_matches_keras_epoch_layout(tmp_path, capsys):
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=3e-4),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    features = tf.constant(
+        [[0.0, 0.1, 0.2, 0.3], [1.0, 0.9, 0.8, 0.7]], dtype=tf.float32
+    )
+    labels = tf.constant([[1.0, 0.0], [0.0, 1.0]], dtype=tf.float32)
+    dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(2)
+    checkpoint_path = tmp_path / "best.weights.h5"
+    callbacks = [
+        tf.keras.callbacks.ModelCheckpoint(
+            str(checkpoint_path),
+            monitor="val_loss",
+            mode="min",
+            save_best_only=True,
+            save_weights_only=True,
+            verbose=1,
+        ),
+        EpochThroughputLogger(samples=2, log_mode="progress"),
+    ]
+    _add_keras_progress_logger(callbacks, "progress")
+
+    model.fit(
+        dataset,
+        validation_data=dataset,
+        epochs=2,
+        callbacks=callbacks,
+        verbose=1,
+    )
+
+    output = capsys.readouterr().out
+    assert "Epoch 1/2" in output
+    assert "Epoch 2/2" in output
+    assert "1/1 [" in output
+    assert "Epoch 1: val_loss" in output
+    assert " - examples_per_second:" in output
+    assert "accuracy:" in output
+    assert "val_loss:" in output
+    assert "val_accuracy:" in output
+    assert "lr:" in output
+    assert "examples_per_second:" in output
+    assert checkpoint_path.exists()
 
 
 def test_training_log_mode_rejects_unknown_value():
