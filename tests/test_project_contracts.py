@@ -234,6 +234,31 @@ def test_colab_training_notebooks_stream_live_keras_progress():
     assert "!python -u train.py --config config_efficientnet_lite0.yaml" in generic_code
 
 
+def test_colab_efficientnet_b0_notebook_pins_b0_architecture():
+    path = ROOT / "notebooks" / "colab_efficientnet_b0_training.ipynb"
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    code_cells = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    ]
+    config_cell = next(
+        source for source in code_cells if "config_efficientnet_b0.yaml" in source
+    )
+    training_cell = next(
+        source for source in code_cells if '"train.py"' in source and '"--config"' in source
+    )
+
+    compile(config_cell, f"{path}:config", "exec")
+    compile(training_cell, f"{path}:training", "exec")
+    assert 'ARCH = "efficientnet_b0"' in config_cell
+    assert 'cfg["model"]["architecture"] = ARCH' in config_cell
+    assert 'cfg["model"].pop("hub_url", None)' in config_cell
+    assert 'cfg["model"].pop("hub_cache_dir", None)' in config_cell
+    assert "efficientnet_lite0" not in config_cell
+    assert "cfg_path" in training_cell
+
+
 def test_mobilenetv3_uses_explicit_finite_input_preprocessing():
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     config_text = (
