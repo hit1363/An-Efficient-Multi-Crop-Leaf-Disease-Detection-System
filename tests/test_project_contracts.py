@@ -192,6 +192,48 @@ def test_all_model_configs_use_live_progress_logging():
         assert config["training"]["log_mode"] == "progress"
 
 
+def test_colab_training_notebooks_stream_live_keras_progress():
+    architectures = (
+        "mobilenetv2",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+        "mobilenetv3_small",
+        "shufflenetv2_05",
+    )
+    for architecture in architectures:
+        path = ROOT / "notebooks" / f"colab_{architecture}_training.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code_cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
+        all_code = "\n".join(code_cells)
+        training_cell = next(
+            source
+            for source in code_cells
+            if '"train.py"' in source
+            and '"--config"' in source
+            and "subprocess.run" in source
+        )
+
+        assert 'cfg["training"]["log_mode"] = "progress"' in all_code
+        assert '"-u"' in training_cell
+        assert 'PYTHONUNBUFFERED' in training_cell
+        assert "capture_output=True" not in training_cell
+
+    generic_path = ROOT / "notebooks" / "colab_training_notebook.ipynb"
+    generic_notebook = json.loads(generic_path.read_text(encoding="utf-8"))
+    generic_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in generic_notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert generic_code.count('cfg["training"]["log_mode"] = "progress"') == 2
+    assert "!python -u train.py --config config_mobilenetv2.yaml" in generic_code
+    assert "!python -u train.py --config config_efficientnet_lite0.yaml" in generic_code
+
+
 def test_mobilenetv3_uses_explicit_finite_input_preprocessing():
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     config_text = (
