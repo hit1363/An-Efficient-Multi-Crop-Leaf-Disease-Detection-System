@@ -30,7 +30,7 @@ augmentation:
   vertical_flip: true
   brightness_range: [0.9, 1.1]
   class_aware:
-    enabled: false
+    enabled: true
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]
@@ -74,7 +74,7 @@ loss:
   name: "categorical_crossentropy"
 
 class_weights:
-  enabled: false
+  enabled: true
   auto_compute: true
   max_weight: 5.0
   normalize: true
@@ -91,14 +91,15 @@ callbacks:
   early_stopping:
     enabled: true
     monitor: "val_loss"
-    patience: 2
+    patience: 6
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
+    enabled: true
     monitor: "val_loss"
-    patience: 2
-    mode: "min"
+    patience: 6
     restore_best_weights: true
+    mode: "min"
   tensorboard:
     enabled: true
     log_dir: "../logs"
