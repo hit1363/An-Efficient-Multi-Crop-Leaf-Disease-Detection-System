@@ -627,29 +627,20 @@ def load_dataset(
 
             def _apply_class_aware_augmentation(x, y):
                 images = tf.cast(x, tf.float32)
+                # Fast path: apply both augmentations, blend with mask.
+                # Avoids expensive tf.gather / tf.tensor_scatter_nd_update.
                 baseline_images = augmentation(images, training=True)
                 label_indices = tf.argmax(y, axis=-1, output_type=tf.int32)
                 is_minority = tf.reduce_any(
                     tf.equal(tf.expand_dims(label_indices, axis=-1), minority_ids),
                     axis=-1,
                 )
-                batch_indices = tf.cast(tf.reshape(tf.where(is_minority), [-1]), tf.int32)
-
-                def _replace_minority_images():
-                    minority_images = minority_augmentation(
-                        tf.gather(images, batch_indices), training=True
-                    )
-                    return tf.tensor_scatter_nd_update(
-                        baseline_images,
-                        tf.expand_dims(batch_indices, axis=1),
-                        minority_images,
-                    )
-
-                return tf.cond(
-                    tf.size(batch_indices) > 0,
-                    _replace_minority_images,
-                    lambda: baseline_images,
-                ), y
+                # Apply minority augmentation to all images (lightweight layers)
+                minority_images = minority_augmentation(images, training=True)
+                # Blend: where minority, use stronger augmentation, else baseline
+                mask = tf.reshape(tf.cast(is_minority, tf.float32), [-1, 1, 1, 1])
+                result = baseline_images * (1.0 - mask) + minority_images * mask
+                return result, y
 
             train_ds = train_ds.map(
                 _apply_class_aware_augmentation, num_parallel_calls=AUTOTUNE

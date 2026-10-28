@@ -73,7 +73,7 @@ def apply_runtime_profile(
         dataset["batch_size_fallbacks"] = [64, 32, 16]
         dataset["auto_batch_fallback"] = True
         configured_execution = runtime_config["performance"].get(
-            "kaggle_steps_per_execution", 8
+            "kaggle_steps_per_execution", 32
         )
         execution_steps = (
             configured_execution
@@ -86,11 +86,13 @@ def apply_runtime_profile(
         runtime_config["performance"].update(
             {
                 "steps_per_execution": int(execution_steps),
-                "jit_compile": False,
+                "jit_compile": True,
                 "distribution": "auto",
                 "multi_gpu": True,
             }
         )
+        # Enable memory cache for faster I/O on Kaggle GPUs (80K images ~ 6GB uncompressed).
+        dataset["cache_mode"] = "memory"
         if normalized_mode == "full":
             runtime_config["training"].setdefault("progress_log_interval", 64)
 
