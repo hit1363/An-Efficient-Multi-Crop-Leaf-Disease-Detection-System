@@ -14,13 +14,11 @@ dataset:
   train_dir: "../dataset/processed_harmonized/train"
   val_dir: "../dataset/processed_harmonized/val"
   test_dir: "../dataset/processed_harmonized/test"
-  # The local base batch is 32; the Kaggle runtime profile sets 64 globally
-  # across available T4 GPUs. ShuffleNet trains its random backbone from step one.
-  batch_size: 32
-  batch_size_fallbacks: [32, 16]
+  batch_size: 128
+  batch_size_fallbacks: [128, 64, 32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
-  cache_mode: "none"
+  cache_mode: "memory"
   cache_memory_limit_gb: 8.0
 
 augmentation:

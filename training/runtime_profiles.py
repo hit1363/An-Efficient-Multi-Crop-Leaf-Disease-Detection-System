@@ -63,9 +63,8 @@ def apply_runtime_profile(
         runtime_config["callbacks"]["tensorboard"]["enabled"] = False
         runtime_config["metrics"] = ["accuracy"]
 
-    # Kaggle's two-T4 runs previously crashed with mirrored execution plus XLA.
-    # Keep both GPUs visible and use MirroredStrategy when available, while
-    # leaving XLA off. A global batch of 128 gives 64 examples per T4; the
+    # Kaggle's two-T4 runs now use XLA with mirrored execution.
+    # A global batch of 128 gives 64 examples per T4; the
     # selector falls back to 64 for a single-GPU session and 16 for CPU-only.
     # Apply this override to both smoke and full runs; shared configs retain
     # their XLA setting for compatible environments.
@@ -88,7 +87,7 @@ def apply_runtime_profile(
         runtime_config["performance"].update(
             {
                 "steps_per_execution": int(execution_steps),
-                "jit_compile": False,
+                "jit_compile": True,
                 "distribution": "auto",
                 "multi_gpu": True,
             }
@@ -128,21 +127,16 @@ def apply_runtime_profile(
         )
 
     if normalized_mode == "full":
-        training = runtime_config["training"]
-        training["epochs"] = min(int(training.get("epochs", 8)), 8)
-        fine_tuning_enabled = bool(
-            training.get("freeze_base", True)
-            and training.get("fine_tuning", {}).get("enabled", True)
-        )
-        if fine_tuning_enabled:
-            training["unfreeze_epoch"] = min(
-                int(training.get("unfreeze_epoch", 5)), 5
-            )
-
+        # Respect config epochs and unfreeze_epoch; no capping.
         if not diagnostic:
-            total_epochs = int(training["epochs"])
+            training = runtime_config["training"]
+            fine_tuning_enabled = bool(
+                training.get("freeze_base", True)
+                and training.get("fine_tuning", {}).get("enabled", True)
+            )
+            total_epochs = int(training.get("epochs", 10))
             phase1_epochs = (
-                min(int(training["unfreeze_epoch"]), total_epochs)
+                min(int(training.get("unfreeze_epoch", 6)), total_epochs)
                 if fine_tuning_enabled
                 else total_epochs
             )

@@ -628,6 +628,107 @@ class EpochThroughputLogger(keras.callbacks.Callback):
             print(f" - examples_per_second: {throughput:.1f}", flush=True)
 
 
+class BoundedProfilerCallback(keras.callbacks.Callback):
+    """Capture a bounded number of training execution groups in TensorFlow Profiler."""
+
+    def __init__(self, log_dir, start_epoch=2, execution_groups=1, logger=None):
+        super().__init__()
+        self.log_dir = os.path.abspath(log_dir)
+        self.start_epoch = int(start_epoch)
+        self.execution_groups = int(execution_groups)
+        self.logger = logger
+        self._remaining_groups = 0
+        self._active = False
+
+    def _stop(self):
+        if not self._active:
+            return
+        try:
+            tf.profiler.experimental.stop()
+            if self.logger:
+                self.logger.info("TensorFlow profiler trace saved to: %s", self.log_dir)
+        except Exception as exc:  # Profiling failures must not interrupt training.
+            if self.logger:
+                self.logger.warning("Could not stop TensorFlow profiler: %s", exc)
+        finally:
+            self._active = False
+            self._remaining_groups = 0
+
+    def on_epoch_begin(self, epoch, logs=None):
+        del logs
+        if self._active or epoch + 1 != self.start_epoch:
+            return
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            tf.profiler.experimental.start(self.log_dir)
+            self._active = True
+            self._remaining_groups = self.execution_groups
+            if self.logger:
+                self.logger.info(
+                    "TensorFlow profiler started for epoch %d (%d execution group(s)); "
+                    "steps_per_execution determines batches per group",
+                    self.start_epoch,
+                    self.execution_groups,
+                )
+        except Exception as exc:  # Profiling failures must not interrupt training.
+            if self.logger:
+                self.logger.warning("Could not start TensorFlow profiler: %s", exc)
+
+    def on_train_batch_end(self, batch, logs=None):
+        del batch, logs
+        if not self._active:
+            return
+        self._remaining_groups -= 1
+        if self._remaining_groups <= 0:
+            self._stop()
+
+    def on_epoch_end(self, epoch, logs=None):
+        del epoch, logs
+        self._stop()
+
+    def on_train_end(self, logs=None):
+        del logs
+        self._stop()
+
+
+def _make_profiler_callback(config, config_path, run_timestamp, logger):
+    """Create an opt-in profiler for a cache-warmed epoch execution group."""
+    profiler_config = config.get("performance", {}).get("profiler", {})
+    if isinstance(profiler_config, bool):
+        profiler_config = {"enabled": profiler_config}
+    elif not isinstance(profiler_config, dict):
+        raise ValueError("performance.profiler must be a boolean or a mapping")
+    env_enabled = os.environ.get("LEAF_TRAIN_PROFILE", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not profiler_config.get("enabled", False) and not env_enabled:
+        return None
+
+    start_epoch = int(profiler_config.get("start_epoch", 2))
+    execution_groups = int(profiler_config.get("execution_groups", 1))
+    if start_epoch < 1:
+        raise ValueError("performance.profiler.start_epoch must be >= 1")
+    if execution_groups < 1:
+        raise ValueError("performance.profiler.execution_groups must be >= 1")
+
+    configured_dir = profiler_config.get("log_dir")
+    if configured_dir:
+        profile_root = _resolve_path(configured_dir, os.path.dirname(config_path))
+    else:
+        profile_root = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(config_path))),
+            "logs",
+            "tensorflow_profiler",
+        )
+    profile_dir = os.path.join(profile_root, run_timestamp)
+    return BoundedProfilerCallback(
+        profile_dir,
+        start_epoch=start_epoch,
+        execution_groups=execution_groups,
+        logger=logger,
+    )
+
+
 class DiagnosticBatchProgress(keras.callbacks.Callback):
     """Emit deterministic batch boundaries for short diagnostic runs."""
 
@@ -1129,6 +1230,11 @@ def train_model(config_path="config.yaml"):
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config, include_throughput=False)
     _add_throughput_callback(callbacks, fit_sample_count, log_mode=log_mode)
+    profiler_callback = _make_profiler_callback(
+        config, config_path, run_timestamp, logger
+    )
+    if profiler_callback is not None:
+        callbacks.append(profiler_callback)
     phase1_best = BestValidationWeights()
     callbacks.append(phase1_best)
     if diagnostic_run:
