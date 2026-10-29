@@ -614,6 +614,49 @@ def test_class_aware_pipeline_replaces_only_minority_training_images(tmp_path):
     assert np.array_equal(train_labels, val_labels)
 
 
+def test_class_aware_pipeline_supports_mixed_float16(tmp_path):
+    previous_policy = tf.keras.mixed_precision.global_policy()
+    try:
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        for class_name in ("common", "rare"):
+            (tmp_path / "train" / class_name).mkdir(parents=True)
+            (tmp_path / "val" / class_name).mkdir(parents=True)
+        image = tf.zeros((4, 4, 3), dtype=tf.uint8)
+        for split in ("train", "val"):
+            for class_name in ("common", "rare"):
+                tf.io.write_file(
+                    str(tmp_path / split / class_name / "sample.png"),
+                    tf.io.encode_png(image),
+                )
+
+        baseline = tf.keras.layers.Lambda(lambda x: x + 1.0)
+        minority = tf.keras.layers.Lambda(lambda x: x + 10.0)
+        train_ds, _, class_names = load_dataset(
+            tmp_path / "train",
+            tmp_path / "val",
+            batch_size=2,
+            image_size=(4, 4),
+            augmentation=baseline,
+            minority_augmentation=minority,
+            minority_class_indices=[1],
+            shuffle_buffer=0,
+            cache_mode="memory",
+            cache_dtype="float16",
+        )
+
+        train_images, train_labels = next(iter(train_ds))
+        values_by_label = {
+            int(label): float(tf.reduce_mean(train_images[index]).numpy())
+            for index, label in enumerate(tf.argmax(train_labels, axis=-1).numpy())
+        }
+
+        assert class_names == ["common", "rare"]
+        assert values_by_label == pytest.approx({0: 1.0, 1: 10.0})
+        assert bool(tf.reduce_all(tf.math.is_finite(train_images)).numpy())
+    finally:
+        tf.keras.mixed_precision.set_global_policy(previous_policy)
+
+
 def test_run_metadata_reuses_supplied_split_counts(tmp_path):
     class Model:
         name = "test_model"

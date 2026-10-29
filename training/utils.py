@@ -638,7 +638,9 @@ def load_dataset(
                 # Apply minority augmentation to all images (lightweight layers)
                 minority_images = minority_augmentation(images, training=True)
                 # Blend: where minority, use stronger augmentation, else baseline
-                mask = tf.reshape(tf.cast(is_minority, tf.float32), [-1, 1, 1, 1])
+                mask = tf.reshape(
+                    tf.cast(is_minority, baseline_images.dtype), [-1, 1, 1, 1]
+                )
                 result = baseline_images * (1.0 - mask) + minority_images * mask
                 return result, y
 
