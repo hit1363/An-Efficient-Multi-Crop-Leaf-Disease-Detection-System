@@ -78,7 +78,7 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
     assert runtime["dataset"]["batch_size"] == 64
     assert runtime["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
     assert runtime["dataset"]["auto_batch_fallback"] is True
-    assert runtime["performance"]["steps_per_execution"] == 8
+    assert runtime["performance"]["steps_per_execution"] == 32
     assert runtime["performance"]["jit_compile"] is False
     assert runtime["performance"]["distribution"] == "auto"
     assert runtime["performance"]["multi_gpu"] is True
@@ -89,7 +89,7 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
         mode == "full"
     )
     if mode == "full":
-        assert runtime["dataset"]["cache_mode"] == "auto"
+        assert runtime["dataset"]["cache_mode"] == "memory"
 
 
 def test_kaggle_profile_preserves_explicit_steps_per_execution_override():
@@ -151,8 +151,8 @@ def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
     assert diagnostic["runtime"]["diagnostic"] is True
     assert diagnostic["runtime"]["max_train_steps"] == 8
     assert diagnostic["runtime"]["max_validation_steps"] == 2
-    assert normal["dataset"]["cache_mode"] == "auto"
-    assert normal["performance"]["steps_per_execution"] == 8
+    assert normal["dataset"]["cache_mode"] == "memory"
+    assert normal["performance"]["steps_per_execution"] == 32
     assert normal["training"]["progress_log_interval"] == 64
     assert "diagnostic" not in normal["runtime"]
     assert config["dataset"]["shuffle_buffer"] == 1000

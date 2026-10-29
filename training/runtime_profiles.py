@@ -86,7 +86,7 @@ def apply_runtime_profile(
         runtime_config["performance"].update(
             {
                 "steps_per_execution": int(execution_steps),
-                "jit_compile": True,
+                "jit_compile": False,
                 "distribution": "auto",
                 "multi_gpu": True,
             }
