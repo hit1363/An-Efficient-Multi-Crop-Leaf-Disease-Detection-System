@@ -627,21 +627,32 @@ def load_dataset(
 
             def _apply_class_aware_augmentation(x, y):
                 images = tf.cast(x, tf.float32)
-                # Fast path: apply both augmentations, blend with mask.
-                # Avoids expensive tf.gather / tf.tensor_scatter_nd_update.
-                baseline_images = augmentation(images, training=True)
                 label_indices = tf.argmax(y, axis=-1, output_type=tf.int32)
                 is_minority = tf.reduce_any(
                     tf.equal(tf.expand_dims(label_indices, axis=-1), minority_ids),
                     axis=-1,
                 )
-                # Apply minority augmentation to all images (lightweight layers)
-                minority_images = minority_augmentation(images, training=True)
-                # Blend: where minority, use stronger augmentation, else baseline
-                mask = tf.reshape(
-                    tf.cast(is_minority, baseline_images.dtype), [-1, 1, 1, 1]
+
+                # Apply the baseline augmentation to the full batch, then run
+                # the stronger minority-only path on the selected examples.
+                # This avoids executing both augmentation stacks for every image.
+                result = augmentation(images, training=True)
+
+                def _augment_minority_examples():
+                    indices = tf.where(is_minority)
+                    minority_images = tf.gather(images, tf.squeeze(indices, axis=1))
+                    minority_images = minority_augmentation(
+                        minority_images, training=True
+                    )
+                    return tf.tensor_scatter_nd_update(
+                        result, indices, minority_images
+                    )
+
+                result = tf.cond(
+                    tf.reduce_any(is_minority),
+                    _augment_minority_examples,
+                    lambda: result,
                 )
-                result = baseline_images * (1.0 - mask) + minority_images * mask
                 return result, y
 
             train_ds = train_ds.map(

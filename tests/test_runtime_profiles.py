@@ -198,8 +198,8 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
 
     runtime = apply_runtime_profile(config, mode, platform="kaggle")
 
-    assert runtime["dataset"]["batch_size"] == 64
-    assert runtime["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
+    assert runtime["dataset"]["batch_size"] == 128
+    assert runtime["dataset"]["batch_size_fallbacks"] == [128, 64, 32, 16]
     assert runtime["dataset"]["auto_batch_fallback"] is True
     assert runtime["performance"]["steps_per_execution"] == 32
     assert runtime["performance"]["jit_compile"] is False
@@ -225,7 +225,7 @@ def test_kaggle_profile_preserves_explicit_steps_per_execution_override():
     )
 
     assert runtime["performance"]["steps_per_execution"] == 4
-    assert runtime["dataset"]["batch_size"] == 64
+    assert runtime["dataset"]["batch_size"] == 128
     assert runtime["performance"]["jit_compile"] is False
 
 
@@ -261,10 +261,10 @@ def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
     )
     normal = apply_runtime_profile(config, "full", platform="kaggle")
 
-    assert diagnostic["dataset"]["batch_size"] == 64
+    assert diagnostic["dataset"]["batch_size"] == 128
     assert diagnostic["dataset"]["cache_mode"] == "none"
     assert diagnostic["dataset"]["cache_dtype"] == "float32"
-    assert diagnostic["dataset"]["shuffle_buffer"] == 64
+    assert diagnostic["dataset"]["shuffle_buffer"] == 128
     assert diagnostic["augmentation"]["class_aware"]["enabled"] is True
     assert diagnostic["class_weights"] == config["class_weights"]
     assert diagnostic["performance"]["mixed_precision"] is True

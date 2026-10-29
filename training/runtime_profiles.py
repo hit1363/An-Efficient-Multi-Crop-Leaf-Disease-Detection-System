@@ -65,14 +65,14 @@ def apply_runtime_profile(
 
     # Kaggle's two-T4 runs previously crashed with mirrored execution plus XLA.
     # Keep both GPUs visible and use MirroredStrategy when available, while
-    # leaving XLA off. A global batch of 64 gives 32 examples per T4; the batch
-    # selector falls back to 32 for a single-GPU session and 16 for CPU-only.
+    # leaving XLA off. A global batch of 128 gives 64 examples per T4; the
+    # selector falls back to 64 for a single-GPU session and 16 for CPU-only.
     # Apply this override to both smoke and full runs; shared configs retain
     # their XLA setting for compatible environments.
     if normalized_platform == "kaggle":
         dataset = runtime_config["dataset"]
-        dataset["batch_size"] = 64
-        dataset["batch_size_fallbacks"] = [64, 32, 16]
+        dataset["batch_size"] = 128
+        dataset["batch_size_fallbacks"] = [128, 64, 32, 16]
         dataset["auto_batch_fallback"] = True
         configured_execution = runtime_config["performance"].get(
             "kaggle_steps_per_execution", 32
