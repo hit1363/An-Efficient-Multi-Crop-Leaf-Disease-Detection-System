@@ -787,6 +787,29 @@ def _setup_phase2_callbacks(config):
     )
 
 
+def _configure_phase2_early_stopping(callbacks, config, log_mode):
+    """Apply the optional phase-two early-stopping settings."""
+    if not config:
+        return callbacks
+
+    callbacks = [
+        callback
+        for callback in callbacks
+        if not isinstance(callback, keras.callbacks.EarlyStopping)
+    ]
+    if config.get("enabled", True):
+        callbacks.append(
+            keras.callbacks.EarlyStopping(
+                monitor=config.get("monitor", "val_loss"),
+                patience=config.get("patience", 6),
+                restore_best_weights=config.get("restore_best_weights", True),
+                mode=config.get("mode", "min"),
+                verbose=_fit_verbosity(log_mode),
+            )
+        )
+    return callbacks
+
+
 def configure_runtime(config, logger):
     """Enable optional mixed precision and mirrored multi-GPU training."""
     runtime_config = dict(config.get("performance", {}))
@@ -1179,23 +1202,9 @@ def train_model(config_path="config.yaml"):
         phase2_callbacks = _setup_phase2_callbacks(config)
         callbacks_config = config.get("callbacks", {})
         phase2_early_stopping = callbacks_config.get("fine_tuning_early_stopping")
-        if phase2_early_stopping:
-            phase2_callbacks = [
-                callback
-                for callback in phase2_callbacks
-                if not isinstance(callback, keras.callbacks.EarlyStopping)
-            ]
-            phase2_callbacks.append(
-                keras.callbacks.EarlyStopping(
-                    monitor=phase2_early_stopping.get("monitor", "val_loss"),
-                    patience=phase2_early_stopping.get("patience", 6),
-                    restore_best_weights=phase2_early_stopping.get(
-                        "restore_best_weights", True
-                    ),
-                    mode=phase2_early_stopping.get("mode", "min"),
-                    verbose=_fit_verbosity(log_mode),
-                )
-            )
+        phase2_callbacks = _configure_phase2_early_stopping(
+            phase2_callbacks, phase2_early_stopping, log_mode
+        )
         _add_throughput_callback(
             phase2_callbacks,
             fit_sample_count,

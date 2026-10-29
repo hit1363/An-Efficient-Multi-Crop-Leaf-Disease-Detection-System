@@ -13,7 +13,8 @@ def apply_runtime_profile(
     """Apply a hosted-training profile without mutating the source config.
 
     ``smoke`` prioritizes fast startup and a quick end-to-end validation.
-    ``full`` preserves the model configuration's accuracy-oriented settings.
+    ``full`` applies the shared training-time caps and architecture-specific
+    input size while preserving the source configuration.
     """
     normalized_mode = str(mode).strip().lower()
     if normalized_mode not in SUPPORTED_MODES:
@@ -31,6 +32,7 @@ def apply_runtime_profile(
     runtime_config = deepcopy(config)
     runtime_config.setdefault("dataset", {})
     runtime_config.setdefault("augmentation", {}).setdefault("class_aware", {})
+    runtime_config.setdefault("model", {})
     runtime_config.setdefault("performance", {})
     runtime_config.setdefault("training", {})
     runtime_config.setdefault("callbacks", {}).setdefault("tensorboard", {})
@@ -124,6 +126,70 @@ def apply_runtime_profile(
                 "max_validation_steps": 2,
             }
         )
+
+    if normalized_mode == "full":
+        training = runtime_config["training"]
+        training["epochs"] = min(int(training.get("epochs", 8)), 8)
+        fine_tuning_enabled = bool(
+            training.get("freeze_base", True)
+            and training.get("fine_tuning", {}).get("enabled", True)
+        )
+        if fine_tuning_enabled:
+            training["unfreeze_epoch"] = min(
+                int(training.get("unfreeze_epoch", 5)), 5
+            )
+
+        if not diagnostic:
+            total_epochs = int(training["epochs"])
+            phase1_epochs = (
+                min(int(training["unfreeze_epoch"]), total_epochs)
+                if fine_tuning_enabled
+                else total_epochs
+            )
+            phase2_epochs = total_epochs - phase1_epochs
+            callbacks = runtime_config.get("callbacks", {})
+            phase1_early_stopping = callbacks.get("early_stopping")
+            if phase1_early_stopping and phase1_early_stopping.get(
+                "enabled", True
+            ):
+                phase1_early_stopping["patience"] = min(
+                    int(phase1_early_stopping.get("patience", 10)),
+                    max(0, phase1_epochs - 1),
+                )
+
+            phase2_early_stopping = callbacks.get(
+                "fine_tuning_early_stopping"
+            )
+            if (
+                phase2_epochs > 0
+                and phase2_early_stopping
+                and phase2_early_stopping.get("enabled", True)
+            ):
+                phase2_early_stopping["patience"] = min(
+                    int(phase2_early_stopping.get("patience", 6)),
+                    max(0, phase2_epochs - 1),
+                )
+
+        architecture = str(
+            runtime_config["model"].get("architecture", "")
+        ).strip().lower().replace("-", "_")
+        faster_resolution_architectures = {
+            "mobilenetv2",
+            "mobilenetv3_small",
+            "mobilenetv3small",
+            "mobilenet_v3_small",
+            "efficientnet_b0",
+            "shufflenetv2_05",
+            "shufflenet_v2_05",
+            "shufflenetv2_0.5x",
+            "shufflenet_v2_0.5x",
+        }
+        if architecture in faster_resolution_architectures:
+            input_shape = list(runtime_config["model"].get(
+                "input_shape", (224, 224, 3)
+            ))
+            input_shape[0:2] = [192, 192]
+            runtime_config["model"]["input_shape"] = input_shape
 
     runtime.update({"mode": normalized_mode, "platform": platform})
     return runtime_config

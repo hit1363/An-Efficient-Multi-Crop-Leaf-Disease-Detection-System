@@ -27,7 +27,7 @@ from training.model import get_model, unfreeze_base_model  # noqa: E402
 def test_factory_builds_and_runs_forward_pass(architecture, kwargs):
     model, base_model = get_model(
         architecture=architecture,
-        input_shape=(64, 64, 3),
+        input_shape=(192, 192, 3),
         num_classes=5,
         dropout_rate=0.1,
         **kwargs,
@@ -36,8 +36,8 @@ def test_factory_builds_and_runs_forward_pass(architecture, kwargs):
     assert model.output_shape == (None, 5)
     assert base_model.trainable is False
 
-    output = model(tf.zeros((2, 64, 64, 3)), training=False)
-    assert tuple(output.shape) == (2, 5)
+    output = model(tf.zeros((1, 192, 192, 3)), training=False)
+    assert tuple(output.shape) == (1, 5)
     assert output.dtype == tf.float32
 
     unfreeze_base_model(base_model, unfreeze_from_layer=0)

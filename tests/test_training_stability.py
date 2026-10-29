@@ -20,6 +20,7 @@ from training.train import (
     compile_model,
     compile_fine_tune_model,
     configure_runtime,
+    _configure_phase2_early_stopping,
     create_fine_tune_optimizer,
     BatchProgressLogger,
     EpochThroughputLogger,
@@ -94,6 +95,22 @@ def test_accepts_phase_two_weights_only_on_strict_improvement():
 )
 def test_phase_one_heading_matches_backbone_trainability(freeze_base, expected):
     assert phase_one_heading(freeze_base) == expected
+
+
+def test_phase_two_early_stopping_honors_disabled_setting():
+    retained_callback = object()
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(patience=4),
+        retained_callback,
+    ]
+
+    configured = _configure_phase2_early_stopping(
+        callbacks,
+        {"enabled": False, "patience": 2},
+        "summary",
+    )
+
+    assert configured == [retained_callback]
 
 
 def test_unfreezing_keeps_batch_normalization_frozen():

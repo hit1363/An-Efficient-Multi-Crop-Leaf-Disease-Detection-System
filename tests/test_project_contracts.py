@@ -64,50 +64,34 @@ def test_tfhub_gcs_download_uses_the_tarball_suffix():
 
 
 def test_optimized_runtime_defaults_are_present():
-    mobile_architectures = (
-        "mobilenetv2",
-        "mobilenetv3_small",
-    )
-    efficient_architectures = ("efficientnet_b0", "efficientnet_lite0")
-
-    for architecture in mobile_architectures:
-        config_text = (
-            ROOT / "training" / f"config_{architecture}.yaml"
-        ).read_text(encoding="utf-8")
-        assert "batch_size: 128" in config_text
-        assert "batch_size_fallbacks: [128, 64, 32]" in config_text
-        assert 'cache_mode: "auto"' in config_text
-        assert "cache_memory_limit_gb: 8.0" in config_text
-        assert "max_weight: 5.0" in config_text
-        assert "finite_batch_check: true" in config_text
-        assert "terminate_on_nan: true" in config_text
-        assert "distribution: auto" in config_text
-        assert "log_throughput: true" in config_text
-
-    shufflenet_config = (
-        ROOT / "training" / "config_shufflenetv2_05.yaml"
-    ).read_text(encoding="utf-8")
-    assert "batch_size: 64" in shufflenet_config
-    assert "batch_size_fallbacks: [64, 32, 16]" in shufflenet_config
-
-    for architecture in efficient_architectures:
-        config_text = (
-            ROOT / "training" / f"config_{architecture}.yaml"
-        ).read_text(encoding="utf-8")
-        assert "batch_size: 64" in config_text
-        assert "batch_size_fallbacks: [64, 32, 16]" in config_text
-        assert 'cache_mode: "auto"' in config_text
-        assert "cache_memory_limit_gb: 8.0" in config_text
-        assert "max_weight: 5.0" in config_text
-        assert "finite_batch_check: true" in config_text
-        assert "terminate_on_nan: true" in config_text
-        assert "distribution: auto" in config_text
+    expected_defaults = {
+        "mobilenetv2": 3.0,
+        "mobilenetv3_small": 5.0,
+        "shufflenetv2_05": 5.0,
+        "efficientnet_b0": 5.0,
+        "efficientnet_lite0": 5.0,
+    }
+    for architecture, max_weight in expected_defaults.items():
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["dataset"]["batch_size"] == 32
+        assert config["dataset"]["batch_size_fallbacks"] == [32, 16]
+        assert config["dataset"]["cache_mode"] == "none"
+        assert config["dataset"]["cache_memory_limit_gb"] == 8.0
+        assert config["class_weights"]["max_weight"] == max_weight
+        assert config["performance"]["finite_batch_check"] is True
+        assert config["performance"]["terminate_on_nan"] is True
+        assert config["performance"]["distribution"] == "auto"
 
     benchmark = yaml.safe_load(
         (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
     )
     assert benchmark["dataset"]["batch_size"] == 64
     assert benchmark["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
+    assert benchmark["dataset"]["cache_mode"] == "auto"
 
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     train_text = (ROOT / "training" / "train.py").read_text(encoding="utf-8")
@@ -157,21 +141,30 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         assert config["callbacks"]["fine_tuning_early_stopping"]["monitor"] == "val_loss"
         assert config["callbacks"]["fine_tuning_early_stopping"]["mode"] == "min"
         assert config["callbacks"]["fine_tuning_early_stopping"]["restore_best_weights"] is True
-        assert config["class_weights"]["max_weight"] == 5.0
+        expected_max_weight = 3.0 if architecture == "mobilenetv2" else 5.0
+        assert config["class_weights"]["max_weight"] == expected_max_weight
         assert config["class_weights"]["normalize"] is True
         assert config["performance"]["mixed_precision"] is True
         assert config["performance"]["jit_compile"] is True
-        assert config["dataset"]["cache_mode"] == "auto"
+        expected_cache_mode = "auto" if architecture == "benchmark" else "none"
+        assert config["dataset"]["cache_mode"] == expected_cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
 
-    for architecture in ("benchmark", "mobilenetv2", "mobilenetv3_small", "efficientnet_b0", "efficientnet_lite0"):
+    expected_unfreeze_epochs = {
+        "benchmark": 5,
+        "mobilenetv2": 6,
+        "mobilenetv3_small": 6,
+        "efficientnet_b0": 6,
+        "efficientnet_lite0": 6,
+    }
+    for architecture, unfreeze_epoch in expected_unfreeze_epochs.items():
         config = yaml.safe_load(
             (ROOT / "training" / f"config_{architecture}.yaml").read_text(
                 encoding="utf-8"
             )
         )
         assert config["training"]["freeze_base"] is True
-        assert config["training"]["unfreeze_epoch"] == 5
+        assert config["training"]["unfreeze_epoch"] == unfreeze_epoch
 
 
 def test_all_model_configs_use_live_progress_logging():
@@ -312,7 +305,7 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
                     encoding="utf-8"
                 )
             )
-            assert config["dataset"]["cache_mode"] == "auto"
+            assert config["dataset"]["cache_mode"] == "none"
             assert config["dataset"]["cache_memory_limit_gb"] == 8.0
             assert config["performance"]["distribution"] == "auto"
 
