@@ -169,9 +169,6 @@ def apply_runtime_profile(
         ).strip().lower().replace("-", "_")
         faster_resolution_architectures = {
             "mobilenetv2",
-            "mobilenetv3_small",
-            "mobilenetv3small",
-            "mobilenet_v3_small",
             "efficientnet_b0",
             "shufflenetv2_05",
             "shufflenet_v2_05",

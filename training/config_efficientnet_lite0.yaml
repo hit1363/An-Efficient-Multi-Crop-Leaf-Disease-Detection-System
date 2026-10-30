@@ -47,7 +47,7 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 10
+  epochs: 15
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100 # Layer index to start unfreezing from
@@ -70,26 +70,16 @@ optimizer:
 #   exponential_decay: uses decay_steps, decay_rate, staircase
 #   cosine_decay:     uses decay_steps, alpha (minimum LR fraction)
 lr_schedule:
-  type: "reduce_on_plateau" # Options: reduce_on_plateau, exponential_decay, cosine_decay
-  monitor: "val_loss"
-  factor: 0.2
-  patience: 1
-  min_lr: 1.0e-7
-  # For exponential_decay:
-  # decay_steps: 1000
-  # decay_rate: 0.96
-  # staircase: false
-  # For cosine_decay:
-  # decay_steps: 1000
-  # alpha: 0.0
+  type: "cosine_decay"
+  decay_epochs: 9
+  alpha: 0.01
 
 # Loss Function
 loss:
-  name: "categorical_crossentropy" # Fit-time class weights provide weighted cross-entropy.
-  # For focal_loss only:
-  # gamma: 2.0        # focusing parameter (higher = more focus on hard examples)
-  # alpha: 0.25       # weight-balancing parameter
-  # label_smoothing: 0.0
+  name: "focal_loss"
+  gamma: 2.0
+  alpha: 0.25
+  label_smoothing: 0.1
 
 # Class Weights (for imbalanced dataset)
 class_weights:

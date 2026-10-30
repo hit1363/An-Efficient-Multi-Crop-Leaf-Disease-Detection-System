@@ -38,7 +38,7 @@ augmentation:
     brightness_range: [0.85, 1.15]
 
 training:
-  epochs: 10
+  epochs: 15
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 180
@@ -57,14 +57,15 @@ optimizer:
   decay: 0.0
 
 lr_schedule:
-  type: "reduce_on_plateau"
-  monitor: "val_loss"
-  factor: 0.2
-  patience: 1
-  min_lr: 1.0e-7
+  type: "cosine_decay"
+  decay_epochs: 9
+  alpha: 0.01
 
 loss:
-  name: "categorical_crossentropy"
+  name: "focal_loss"
+  gamma: 2.0
+  alpha: 0.25
+  label_smoothing: 0.1
 
 class_weights:
   enabled: true
