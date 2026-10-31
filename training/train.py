@@ -1036,26 +1036,29 @@ def train_model(config_path="config.yaml"):
         minority_class_names,
     )
 
-    # Load datasets
+    # Load datasets INSIDE strategy scope for proper GPU distribution
     logger.info("Loading datasets...")
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     augmentation, minority_augmentation = create_class_aware_augmentation_layers(config)
-    train_ds, val_ds, class_names = load_dataset(
-        config["dataset"]["train_dir"],
-        config["dataset"]["val_dir"],
-        batch_size=config["dataset"]["batch_size"],
-        image_size=tuple(config["model"]["input_shape"][:2]),
-        preprocess_fn=preprocess_fn,
-        augmentation=augmentation,
-        minority_augmentation=minority_augmentation,
-        minority_class_indices=minority_indices,
-        shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
-        cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
-        cache_memory_limit_gb=config.get("dataset", {}).get("cache_memory_limit_gb", 8.0),
-        cache_dtype=config.get("dataset", {}).get("cache_dtype", "float32"),
-        deterministic=config.get("performance", {}).get("deterministic", False),
-        class_names=expected_class_names,
-    )
+
+    with runtime_strategy.scope():
+        train_ds, val_ds, class_names = load_dataset(
+            config["dataset"]["train_dir"],
+            config["dataset"]["val_dir"],
+            batch_size=config["dataset"]["batch_size"],
+            image_size=tuple(config["model"]["input_shape"][:2]),
+            preprocess_fn=preprocess_fn,
+            augmentation=augmentation,
+            minority_augmentation=minority_augmentation,
+            minority_class_indices=minority_indices,
+            shuffle_buffer=config.get("dataset", {}).get("shuffle_buffer", 1000),
+            cache_mode=config.get("dataset", {}).get("cache_mode", "none"),
+            cache_memory_limit_gb=config.get("dataset", {}).get("cache_memory_limit_gb", 8.0),
+            cache_dtype=config.get("dataset", {}).get("cache_dtype", "float32"),
+            deterministic=config.get("performance", {}).get("deterministic", False),
+            class_names=expected_class_names,
+        )
+
     train_steps = _finite_dataset_steps(train_ds, "training")
     val_steps = _finite_dataset_steps(val_ds, "validation")
     fit_train_steps, fit_val_steps = _resolve_fit_step_counts(
@@ -1074,6 +1077,15 @@ def train_model(config_path="config.yaml"):
     if config.get("performance", {}).get("finite_batch_check", False):
         validate_dataset_batch(train_ds, logger)
     train_ds = train_ds.repeat()
+
+    # Prefetch to GPU for zero-copy transfer
+    try:
+        train_ds = train_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
+        val_ds = val_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
+        logger.info("Enabled GPU prefetch for dataset pipeline")
+    except (RuntimeError, ValueError) as e:
+        logger.warning("GPU prefetch unavailable: %s", e)
+
     logger.info(
         "Using repeated training dataset with explicit steps_per_epoch=%d and "
         "validation_steps=%d",
