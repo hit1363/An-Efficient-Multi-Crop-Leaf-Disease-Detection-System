@@ -1,5 +1,6 @@
 import csv
 import json
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -14,6 +15,7 @@ from training.train import (
     _fit_verbosity,
     _fit_sample_count,
     _add_keras_progress_logger,
+    _prefetch_to_device_for_single_replica,
     _resolve_fit_step_counts,
     _should_skip_final_export,
     build_metrics,
@@ -168,6 +170,61 @@ def test_fit_time_class_weights_complete_a_small_fit():
     )
 
     assert np.isfinite(history.history["loss"][0])
+
+
+def test_device_prefetch_is_skipped_for_mirrored_strategy(caplog):
+    class Dataset:
+        def __init__(self):
+            self.applied = []
+
+        def apply(self, transformation):
+            self.applied.append(transformation)
+            return self
+
+    train_ds = Dataset()
+    val_ds = Dataset()
+    caplog.set_level(logging.INFO)
+
+    result = _prefetch_to_device_for_single_replica(
+        train_ds,
+        val_ds,
+        SimpleNamespace(num_replicas_in_sync=2),
+        logging.getLogger("test_prefetch"),
+    )
+
+    assert result == (train_ds, val_ds)
+    assert train_ds.applied == []
+    assert val_ds.applied == []
+    assert "Skipping GPU prefetch for 2-replica strategy" in caplog.text
+
+
+def test_device_prefetch_remains_enabled_for_single_replica(monkeypatch):
+    class Dataset:
+        def __init__(self):
+            self.applied = []
+
+        def apply(self, transformation):
+            self.applied.append(transformation)
+            return self
+
+    train_ds = Dataset()
+    val_ds = Dataset()
+    monkeypatch.setattr(
+        tf.data.experimental,
+        "prefetch_to_device",
+        lambda device: device,
+    )
+
+    result = _prefetch_to_device_for_single_replica(
+        train_ds,
+        val_ds,
+        SimpleNamespace(num_replicas_in_sync=1),
+        logging.getLogger("test_prefetch"),
+    )
+
+    assert result == (train_ds, val_ds)
+    assert train_ds.applied == ["/gpu:0"]
+    assert val_ds.applied == ["/gpu:0"]
 
 
 def test_diagnostic_step_caps_do_not_change_full_split_counts():

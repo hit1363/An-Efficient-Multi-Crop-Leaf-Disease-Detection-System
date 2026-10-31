@@ -959,6 +959,26 @@ def _maybe_loss_scale_optimizer(optimizer):
     return optimizer
 
 
+def _prefetch_to_device_for_single_replica(train_ds, val_ds, strategy, logger):
+    """Use experimental GPU prefetch only outside mirrored training."""
+    replica_count = int(strategy.num_replicas_in_sync)
+    if replica_count > 1:
+        logger.info(
+            "Skipping GPU prefetch for %d-replica strategy; "
+            "using regular dataset prefetch",
+            replica_count,
+        )
+        return train_ds, val_ds
+
+    try:
+        train_ds = train_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
+        val_ds = val_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
+        logger.info("Enabled GPU prefetch for dataset pipeline")
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("GPU prefetch unavailable: %s", exc)
+    return train_ds, val_ds
+
+
 def train_model(config_path="config.yaml"):
     """Main training function"""
 
@@ -1078,13 +1098,11 @@ def train_model(config_path="config.yaml"):
         validate_dataset_batch(train_ds, logger)
     train_ds = train_ds.repeat()
 
-    # Prefetch to GPU for zero-copy transfer
-    try:
-        train_ds = train_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
-        val_ds = val_ds.apply(tf.data.experimental.prefetch_to_device("/gpu:0"))
-        logger.info("Enabled GPU prefetch for dataset pipeline")
-    except (RuntimeError, ValueError) as e:
-        logger.warning("GPU prefetch unavailable: %s", e)
+    # Device prefetch is not compatible with the serialized dataset graph used
+    # by MirroredStrategy. load_dataset already adds ordinary tf.data prefetch.
+    train_ds, val_ds = _prefetch_to_device_for_single_replica(
+        train_ds, val_ds, runtime_strategy, logger
+    )
 
     logger.info(
         "Using repeated training dataset with explicit steps_per_epoch=%d and "
