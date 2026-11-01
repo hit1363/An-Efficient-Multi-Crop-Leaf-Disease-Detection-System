@@ -33,11 +33,14 @@ from training.utils import (
 
 
 ARCHITECTURES = (
+    "mobilenet_v1",
     "mobilenetv2",
-    "efficientnet_b0",
-    "efficientnet_lite0",
     "mobilenetv3_small",
-    "shufflenetv2_05",
+    "mobilenet_v3_large",
+    "nasnet_mobile",
+    "efficientnet_b0",
+    "efficientnet_v2_b0",
+    "efficientnet_lite0",
 )
 PREFERRED_VARIANTS = ("int8", "dynamic", "float")
 
@@ -463,7 +466,7 @@ def run_comparison(
     max_test_samples=None,
     eval_batch_size=32,
 ):
-    """Run the complete five-model comparison and write all deliverables."""
+    """Run the complete eight-model comparison and write all deliverables."""
     repo_dir = Path(repo_dir)
     dataset_base = Path(dataset_base)
     model_root = Path(model_root)

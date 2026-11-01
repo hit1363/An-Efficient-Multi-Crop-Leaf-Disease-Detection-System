@@ -31,7 +31,11 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 ├── notebooks/
 │   ├── colab_training_notebook.ipynb
 │   ├── colab_<model>_training.ipynb
+│   ├── kaggle_<model>_training.ipynb
+│   ├── colab_model_comparison.ipynb
+│   ├── kaggle_model_comparison.ipynb
 │   ├── kaggle_harmonized_comparison.ipynb
+│   ├── model_comparison_common.py
 │   ├── data_exploration.ipynb
 │   └── evaluation.ipynb
 ├── training/
@@ -40,10 +44,15 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 │   ├── evaluate.py
 │   ├── model.py
 │   ├── utils.py
+│   ├── config_benchmark.yaml
+│   ├── config_mobilenet_v1.yaml
 │   ├── config_mobilenetv2.yaml
-│   ├── config_efficientnet_b0.yaml
-│   ├── config_efficientnet_lite0.yaml
 │   ├── config_mobilenetv3_small.yaml
+│   ├── config_mobilenet_v3_large.yaml
+│   ├── config_nasnet_mobile.yaml
+│   ├── config_efficientnet_b0.yaml
+│   ├── config_efficientnet_v2_b0.yaml
+│   ├── config_efficientnet_lite0.yaml
 │   └── config_shufflenetv2_05.yaml
 ├── quantization/
 │   └── post_training_quant.py
@@ -85,10 +94,14 @@ The builder applies the explicit taxonomy, retains `Invalid` as class 72, remove
 ### Training
 
 ```bash
+python training/train.py --config training/config_mobilenet_v1.yaml
 python training/train.py --config training/config_mobilenetv2.yaml
-python training/train.py --config training/config_efficientnet_b0.yaml
-python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_mobilenetv3_small.yaml
+python training/train.py --config training/config_mobilenet_v3_large.yaml
+python training/train.py --config training/config_nasnet_mobile.yaml
+python training/train.py --config training/config_efficientnet_b0.yaml
+python training/train.py --config training/config_efficientnet_v2_b0.yaml
+python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
@@ -131,9 +144,22 @@ python quantization/post_training_quant.py \
   --arch mobilenetv2
 ```
 
-## Google Colab Workflow
+## Google Colab and Kaggle Workflows
 
-Use one of the model-specific notebooks named `colab_<model>_training.ipynb` or `kaggle_<model>_training.ipynb`. Each standalone notebook reads the platform dataset, trains one model, evaluates it, exports dynamic-range and full INT8 TFLite models, and benchmarks CPU inference. The existing combined notebooks remain available for backward compatibility.
+Use a model-specific notebook to train one candidate, evaluate it, export dynamic-range and full INT8 TFLite models, and benchmark CPU inference. The separate ShuffleNetV2 experiment and the existing combined notebooks remain available for backward compatibility.
+
+| Model | Google Colab | Kaggle |
+|---|---|---|
+| MobileNet V1 | [Train](notebooks/colab_mobilenet_v1_training.ipynb) | [Train](notebooks/kaggle_mobilenet_v1_training.ipynb) |
+| MobileNet V2 | [Train](notebooks/colab_mobilenetv2_training.ipynb) | [Train](notebooks/kaggle_mobilenetv2_training.ipynb) |
+| MobileNetV3-Small | [Train](notebooks/colab_mobilenetv3_small_training.ipynb) | [Train](notebooks/kaggle_mobilenetv3_small_training.ipynb) |
+| MobileNetV3-Large | [Train](notebooks/colab_mobilenet_v3_large_training.ipynb) | [Train](notebooks/kaggle_mobilenet_v3_large_training.ipynb) |
+| NASNetMobile | [Train](notebooks/colab_nasnet_mobile_training.ipynb) | [Train](notebooks/kaggle_nasnet_mobile_training.ipynb) |
+| EfficientNetB0 | [Train](notebooks/colab_efficientnet_b0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_b0_training.ipynb) |
+| EfficientNetV2-B0 | [Train](notebooks/colab_efficientnet_v2_b0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_v2_b0_training.ipynb) |
+| EfficientNet-Lite0 | [Train](notebooks/colab_efficientnet_lite0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_lite0_training.ipynb) |
+
+For artifact evaluation and ranking, use the [Colab comparison notebook](notebooks/colab_model_comparison.ipynb) or [Kaggle comparison notebook](notebooks/kaggle_model_comparison.ipynb). To rebuild and train the harmonized benchmark on Kaggle, use the [harmonized comparison notebook](notebooks/kaggle_harmonized_comparison.ipynb).
 
 Hosted notebooks support two runtime profiles through `TRAINING_RUN_MODE`:
 
@@ -187,9 +213,9 @@ Place your deployed model and labels here:
 
 ## Dataset Summary
 
-- Total images: ~67k
+- Total images: 115,382 (from the checked-in dataset metadata)
 - Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
-- Classes: 45
+- Classes: 72
 - Split: 70% train, 15% val, 15% test
 
 ## License
@@ -219,4 +245,4 @@ MIT License. See LICENSE.
 - TensorFlow Team
 - Flutter Community
 
-Status: Active Development (Last updated: May 2026)
+Status: Active Development (Last updated: November 2026)

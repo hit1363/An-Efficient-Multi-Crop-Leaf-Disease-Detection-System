@@ -22,17 +22,57 @@ def test_training_and_quantization_sources_parse():
 
 def test_all_model_configs_exist():
     architectures = [
+        "mobilenet_v1",
         "mobilenetv2",
-        "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
         "shufflenetv2_05",
     ]
     for architecture in architectures:
         config_path = ROOT / "training" / f"config_{architecture}.yaml"
         assert config_path.exists(), config_path
-        config_text = config_path.read_text(encoding="utf-8")
-        assert f'architecture: "{architecture}"' in config_text
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config["model"]["architecture"] == architecture
+
+
+def test_new_architecture_configs_share_the_benchmark_recipe():
+    benchmark = yaml.safe_load(
+        (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
+    )
+    for architecture in (
+        "mobilenet_v1",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
+    ):
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["model"]["architecture"] == architecture
+        assert config["model"]["num_classes"] == 72
+        for section in (
+            "augmentation",
+            "training",
+            "optimizer",
+            "loss",
+            "lr_schedule",
+            "class_weights",
+            "metrics",
+            "seed",
+        ):
+            assert config[section] == benchmark[section]
+        assert config["dataset"]["data_dir"] == benchmark["dataset"]["data_dir"]
+        assert config["dataset"]["cache_mode"] == "none"
+        assert config["export"]["save_dir"] == "../models"
+        assert config["callbacks"]["csv_logger"]["filename"].endswith(
+            f"{architecture}.csv"
+        )
 
 
 def test_pillow_constraints_match_project_metadata():
@@ -65,21 +105,25 @@ def test_tfhub_gcs_download_uses_the_tarball_suffix():
 
 def test_optimized_runtime_defaults_are_present():
     expected_defaults = {
-        "mobilenetv2": 3.0,
-        "mobilenetv3_small": 5.0,
-        "shufflenetv2_05": 5.0,
-        "efficientnet_b0": 5.0,
-        "efficientnet_lite0": 5.0,
+        "mobilenetv2": (3.0, 128, [128, 64, 32, 16], "memory"),
+        "mobilenetv3_small": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "shufflenetv2_05": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "efficientnet_b0": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "efficientnet_lite0": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "mobilenet_v1": (5.0, 32, [32, 16], "none"),
+        "mobilenet_v3_large": (5.0, 32, [32, 16], "none"),
+        "nasnet_mobile": (5.0, 32, [32, 16], "none"),
+        "efficientnet_v2_b0": (5.0, 32, [32, 16], "none"),
     }
-    for architecture, max_weight in expected_defaults.items():
+    for architecture, (max_weight, batch_size, fallbacks, cache_mode) in expected_defaults.items():
         config = yaml.safe_load(
             (ROOT / "training" / f"config_{architecture}.yaml").read_text(
                 encoding="utf-8"
             )
         )
-        assert config["dataset"]["batch_size"] == 32
-        assert config["dataset"]["batch_size_fallbacks"] == [32, 16]
-        assert config["dataset"]["cache_mode"] == "none"
+        assert config["dataset"]["batch_size"] == batch_size
+        assert config["dataset"]["batch_size_fallbacks"] == fallbacks
+        assert config["dataset"]["cache_mode"] == cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
         assert config["class_weights"]["max_weight"] == max_weight
         assert config["performance"]["finite_batch_check"] is True
@@ -112,6 +156,10 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "shufflenetv2_05",
         "efficientnet_b0",
         "efficientnet_lite0",
+        "mobilenet_v1",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
     )
     for architecture in architectures:
         config = yaml.safe_load(
@@ -119,7 +167,10 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
                 encoding="utf-8"
             )
         )
-        assert config["loss"]["name"] == "categorical_crossentropy"
+        assert config["loss"]["name"] in {
+            "categorical_crossentropy",
+            "focal_loss",
+        }
         assert config["class_weights"]["enabled"] is True
         class_aware = config["augmentation"]["class_aware"]
         assert class_aware["enabled"] is True
@@ -146,7 +197,13 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         assert config["class_weights"]["normalize"] is True
         assert config["performance"]["mixed_precision"] is True
         assert config["performance"]["jit_compile"] is True
-        expected_cache_mode = "auto" if architecture == "benchmark" else "none"
+        expected_cache_mode = (
+            "auto" if architecture == "benchmark"
+            else "none" if architecture in {
+                "mobilenet_v1", "mobilenet_v3_large", "nasnet_mobile", "efficientnet_v2_b0"
+            }
+            else "memory"
+        )
         assert config["dataset"]["cache_mode"] == expected_cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
 
@@ -156,6 +213,10 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "mobilenetv3_small": 6,
         "efficientnet_b0": 6,
         "efficientnet_lite0": 6,
+        "mobilenet_v1": 5,
+        "mobilenet_v3_large": 5,
+        "nasnet_mobile": 5,
+        "efficientnet_v2_b0": 5,
     }
     for architecture, unfreeze_epoch in expected_unfreeze_epochs.items():
         config = yaml.safe_load(
@@ -170,8 +231,12 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
 def test_all_model_configs_use_live_progress_logging():
     architectures = (
         "benchmark",
+        "mobilenet_v1",
         "mobilenetv2",
         "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
         "shufflenetv2_05",
         "efficientnet_b0",
         "efficientnet_lite0",
@@ -187,10 +252,14 @@ def test_all_model_configs_use_live_progress_logging():
 
 def test_colab_training_notebooks_stream_live_keras_progress():
     architectures = (
+        "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
         "efficientnet_lite0",
         "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
         "shufflenetv2_05",
     )
     for architecture in architectures:
@@ -267,10 +336,14 @@ def test_mobilenetv3_uses_explicit_finite_input_preprocessing():
 
 def test_standalone_notebooks_have_valid_code_and_platform_paths():
     architectures = [
+        "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
         "efficientnet_lite0",
         "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
         "shufflenetv2_05",
     ]
     shell = InteractiveShell()
@@ -305,7 +378,7 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
                     encoding="utf-8"
                 )
             )
-            assert config["dataset"]["cache_mode"] == "none"
+            assert config["dataset"]["cache_mode"] in {"none", "memory"}
             assert config["dataset"]["cache_memory_limit_gb"] == 8.0
             assert config["performance"]["distribution"] == "auto"
 
@@ -365,10 +438,14 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
 def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
     for platform in ("colab", "kaggle"):
         for architecture in (
+            "mobilenet_v1",
             "mobilenetv2",
             "efficientnet_b0",
             "efficientnet_lite0",
             "mobilenetv3_small",
+            "mobilenet_v3_large",
+            "nasnet_mobile",
+            "efficientnet_v2_b0",
             "shufflenetv2_05",
         ):
             path = ROOT / "notebooks" / f"{platform}_{architecture}_training.ipynb"
@@ -395,10 +472,14 @@ def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
 
 def test_all_colab_notebooks_include_kaggle_dataset_setup():
     architectures = (
+        "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
         "efficientnet_lite0",
         "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
         "shufflenetv2_05",
     )
     for architecture in architectures:
@@ -422,15 +503,32 @@ def test_all_colab_notebooks_include_kaggle_dataset_setup():
 
 def test_comparison_notebooks_and_common_runner_contract():
     architectures = (
+        "mobilenet_v1",
         "mobilenetv2",
-        "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
-        "shufflenetv2_05",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
     )
     common_path = ROOT / "notebooks" / "model_comparison_common.py"
-    ast.parse(common_path.read_text(encoding="utf-8"), filename=str(common_path))
+    common_tree = ast.parse(
+        common_path.read_text(encoding="utf-8"), filename=str(common_path)
+    )
     common_code = common_path.read_text(encoding="utf-8")
+    architecture_assignment = next(
+        node
+        for node in common_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "ARCHITECTURES"
+            for target in node.targets
+        )
+    )
+    assert ast.literal_eval(architecture_assignment.value) == architectures
+    architecture_declaration = common_code.split("PREFERRED_VARIANTS", 1)[0]
+    assert '"shufflenetv2_05"' not in architecture_declaration
     for required in (
         "def discover_artifacts",
         "def evaluate_float_model",
@@ -456,6 +554,7 @@ def test_comparison_notebooks_and_common_runner_contract():
         for architecture in architectures:
             assert architecture in common_code
             assert architecture in notebook_text
+        assert "shufflenetv2_05" not in notebook_text
         assert "MAX_TEST_SAMPLES" in code
         assert "run_comparison" in code
         assert "MODEL_ROOT" in code
