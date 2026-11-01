@@ -3,6 +3,7 @@ Data Preparation Script - Split raw dataset, resize (center-crop), and save.
 """
 
 import argparse
+import hashlib
 import json
 import random
 import shutil
@@ -16,27 +17,22 @@ try:
 except AttributeError:
     RESAMPLE_METHOD = Image.LANCZOS
 
+DEFAULT_MAX_PER_CLASS = 300
 
-def split_data_once(data, train_ratio, val_ratio, seed=None):
-    """
-    Shuffles data once and splits into train, val, and test lists.
-    """
-    data_copy = list(data)
-    if seed is not None:
-        rng = random.Random(seed)
-        rng.shuffle(data_copy)
-    else:
-        random.shuffle(data_copy)
 
-    n_total = len(data_copy)
-    train_end = int(n_total * train_ratio)
-    val_end = train_end + int(n_total * val_ratio)
+def select_images(images, max_per_class, seed, class_name):
+    """Select a reproducible, class-specific random subset of images."""
+    selected = list(images)
+    class_seed = hashlib.sha256(f"{seed}:{class_name}".encode("utf-8")).digest()
+    random.Random(class_seed).shuffle(selected)
+    return selected[:max_per_class]
 
-    train_imgs = data_copy[:train_end]
-    val_imgs = data_copy[train_end:val_end]
-    test_imgs = data_copy[val_end:]
 
-    return train_imgs, val_imgs, test_imgs
+def split_selected(items, train_ratio, val_ratio):
+    """Split an already shuffled selection into train, validation, and test."""
+    train_end = int(len(items) * train_ratio)
+    val_end = train_end + int(len(items) * val_ratio)
+    return items[:train_end], items[train_end:val_end], items[val_end:]
 
 
 def get_image_files(directory: Path):
@@ -88,8 +84,9 @@ def prepare_dataset(
     val_ratio=0.15,
     seed=42,
     target_size=224,
+    max_per_class=DEFAULT_MAX_PER_CLASS,
 ):
-    """Split dataset into train/val/test and resize/crop images."""
+    """Select up to max_per_class per class, split, and resize/crop images."""
     if not raw_data_dir.exists():
         raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
 
@@ -104,6 +101,8 @@ def prepare_dataset(
         raise ValueError("Calculated test_ratio must be between 0 and 1")
     if target_size <= 0:
         raise ValueError("target_size must be greater than 0")
+    if isinstance(max_per_class, bool) or not isinstance(max_per_class, int) or max_per_class < 1:
+        raise ValueError("max_per_class must be a positive integer")
 
     # Clear old output directory to prevent stale files
     if output_dir.exists():
@@ -119,6 +118,12 @@ def prepare_dataset(
         "val": {"total": 0, "classes": {}},
         "test": {"total": 0, "classes": {}},
         "original_total": 0,
+        "selected_total": 0,
+        "processed_total": 0,
+        "failed_total": 0,
+        "capped_classes": 0,
+        "max_per_class": max_per_class,
+        "per_class": {},
         "classes_count": 0,
         "target_size": target_size,
         "ratios": (train_ratio, val_ratio, test_ratio),
@@ -135,6 +140,7 @@ def prepare_dataset(
     stats["classes_count"] = len(disease_folders)
 
     print(f"Found {len(disease_folders)} disease classes.")
+    print(f"Maximum images per class: {max_per_class}")
     print(f"Target size: {target_size}x{target_size} pixels.\n")
 
     for disease_folder in disease_folders:
@@ -150,9 +156,17 @@ def prepare_dataset(
         for split in splits:
             stats[split]["classes"][folder_name] = 0
 
-        # Shuffle once and unpack into train, val, test
-        train_imgs, val_imgs, test_imgs = split_data_once(
-            images, train_ratio, val_ratio, seed=seed
+        selected = select_images(images, max_per_class, seed, folder_name)
+        stats["selected_total"] += len(selected)
+        if len(images) > max_per_class:
+            stats["capped_classes"] += 1
+        class_stats = {"raw": len(images), "selected": len(selected)}
+        for split in splits:
+            class_stats[split] = 0
+        stats["per_class"][folder_name] = class_stats
+
+        train_imgs, val_imgs, test_imgs = split_selected(
+            selected, train_ratio, val_ratio
         )
 
         for split, img_list in [
@@ -174,25 +188,29 @@ def prepare_dataset(
                 if success:
                     stats[split]["total"] += 1
                     stats[split]["classes"][folder_name] += 1
+                    class_stats[split] += 1
+                    stats["processed_total"] += 1
 
         print(
-            f"{folder_name:30} | Train: {stats['train']['classes'][folder_name]:5} "
-            f"| Val: {stats['val']['classes'][folder_name]:5} "
-            f"| Test: {stats['test']['classes'][folder_name]:5}"
+            f"{folder_name:30} | Raw: {len(images):5} | Selected: {len(selected):5} "
+            f"| Train: {class_stats['train']:5} | Val: {class_stats['val']:5} "
+            f"| Test: {class_stats['test']:5}"
         )
 
+    stats["failed_total"] = stats["selected_total"] - stats["processed_total"]
     return stats
 
 
 def print_statistics(stats):
     """Print detailed split statistics suitable for thesis reporting."""
-    total_processed = sum(stats[s]["total"] for s in ["train", "val", "test"])
     tr, vr, ts = stats["ratios"]
 
     print("\n" + "=" * 80)
-    print("DATASET SPLIT & RESIZE STATISTICS")
+    print("DATASET SELECTION, SPLIT & RESIZE STATISTICS")
     print("=" * 80)
     print(f"  Number of Classes : {stats['classes_count']}")
+    print(f"  Maximum per Class : {stats['max_per_class']}")
+    print(f"  Classes Capped    : {stats['capped_classes']}")
     print(
         f"  Target Size       : {stats['target_size']}x{stats['target_size']} (Center-Cropped)"
     )
@@ -200,8 +218,11 @@ def print_statistics(stats):
         f"  Split Ratio       : {tr*100:.0f}% Train / {vr*100:.0f}% Validation / {ts*100:.0f}% Test"
     )
     print("-" * 80)
-    print(f"  Original Images   : {stats['original_total']:,}")
-    print(f"  Processed Images  : {total_processed:,}")
+    print(f"  Raw Images        : {stats['original_total']:,}")
+    print(f"  Selected Images   : {stats['selected_total']:,}")
+    print(f"  Processed Images  : {stats['processed_total']:,}")
+    if stats["failed_total"]:
+        print(f"  Failed Images     : {stats['failed_total']:,}")
     print("-" * 80)
     print(f"  Training Set      : {stats['train']['total']:,} images")
     print(f"  Validation Set    : {stats['val']['total']:,} images")
@@ -217,12 +238,15 @@ def save_dataset_info(stats, output_dir, seed):
         "dataset_name": "LeafDisease",
         "classes": stats["classes_count"],
         "class_names": sorted(stats["train"]["classes"].keys()),
+        "selection": {
+            "max_per_class": stats["max_per_class"],
+            "method": "deterministic class-specific shuffle, keep first max_per_class images",
+            "classes_capped": stats["capped_classes"],
+        },
         "original_images": stats["original_total"],
-        "processed_images": (
-            stats["train"]["total"]
-            + stats["val"]["total"]
-            + stats["test"]["total"]
-        ),
+        "selected_images": stats["selected_total"],
+        "processed_images": stats["processed_total"],
+        "failed_images": stats["failed_total"],
         "target_size": stats["target_size"],
         "color_mode": "RGB",
         "split": {
@@ -231,6 +255,7 @@ def save_dataset_info(stats, output_dir, seed):
             "test": ts,
         },
         "seed": seed,
+        "per_class": stats["per_class"],
         "preprocessing": {
             "resize_method": "ImageOps.fit",
             "resample": "LANCZOS",
@@ -244,6 +269,17 @@ def save_dataset_info(stats, output_dir, seed):
     print(f"Dataset metadata saved to: {info_path}")
 
 
+def positive_int(value):
+    """Parse a positive integer for command-line options."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"must be an integer, got {value!r}") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {parsed}")
+    return parsed
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Prepare dataset: Split, Resize (Center-Crop), and Save."
@@ -253,6 +289,12 @@ def main():
     parser.add_argument("--train-ratio", type=float, default=0.70)
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--max-per-class",
+        type=positive_int,
+        default=DEFAULT_MAX_PER_CLASS,
+        help="Maximum images kept per class (default: 300)",
+    )
     parser.add_argument(
         "--target-size",
         type=int,
@@ -279,6 +321,7 @@ def main():
         val_ratio=args.val_ratio,
         seed=args.seed,
         target_size=args.target_size,
+        max_per_class=args.max_per_class,
     )
     print_statistics(stats)
     save_dataset_info(stats, output_dir, args.seed)
