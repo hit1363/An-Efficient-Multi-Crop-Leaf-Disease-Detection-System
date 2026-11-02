@@ -30,6 +30,14 @@ def _dataset_class_names(directory, class_names=None):
     else:
         expected = None
 
+    if class_names is None:
+        metadata_path = os.path.join(os.path.dirname(directory), "dataset_info.json")
+        if os.path.isfile(metadata_path):
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                metadata_names = json.load(handle).get("class_names")
+            if isinstance(metadata_names, list) and metadata_names:
+                class_names = metadata_names
+                expected = list(class_names)
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
@@ -498,8 +506,8 @@ def load_dataset(
     Returns:
         train_ds, val_ds, class_names
     """
-    # Batch at the source. The previous unbatched -> shuffle -> batch path
-    # added substantial tf.data overhead for large hosted datasets.
+    # Shuffle individual examples before batching so class-sorted directories
+    # do not produce long class-heavy runs of batches.
     source_class_names = _dataset_class_names(train_dir, class_names)
     val_source_class_names = _dataset_class_names(val_dir, class_names)
     canonical_class_names = None
@@ -519,7 +527,7 @@ def load_dataset(
     train_ds = keras.preprocessing.image_dataset_from_directory(
         train_dir,
         image_size=image_size,
-        batch_size=batch_size,
+        batch_size=None,
         label_mode="categorical",
         shuffle=False,
         seed=42,
@@ -529,7 +537,7 @@ def load_dataset(
     val_ds = keras.preprocessing.image_dataset_from_directory(
         val_dir,
         image_size=image_size,
-        batch_size=batch_size,
+        batch_size=None,
         label_mode="categorical",
         shuffle=False,
         class_names=val_source_class_names,
@@ -607,14 +615,14 @@ def load_dataset(
             num_parallel_calls=AUTOTUNE,
         )
 
-    # Shuffle batches after caching so cached datasets still reshuffle each
-    # epoch. The source dataset is already batched, avoiding the expensive
-    # individual-example shuffle and re-batch path.
+    # Cache decoded images first, then shuffle examples and batch. Augmentation
+    # remains stochastic each epoch.
     if shuffle_buffer and shuffle_buffer > 0:
-        shuffle_batches = max(1, int(np.ceil(shuffle_buffer / batch_size)))
         train_ds = train_ds.shuffle(
-            buffer_size=shuffle_batches, seed=42, reshuffle_each_iteration=True
+            buffer_size=int(shuffle_buffer), seed=42, reshuffle_each_iteration=True
         )
+    train_ds = train_ds.batch(batch_size)
+    val_ds = val_ds.batch(batch_size)
 
     # Augmentation only on training data. It runs after the cache each epoch.
     # The stronger minority branch is evaluated only for the minority examples

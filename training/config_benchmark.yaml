@@ -10,10 +10,10 @@ model:
   hub_url: "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
 
 dataset:
-  data_dir: "../dataset/processed_harmonized"
-  train_dir: "../dataset/processed_harmonized/train"
-  val_dir: "../dataset/processed_harmonized/val"
-  test_dir: "../dataset/processed_harmonized/test"
+  data_dir: "../dataset/processed"
+  train_dir: "../dataset/processed/train"
+  val_dir: "../dataset/processed/val"
+  test_dir: "../dataset/processed/test"
   batch_size: 64
   batch_size_fallbacks: [64, 32, 16]
   auto_batch_fallback: true
@@ -28,7 +28,7 @@ augmentation:
   vertical_flip: false
   brightness_range: [0.95, 1.05]
   class_aware:
-    enabled: true
+    enabled: false
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]
@@ -64,7 +64,7 @@ lr_schedule:
   min_lr: 0.000001
 
 class_weights:
-  enabled: true
+  enabled: false
   max_weight: 5.0
   normalize: true
 

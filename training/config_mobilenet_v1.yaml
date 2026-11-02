@@ -8,10 +8,10 @@ model:
   classifier_units: 256
   include_preprocessing: true
 dataset:
-  data_dir: ../dataset/processed_harmonized
-  train_dir: ../dataset/processed_harmonized/train
-  val_dir: ../dataset/processed_harmonized/val
-  test_dir: ../dataset/processed_harmonized/test
+  data_dir: ../dataset/processed
+  train_dir: ../dataset/processed/train
+  val_dir: ../dataset/processed/val
+  test_dir: ../dataset/processed/test
   batch_size: 32
   batch_size_fallbacks:
   - 32
@@ -31,7 +31,7 @@ augmentation:
   - 0.95
   - 1.05
   class_aware:
-    enabled: true
+    enabled: false
     max_train_samples: 500
     rotation_range: 20
     zoom_range:
@@ -66,7 +66,7 @@ lr_schedule:
   patience: 3
   min_lr: 1.0e-06
 class_weights:
-  enabled: true
+  enabled: false
   max_weight: 5.0
   normalize: true
 callbacks:

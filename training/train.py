@@ -189,7 +189,7 @@ class FocalLoss(keras.losses.Loss):
         alpha_weight = tf.reduce_sum(alpha_weight, axis=-1)
         focal_loss = alpha_weight * focal_loss
 
-        return tf.reduce_mean(focal_loss)
+        return focal_loss
 
     def get_config(self):
         config = super().get_config()
@@ -207,7 +207,7 @@ class BestValidationWeights(keras.callbacks.Callback):
         self.weights = None
 
     def on_epoch_end(self, epoch, logs=None):
-        value = (logs or {}).get("val_loss")
+        value = (logs or {}).get("val_macro_f1", (logs or {}).get("val_loss"))
         if value is not None and np.isfinite(value) and value < self.best:
             self.best = float(value)
             self.weights = self.model.get_weights()
@@ -216,7 +216,7 @@ class BestValidationWeights(keras.callbacks.Callback):
 def select_final_weights(phase1_best, phase1_weights, phase2_best=None):
     """Return the best weights across phases, never degrading Phase 1.
 
-    Fine-tuning is accepted only when its best finite validation loss strictly
+    Fine-tuning is accepted only when its best finite validation score strictly
     improves on the best frozen-backbone validation loss.
     """
     if (
