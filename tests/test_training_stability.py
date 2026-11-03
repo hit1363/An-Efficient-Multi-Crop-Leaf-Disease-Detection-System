@@ -42,6 +42,7 @@ from training.utils import (
     get_training_class_counts,
     get_checkpoint_path,
     get_epoch_log_mode,
+    load_benchmark_class_names,
     load_dataset,
     setup_callbacks,
     validate_dataset_splits,
@@ -851,6 +852,30 @@ def test_explicit_steps_and_estimated_counts_use_finite_dataset_cardinality():
         "val": {"total": 2, "classes": {}},
         "test": {"total": 0, "classes": {}},
     }
+
+
+def test_estimated_counts_mark_unscanned_split_classes_as_unknown():
+    counts = _estimated_split_counts(
+        train_steps=2,
+        val_steps=1,
+        batch_size=2,
+        class_names=["healthy", "disease"],
+    )
+
+    assert counts["val"]["total"] == 2
+    assert counts["val"]["classes"] == {"healthy": None, "disease": None}
+    assert counts["val"]["estimated"] is True
+    assert counts["test"]["total"] is None
+
+
+def test_benchmark_class_names_prefer_dataset_metadata(tmp_path):
+    class_names = ["Crop___Disease", "Crop___Healthy"]
+    (tmp_path / "dataset_info.json").write_text(
+        json.dumps({"class_names": class_names}),
+        encoding="utf-8",
+    )
+
+    assert load_benchmark_class_names(str(tmp_path)) == class_names
 
 
 def test_explicit_steps_reject_unknown_or_empty_dataset_cardinality():

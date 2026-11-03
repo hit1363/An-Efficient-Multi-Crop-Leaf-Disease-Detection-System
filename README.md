@@ -118,6 +118,13 @@ available. Pretrained backbones use a short frozen-head warmup before
 fine-tuning; ShuffleNetV2 is trained end-to-end because its backbone is
 randomly initialized.
 
+If a hosted runtime disables the filesystem split scan to reduce startup time,
+the training metadata marks validation/test per-class counts as unknown rather
+than treating step-cardinality estimates as measured dataset counts. These
+runs are not final accuracy claims: run `training/evaluate.py` against the
+held-out test directory and its `class_names.json` or `dataset_info.json`
+before comparing models.
+
 Run the full mobile model comparison after preparing the benchmark:
 
 ```bash
@@ -137,6 +144,13 @@ different dataset manifests or preprocessing settings.
 python training/evaluate.py --model <path-to-model> --config training/config_mobilenetv2.yaml
 ```
 
+Evaluation validates the complete train/validation/test layout, resolves class
+order from the benchmark manifest or dataset metadata, and writes overall,
+macro, weighted, and per-class metrics. Use the same benchmark manifest for
+float and quantized artifacts. The TFLite evaluator also checks the exported
+output width against that manifest and preserves taxonomy aliases when source
+folders use legacy names.
+
 ### Quantization (Dynamic + INT8)
 
 ```bash
@@ -152,6 +166,12 @@ python quantization/post_training_quant.py \
   --evaluate --test_data dataset/processed_harmonized/test \
   --arch mobilenetv2
 ```
+
+Representative calibration samples are read in deterministic directory order.
+For comparable accuracy and latency results, evaluate every exported artifact
+with `quantization/evaluate_tflite.py` against the complete held-out test
+directory rather than relying on the optional small sample check in the legacy
+conversion script.
 
 ## Google Colab and Kaggle Workflows
 

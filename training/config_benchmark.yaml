@@ -28,7 +28,7 @@ augmentation:
   vertical_flip: false
   brightness_range: [0.95, 1.05]
   class_aware:
-    enabled: false
+    enabled: true
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]
@@ -64,7 +64,7 @@ lr_schedule:
   min_lr: 0.000001
 
 class_weights:
-  enabled: false
+  enabled: true
   max_weight: 5.0
   normalize: true
 

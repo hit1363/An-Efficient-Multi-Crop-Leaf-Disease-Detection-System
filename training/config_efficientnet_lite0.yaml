@@ -34,7 +34,7 @@ augmentation:
   vertical_flip: true
   brightness_range: [0.9, 1.1]
   class_aware:
-    enabled: false
+    enabled: true
     max_train_samples: 500
     rotation_range: 20
     zoom_range: [0.9, 1.1]

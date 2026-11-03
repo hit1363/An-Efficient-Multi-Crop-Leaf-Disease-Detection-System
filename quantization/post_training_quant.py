@@ -170,7 +170,10 @@ def representative_dataset_generator(
     """
     # Load dataset
     dataset = keras.preprocessing.image_dataset_from_directory(
-        data_dir, image_size=image_size, batch_size=1, shuffle=True
+        data_dir,
+        image_size=image_size,
+        batch_size=1,
+        shuffle=False,
     )
 
     count = 0

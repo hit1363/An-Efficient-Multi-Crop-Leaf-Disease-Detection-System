@@ -25,10 +25,20 @@ from sklearn.metrics import (
 
 try:
     # Support module execution: python -m training.evaluate
-    from .utils import _dataset_class_names, get_preprocess_fn, validate_dataset_splits
+    from .utils import (
+        _dataset_class_names,
+        get_preprocess_fn,
+        load_benchmark_class_names,
+        validate_dataset_splits,
+    )
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
-    from utils import _dataset_class_names, get_preprocess_fn, validate_dataset_splits
+    from utils import (
+        _dataset_class_names,
+        get_preprocess_fn,
+        load_benchmark_class_names,
+        validate_dataset_splits,
+    )
 
 
 def _is_saved_model_dir(model_path):
@@ -204,10 +214,13 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     # Load test dataset
     print("Loading test dataset...")
     test_dir = config["dataset"]["test_dir"]
+    data_root = os.path.dirname(os.path.abspath(test_dir))
+    class_names = load_benchmark_class_names(data_root)
     split_counts = validate_dataset_splits(
         config["dataset"]["train_dir"],
         config["dataset"]["val_dir"],
         test_dir,
+        class_names=class_names,
     )
     print(
         "Validated split classes and counts: "
@@ -225,9 +238,15 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     model = _load_model(model_path, input_shape)
 
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
-    test_ds, class_names = load_test_dataset(
-        test_dir, batch_size, image_size, preprocess_fn=preprocess_fn
+    test_ds, detected_class_names = load_test_dataset(
+        test_dir,
+        batch_size,
+        image_size,
+        preprocess_fn=preprocess_fn,
+        class_names=class_names,
     )
+    if detected_class_names != class_names:
+        raise ValueError("Test dataset label order does not match the benchmark manifest")
     print(f"Found {len(class_names)} classes")
     if len(class_names) != int(config["model"]["num_classes"]):
         raise ValueError(

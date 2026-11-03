@@ -136,6 +136,81 @@ def test_tflite_evaluation_is_single_threaded_and_scores_absent_classes(
     assert saved_summary["latency_device"] == summary["latency_device"]
 
 
+def test_tflite_evaluation_uses_parent_manifest_class_order(monkeypatch, tmp_path):
+    model_path = tmp_path / "model.tflite"
+    model_path.write_bytes(b"tflite model")
+    test_dir = tmp_path / "test"
+    (test_dir / "a").mkdir(parents=True)
+    (test_dir / "b").mkdir()
+    (tmp_path / "class_names.json").write_text(json.dumps(["b", "a"]))
+    captured = {}
+
+    class Interpreter:
+        def __init__(self, **kwargs):
+            pass
+
+        def allocate_tensors(self):
+            pass
+
+        def get_input_details(self):
+            return [{
+                "shape": np.asarray([1, 2, 2, 3]),
+                "dtype": np.float32,
+                "index": 0,
+                "quantization": (0.0, 0),
+            }]
+
+        def get_output_details(self):
+            return [{
+                "shape": np.asarray([1, 2]),
+                "dtype": np.float32,
+                "index": 1,
+                "quantization": (0.0, 0),
+            }]
+
+        def set_tensor(self, index, value):
+            pass
+
+        def invoke(self):
+            pass
+
+        def get_tensor(self, index):
+            return np.asarray([[0.8, 0.2]], dtype=np.float32)
+
+    class Dataset:
+        class_names = ["b", "a"]
+
+        def __iter__(self):
+            yield tf.zeros((1, 2, 2, 3)), tf.constant([0])
+
+        def take(self, count):
+            return iter(()) if count <= 0 else iter(self)
+
+    def fake_loader(*args, **kwargs):
+        captured.update(kwargs)
+        return Dataset()
+
+    monkeypatch.setattr(evaluate_tflite.tf.lite, "Interpreter", Interpreter)
+    monkeypatch.setattr(
+        evaluate_tflite.keras.preprocessing,
+        "image_dataset_from_directory",
+        fake_loader,
+    )
+    monkeypatch.setattr(evaluate_tflite, "get_preprocess_fn", lambda architecture: None)
+    monkeypatch.setattr(evaluate_tflite, "_save_confusion_matrix", lambda *args: None)
+
+    summary = evaluate_tflite.evaluate_tflite_model(
+        str(model_path),
+        str(test_dir),
+        str(tmp_path / "reports"),
+        architecture="mobilenetv2",
+        warmup_runs=0,
+    )
+
+    assert captured["class_names"] == ["b", "a"]
+    assert summary["class_names"] == ["b", "a"]
+
+
 def test_phase2_callback_setup_appends_to_phase1_csv(tmp_path):
     config = {
         "model": {"architecture": "mobilenetv2"},

@@ -621,8 +621,8 @@ def load_dataset(
         train_ds = train_ds.shuffle(
             buffer_size=int(shuffle_buffer), seed=42, reshuffle_each_iteration=True
         )
-    train_ds = train_ds.batch(batch_size)
-    val_ds = val_ds.batch(batch_size)
+    train_ds = train_ds.batch(batch_size=batch_size)
+    val_ds = val_ds.batch(batch_size=batch_size)
 
     # Augmentation only on training data. It runs after the cache each epoch.
     # The stronger minority branch is evaluated only for the minority examples
@@ -693,7 +693,15 @@ def load_dataset(
 def load_benchmark_class_names(data_dir):
     """Load class order from the manifest or the repository's fixed taxonomy."""
     manifest_path = os.path.join(data_dir, "class_names.json")
-    if not os.path.isfile(manifest_path):
+    metadata_path = os.path.join(data_dir, "dataset_info.json")
+    if os.path.isfile(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            class_names = json.load(handle)
+    elif os.path.isfile(metadata_path):
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        class_names = metadata.get("class_names")
+    else:
         # Kaggle input mounts are read-only. Use the repository taxonomy in memory
         # when a mounted 72-class dataset does not ship its own manifest.
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -713,8 +721,6 @@ def load_benchmark_class_names(data_dir):
         )
         return list(CANONICAL_CLASSES)
 
-    with open(manifest_path, "r", encoding="utf-8") as handle:
-        class_names = json.load(handle)
     if (
         not isinstance(class_names, list)
         or not class_names

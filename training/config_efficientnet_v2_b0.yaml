@@ -31,7 +31,7 @@ augmentation:
   - 0.95
   - 1.05
   class_aware:
-    enabled: false
+    enabled: true
     max_train_samples: 500
     rotation_range: 20
     zoom_range:
@@ -66,7 +66,7 @@ lr_schedule:
   patience: 3
   min_lr: 1.0e-06
 class_weights:
-  enabled: false
+  enabled: true
   max_weight: 5.0
   normalize: true
 callbacks:

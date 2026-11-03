@@ -892,16 +892,28 @@ def _finite_dataset_steps(dataset, split_name):
     return steps
 
 
-def _estimated_split_counts(train_steps, val_steps, batch_size):
-    """Return lightweight upper-bound sample totals without filesystem scans."""
+def _estimated_split_counts(train_steps, val_steps, batch_size, class_names=None):
+    """Return lightweight sample totals without filesystem scans.
+
+    Per-class counts are intentionally marked unknown when the split was not
+    scanned.  The default shape remains compatible with callers that only need
+    totals.
+    """
     def estimated_total(steps):
         return int(steps) * int(batch_size)
 
-    return {
+    counts = {
         "train": {"total": estimated_total(train_steps), "classes": {}},
         "val": {"total": estimated_total(val_steps), "classes": {}},
         "test": {"total": 0, "classes": {}},
     }
+    if class_names is not None:
+        unknown_classes = {name: None for name in class_names}
+        for split in ("val", "test"):
+            counts[split]["classes"] = unknown_classes.copy()
+            counts[split]["estimated"] = True
+        counts["test"]["total"] = None
+    return counts
 
 
 def _setup_phase2_callbacks(config):
@@ -926,13 +938,14 @@ def _setup_phase2_callbacks(config):
         "initial_learning_rate": fine_tune_lr,
         "decay_epochs": float(phase2_epochs),
     }
-    return setup_callbacks(
-        config,
-        csv_append=True,
-        checkpoint_name="best_phase2_model",
-        include_throughput=False,
-        lr_schedule_override=lr_override,
-    )
+    callback_kwargs = {
+        "csv_append": True,
+        "checkpoint_name": "best_phase2_model",
+        "include_throughput": False,
+    }
+    if training_cfg or config.get("optimizer"):
+        callback_kwargs["lr_schedule_override"] = lr_override
+    return setup_callbacks(config, **callback_kwargs)
 
 
 def _configure_phase2_early_stopping(callbacks, config, log_mode):
@@ -1201,13 +1214,20 @@ def train_model(config_path="config.yaml"):
             "Deep split validation is disabled; skipping cross-split scans and duplicate hashing."
         )
         split_counts = _estimated_split_counts(
-            train_steps, val_steps, config["dataset"]["batch_size"]
+            train_steps,
+            val_steps,
+            config["dataset"]["batch_size"],
+            class_names=class_names,
         )
         split_counts["train"] = {
             "total": sum(training_class_counts.values()),
             "classes": training_class_counts,
         }
-        logger.info("Estimated split totals: %s", split_counts)
+        logger.info(
+            "Estimated split totals (validation/test per-class counts are unknown; "
+            "run evaluation after training): %s",
+            split_counts,
+        )
 
     # Compute weights only for explicitly enabled imbalance-focused runs.
     # Fast baseline runs do not construct class-count lists or weight metadata.

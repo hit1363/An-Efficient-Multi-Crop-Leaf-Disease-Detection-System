@@ -22,7 +22,11 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from training.utils import get_preprocess_fn
+from training.utils import (
+    _dataset_class_names,
+    get_preprocess_fn,
+    load_benchmark_class_names,
+)
 
 
 def infer_architecture_from_path(model_path):
@@ -123,14 +127,36 @@ def evaluate_tflite_model(
         raise ValueError(f"Unsupported TFLite input shape: {input_shape}")
 
     image_size = (int(input_shape[1]), int(input_shape[2]))
+    manifest_root = os.path.dirname(os.path.abspath(test_data_dir))
+    has_class_manifest = any(
+        os.path.isfile(os.path.join(manifest_root, filename))
+        for filename in ("class_names.json", "dataset_info.json")
+    )
+    expected_class_names = (
+        load_benchmark_class_names(manifest_root) if has_class_manifest else None
+    )
+    dataset_class_names = (
+        _dataset_class_names(test_data_dir, expected_class_names)
+        if os.path.isdir(test_data_dir)
+        else None
+    )
     test_ds = keras.preprocessing.image_dataset_from_directory(
         test_data_dir,
         image_size=image_size,
         batch_size=1,
         label_mode="int",
         shuffle=False,
+        **({"class_names": dataset_class_names} if dataset_class_names else {}),
     )
-    class_names = test_ds.class_names
+    class_names = expected_class_names or test_ds.class_names
+    if expected_class_names is not None and (
+        len(output_details["shape"]) != 2
+        or int(output_details["shape"][-1]) != len(class_names)
+    ):
+        raise ValueError(
+            "TFLite output class count does not match the evaluation manifest: "
+            f"output_shape={output_details['shape']}, classes={len(class_names)}"
+        )
     preprocess_fn = get_preprocess_fn(
         architecture or infer_architecture_from_path(model_path)
     )
@@ -207,6 +233,7 @@ def evaluate_tflite_model(
         "architecture": architecture or infer_architecture_from_path(model_path),
         "model_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 4),
         "samples": len(labels),
+        "class_names": class_names,
         "accuracy": float(accuracy),
         "macro_precision": float(macro_precision),
         "macro_recall": float(macro_recall),
