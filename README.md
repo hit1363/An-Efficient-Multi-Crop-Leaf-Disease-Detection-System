@@ -175,7 +175,7 @@ conversion script.
 
 ## Google Colab and Kaggle Workflows
 
-Use a model-specific notebook to train one candidate, evaluate it, export dynamic-range and full INT8 TFLite models, and benchmark CPU inference. The Kaggle MobileNetV3-Small workflow first builds or reuses a manifest-backed, exact-deduplicated benchmark under `/kaggle/working`; this prevents duplicate files in an attached source split from contaminating validation or test metrics. The separate ShuffleNetV2 experiment and the existing combined notebooks remain available for backward compatibility.
+Use a model-specific notebook to train one candidate, evaluate it, export dynamic-range and full INT8 TFLite models, and benchmark CPU inference. The Kaggle MobileNetV3-Small workflow trains on the mounted dataset directly; the runtime profile tolerates genuine cross-split duplicates in raw hosted inputs (see `performance.allow_cross_split_duplicates`). A manifest-backed, exact-deduplicated benchmark can be built instead by setting `LEAF_USE_DEDUP_BENCHMARK=1` before the notebook runs — it removes the same cross-split leakage from validation/test metrics at the cost of one preprocessing pass. The harmonized comparison notebook reuses an existing benchmark under `/kaggle/working/harmonized_benchmark` instead of rebuilding it. The separate ShuffleNetV2 experiment and the existing combined notebooks remain available for backward compatibility.
 
 | Model | Google Colab | Kaggle |
 |---|---|---|
