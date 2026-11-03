@@ -23,20 +23,13 @@ except ImportError:
         sys.path.insert(0, repo_root)
     try:
         from training.utils import get_preprocess_fn
-    except ImportError:
-        # Last-resort: define locally (kept in sync with training/utils.py).
-        def get_preprocess_fn(architecture):
-            """Return the appropriate preprocess_input function for a given architecture."""
-            if not architecture:
-                return None
-            arch = architecture.lower()
-            if arch == "mobilenetv2":
-                return tf.keras.applications.mobilenet_v2.preprocess_input
-            if arch == "efficientnet_b0":
-                return tf.keras.applications.efficientnet.preprocess_input
-            if arch in {"efficientnet", "efficientnet_lite0"}:
-                return lambda x: tf.cast(x, tf.float32) / 255.0
-            return None
+    except ImportError as exc:  # pragma: no cover - hard configuration error
+        raise ImportError(
+            "Could not import training.utils.get_preprocess_fn. Run this script "
+            f"from the repository root (tried {repo_root!r}). A local fallback "
+            "copy is deliberately not kept: a drifted copy silently preprocesses "
+            "calibration data differently from training and destroys INT8 accuracy."
+        ) from exc
 
 
 def infer_architecture_from_path(model_path):

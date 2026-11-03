@@ -987,6 +987,33 @@ def test_alias_split_validation_hashes_actual_source_folders_without_manifest(tm
         )
 
 
+def test_split_validation_allows_cross_split_duplicates_when_opted_in(tmp_path, caplog):
+    """Hosted datasets (e.g. Kaggle inputs) can contain genuine cross-split
+    duplicates. The strict default must still raise; the opt-in must warn and
+    return counts so training can proceed."""
+    for split in ("train", "val"):
+        for class_name in CANONICAL_CLASSES:
+            (tmp_path / split / class_name).mkdir(parents=True)
+            (tmp_path / split / class_name / "sample.jpg").write_bytes(
+                f"{split}-{class_name}".encode("utf-8")
+            )
+    (tmp_path / "train" / CANONICAL_CLASSES[0] / "sample.jpg").write_bytes(b"dup")
+    (tmp_path / "val" / CANONICAL_CLASSES[0] / "sample.jpg").write_bytes(b"dup")
+
+    with caplog.at_level(logging.WARNING, logger="training.utils"):
+        counts = validate_dataset_splits(
+            tmp_path / "train",
+            tmp_path / "val",
+            allow_cross_split_duplicates=True,
+        )
+    assert counts["train"]["total"] == len(CANONICAL_CLASSES)
+    assert counts["val"]["total"] == len(CANONICAL_CLASSES)
+    assert "leakage allowed" in caplog.text
+
+    with pytest.raises(ValueError, match="exact duplicate image hashes"):
+        validate_dataset_splits(tmp_path / "train", tmp_path / "val")
+
+
 def test_class_folder_alias_resolution_rejects_invalid_taxonomy(tmp_path):
     unknown_dir = tmp_path / "unknown"
     (unknown_dir / "Unmapped___Disease").mkdir(parents=True)

@@ -94,6 +94,8 @@ def apply_runtime_profile(
         )
         # Enable memory cache for faster I/O on Kaggle GPUs (80K images ~ 6GB uncompressed).
         dataset["cache_mode"] = "memory"
+        # Relax duplicate enforcement for raw hosted Kaggle datasets.
+        runtime_config["performance"]["allow_cross_split_duplicates"] = True
         if normalized_mode == "full":
             runtime_config["training"].setdefault("progress_log_interval", 64)
 

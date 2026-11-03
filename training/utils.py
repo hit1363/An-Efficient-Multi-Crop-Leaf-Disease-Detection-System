@@ -731,7 +731,13 @@ def load_benchmark_class_names(data_dir):
     return class_names
 
 
-def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None):
+def validate_dataset_splits(
+    train_dir,
+    val_dir,
+    test_dir=None,
+    class_names=None,
+    allow_cross_split_duplicates=False,
+):
     """Validate class parity, image support, and source-hash split isolation."""
     valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
     split_paths = {"train": train_dir, "val": val_dir}
@@ -862,9 +868,15 @@ def validate_dataset_splits(train_dir, val_dir, test_dir=None, class_names=None)
                         hash_splits.setdefault(digest.hexdigest(), set()).add(split_name)
     leaking_hashes = [digest for digest, splits in hash_splits.items() if len(splits) > 1]
     if leaking_hashes:
-        raise ValueError(
-            f"Found {len(leaking_hashes)} exact duplicate image hashes across dataset splits"
-        )
+        if allow_cross_split_duplicates:
+            logging.getLogger(__name__).warning(
+                "Found %d exact duplicate image hashes across dataset splits (leakage allowed via allow_cross_split_duplicates=True)",
+                len(leaking_hashes),
+            )
+        else:
+            raise ValueError(
+                f"Found {len(leaking_hashes)} exact duplicate image hashes across dataset splits"
+            )
     return counts
 
 

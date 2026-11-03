@@ -1195,6 +1195,9 @@ def train_model(config_path="config.yaml"):
             config["dataset"]["val_dir"],
             config["dataset"].get("test_dir"),
             class_names=class_names,
+            allow_cross_split_duplicates=config.get("performance", {}).get(
+                "allow_cross_split_duplicates", False
+            ),
         )
         logger.info("Validated split counts: %s", split_counts)
         for split_name in ("val", "test"):

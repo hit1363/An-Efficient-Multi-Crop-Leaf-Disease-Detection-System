@@ -100,6 +100,34 @@ def test_exact_duplicate_is_removed_and_cross_label_duplicate_is_rejected(tmp_pa
     assert report["cross_label_duplicate_conflicts"]
 
 
+def test_split_tree_duplicates_are_removed_before_reassignment(tmp_path):
+    source = tmp_path / "split_source"
+    for split_index, split in enumerate(("train", "val", "test")):
+        for class_index, class_name in enumerate(CANONICAL_CLASSES):
+            class_dir = source / split / class_name
+            class_dir.mkdir(parents=True)
+            image = Image.new(
+                "RGB",
+                (8, 8),
+                (class_index, split_index * 40, (class_index + split_index) % 255),
+            )
+            image.save(class_dir / "sample.png")
+
+    duplicate_source = source / "train" / CANONICAL_CLASSES[0] / "sample.png"
+    (source / "val" / CANONICAL_CLASSES[0] / "duplicate.png").write_bytes(
+        duplicate_source.read_bytes()
+    )
+
+    result = prepare_benchmark(source, tmp_path / "deduplicated")
+
+    assert result["removed_exact_duplicates"] == 1
+    with (tmp_path / "deduplicated" / "split_manifest.csv").open(
+        newline="", encoding="utf-8"
+    ) as handle:
+        manifest = list(csv.DictReader(handle))
+    assert len({row["source_sha256"] for row in manifest}) == len(manifest)
+
+
 def test_unknown_labels_write_a_validation_report(tmp_path):
     source = tmp_path / "unknown_source"
     class_dir = source / "UnknownCrop___Disease"

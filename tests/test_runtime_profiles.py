@@ -132,7 +132,6 @@ def test_full_profile_preserves_disabled_early_stopping_settings():
     "architecture",
     [
         "mobilenetv2",
-        "mobilenetv3_small",
         "efficientnet_b0",
         "shufflenetv2_05",
     ],
@@ -149,8 +148,22 @@ def test_full_profile_uses_192_input_for_supported_architectures(
     runtime = apply_runtime_profile(config, "full", platform=platform)
 
     assert runtime["model"]["input_shape"] == [192, 192, 3]
-    assert runtime["training"]["epochs"] == 8
+    # No epoch capping: implementation respects config.
+    assert runtime["training"]["epochs"] == 10
     assert runtime["training"].get("unfreeze_epoch") is None
+
+
+def test_full_profile_uses_192_input_for_mobilenetv3_small_no_cap_224():
+    config = {
+        "model": {"architecture": "mobilenetv3_small", "input_shape": [224, 224, 3]},
+        "training": {"epochs": 10, "freeze_base": False},
+    }
+
+    runtime = apply_runtime_profile(config, "full", platform="kaggle")
+
+    # mobilenetv3_small uses native 224 resolution.
+    assert runtime["model"]["input_shape"] == [224, 224, 3]
+    assert runtime["training"]["epochs"] == 10
 
 
 def test_full_profile_keeps_efficientnet_lite0_input_size():
@@ -167,7 +180,7 @@ def test_full_profile_keeps_efficientnet_lite0_input_size():
     )
 
     assert runtime["model"]["input_shape"] == [224, 224, 3]
-    assert runtime["training"]["epochs"] == 8
+    assert runtime["training"]["epochs"] == 10
 
 
 def test_runtime_profile_preserves_explicit_progress_logging():
@@ -210,7 +223,7 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
     assert runtime["performance"]["multi_gpu"] is True
     assert runtime["performance"]["mixed_precision"] is True
     assert runtime["dataset"]["cache_dtype"] == "float16"
-    assert runtime["training"]["epochs"] == (5 if mode == "smoke" else 8)
+    assert runtime["training"]["epochs"] == (5 if mode == "smoke" else 20)
     assert config["dataset"]["batch_size"] == 128
     assert runtime["augmentation"]["class_aware"]["enabled"] is (
         mode == "full"
@@ -286,8 +299,8 @@ def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
     assert diagnostic["runtime"]["max_validation_steps"] == 2
     assert normal["dataset"]["cache_mode"] == "memory"
     assert normal["performance"]["steps_per_execution"] == 32
-    assert normal["callbacks"]["early_stopping"]["patience"] == 4
-    assert normal["callbacks"]["fine_tuning_early_stopping"]["patience"] == 2
+    assert normal["callbacks"]["early_stopping"]["patience"] == 5
+    assert normal["callbacks"]["fine_tuning_early_stopping"]["patience"] == 6
     assert normal["training"]["progress_log_interval"] == 64
     assert "diagnostic" not in normal["runtime"]
     assert config["dataset"]["shuffle_buffer"] == 1000
@@ -304,8 +317,8 @@ def test_diagnostic_profile_rejects_unsupported_runtime(mode, platform):
 @pytest.mark.parametrize(
     ("runtime", "expected_batch"),
     [
-        ({"num_replicas": 2, "has_gpu": True}, 64),
-        ({"num_replicas": 1, "has_gpu": True}, 32),
+        ({"num_replicas": 2, "has_gpu": True}, 128),
+        ({"num_replicas": 1, "has_gpu": True}, 64),
         ({"num_replicas": 1, "has_gpu": False}, 16),
     ],
 )
