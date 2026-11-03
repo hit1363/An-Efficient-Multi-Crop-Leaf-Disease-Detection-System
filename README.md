@@ -105,12 +105,16 @@ python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
-Training configs use bounded, normalized weighted categorical cross-entropy by
-default, with class weights computed from the training split. This emphasizes
-minority classes without applying the weights twice through Keras
-`class_weight`. Class-aware augmentation is enabled for underrepresented
-classes, and validation-loss early stopping restores the best checkpoint
-(patience 6). Pretrained backbones use a short frozen-head warmup before
+Training configs use either bounded, normalized categorical cross-entropy or
+focal loss, as specified by each model configuration. When enabled, class
+weights are computed from the training split and passed to `model.fit` as
+per-example weighting; this is intentionally visible in the run metadata
+because it changes the scale of reported training loss. Class-aware
+augmentation is enabled for underrepresented classes, and
+validation-loss early stopping restores the best checkpoint (patience 6).
+Training validates the train/validation/test class folders and split manifest
+before a full run, and checks exact duplicate hashes when a manifest is not
+available. Pretrained backbones use a short frozen-head warmup before
 fine-tuning; ShuffleNetV2 is trained end-to-end because its backbone is
 randomly initialized.
 
@@ -120,7 +124,12 @@ Run the full mobile model comparison after preparing the benchmark:
 python training/compare_models.py --data-dir dataset/processed_harmonized --output-dir results/mobile_model_comparison
 ```
 
-The comparison covers MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, EfficientNetB0, EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference. It reports float and full INT8 classification metrics, TFLite size, single-thread CPU latency, and the Pareto frontier. CPU timing is a proxy; validate finalists on the target Android device.
+The comparison covers MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile,
+EfficientNetB0, EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference. It
+reports float and full INT8 classification metrics, TFLite size, single-thread
+CPU latency, and the Pareto frontier. CPU timing is a proxy; validate
+finalists on the target Android device. Do not compare runs produced from
+different dataset manifests or preprocessing settings.
 
 ### Evaluation
 
@@ -192,7 +201,11 @@ Training and quantization use TensorFlow preprocess_input for the selected archi
 - EfficientNetB0: raw input range [0, 255] (the Keras model includes rescaling)
 - EfficientNet-Lite0: input range [0, 1]
 
-Set flutter_app/lib/utils/constants.dart -> AppConstants.preprocessType to mobilenet_v2 or efficientnet to match the deployed model.
+Set the deployment client's preprocessing mode to match the selected model:
+MobileNet-family models use `mobilenet_v2`-style `[-1, 1]` input, while
+EfficientNetB0 uses raw `[0, 255]` input and EfficientNet-Lite0 uses `[0, 1]`.
+The checked-in repository does not currently include the Flutter client, so
+the client-side setting must be applied in the deployment project.
 
 ## Labels and Healthy Classes
 

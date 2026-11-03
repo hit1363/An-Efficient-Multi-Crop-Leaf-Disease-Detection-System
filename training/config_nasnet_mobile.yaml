@@ -104,7 +104,7 @@ metrics:
 - accuracy
 seed: 42
 performance:
-  validate_dataset_splits: false
+  validate_dataset_splits: true
   mixed_precision: true
   jit_compile: true
   deterministic: true

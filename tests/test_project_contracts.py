@@ -128,6 +128,7 @@ def test_optimized_runtime_defaults_are_present():
         assert config["class_weights"]["max_weight"] == max_weight
         assert config["performance"]["finite_batch_check"] is True
         assert config["performance"]["terminate_on_nan"] is True
+        assert config["performance"]["validate_dataset_splits"] is True
         assert config["performance"]["distribution"] == "auto"
 
     benchmark = yaml.safe_load(
@@ -136,6 +137,7 @@ def test_optimized_runtime_defaults_are_present():
     assert benchmark["dataset"]["batch_size"] == 64
     assert benchmark["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
     assert benchmark["dataset"]["cache_mode"] == "auto"
+    assert benchmark["performance"]["validate_dataset_splits"] is True
 
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
     train_text = (ROOT / "training" / "train.py").read_text(encoding="utf-8")

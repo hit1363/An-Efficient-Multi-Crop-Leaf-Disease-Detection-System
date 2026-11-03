@@ -152,12 +152,21 @@ def build_metrics(metric_names, num_classes):
 
 
 class FocalLoss(keras.losses.Loss):
-    """Focal Loss for addressing class imbalance.
+    """Focal loss for class-imbalanced single-label classification.
 
-    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    ``FL(p_t) = -alpha_t * (1 - p_t) ** gamma * log(p_t)``
+
+    ``alpha_t`` is the per-sample weight of the *true* class. For one-hot labels
+    that reduces to the configured ``alpha`` scalar; for soft labels (e.g. from
+    MixUp/CutMix) it interpolates between ``alpha`` and ``1 - alpha`` weighted by
+    the soft targets, which keeps the loss on the same scale as a plain
+    cross-entropy.
 
     Configurable via ``loss.gamma`` (default 2.0) and ``loss.alpha`` (default 0.25)
     in the YAML. Set ``loss.name: focal_loss`` to activate.
+
+    Note: for balanced datasets prefer ``categorical_crossentropy`` with label
+    smoothing — focal loss mainly helps when some classes are genuinely rare.
     """
 
     def __init__(self, gamma=2.0, alpha=0.25, label_smoothing=0.0, **kwargs):
@@ -170,26 +179,35 @@ class FocalLoss(keras.losses.Loss):
         y_true = tf.cast(y_true, tf.float32)
         y_pred = tf.cast(y_pred, tf.float32)
 
-        # Label smoothing
+        # Per-sample cross-entropy (handles label smoothing and log/eps clamping).
+        # Returns shape (batch,) so Keras can apply its own reduction.
+        cross_entropy = keras.losses.categorical_crossentropy(
+            y_true, y_pred, label_smoothing=self.label_smoothing
+        )
+
         if self.label_smoothing > 0:
             num_classes = tf.cast(tf.shape(y_true)[-1], tf.float32)
-            y_true = y_true * (1.0 - self.label_smoothing) + self.label_smoothing / num_classes
+            targets = (
+                y_true * (1.0 - self.label_smoothing)
+                + self.label_smoothing / num_classes
+            )
+        else:
+            targets = y_true
 
-        # Clip predictions for numerical stability
-        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+        # p_t is the probability mass placed on the true class(es). For one-hot
+        # labels this is the softmax probability of the correct class.
+        p_t = tf.reduce_sum(targets * y_pred, axis=-1)
+        p_t = tf.clip_by_value(
+            p_t, keras.backend.epsilon(), 1.0 - keras.backend.epsilon()
+        )
 
-        # Compute focal loss
-        cross_entropy = -y_true * tf.math.log(y_pred)
-        p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
-        modulating_factor = tf.pow(1.0 - p_t, self.gamma)
-        focal_loss = modulating_factor * tf.reduce_sum(cross_entropy, axis=-1)
+        # alpha_t weights the true class. With a scalar alpha this is exactly
+        # ``alpha`` for one-hot labels (NOT a sum over the other classes, which
+        # would inflate the loss by a factor of ~C).
+        focal = self.alpha * tf.pow(1.0 - p_t, self.gamma) * cross_entropy
 
-        # Apply alpha weighting
-        alpha_weight = y_true * self.alpha + (1.0 - y_true) * (1.0 - self.alpha)
-        alpha_weight = tf.reduce_sum(alpha_weight, axis=-1)
-        focal_loss = alpha_weight * focal_loss
-
-        return focal_loss
+        # Return per-sample losses; the base Loss applies sum_over_batch_size.
+        return focal
 
     def get_config(self):
         config = super().get_config()
@@ -405,15 +423,23 @@ def _get_loss(config):
     Supports:
       - ``categorical_crossentropy`` (weighted per example at ``model.fit``)
       - ``focal_loss`` with optional ``loss.gamma`` and ``loss.alpha``
+
+    Both losses honour ``loss.label_smoothing``.
     """
     loss_cfg = config.get("loss", {})
     loss_name = loss_cfg.get("name", "categorical_crossentropy")
+    label_smoothing = float(loss_cfg.get("label_smoothing", 0.0) or 0.0)
 
     if loss_name == "focal_loss":
         return FocalLoss(
             gamma=loss_cfg.get("gamma", 2.0),
             alpha=loss_cfg.get("alpha", 0.25),
-            label_smoothing=loss_cfg.get("label_smoothing", 0.0),
+            label_smoothing=label_smoothing,
+        )
+
+    if label_smoothing > 0:
+        return keras.losses.CategoricalCrossentropy(
+            label_smoothing=label_smoothing
         )
 
     return loss_name
@@ -879,12 +905,33 @@ def _estimated_split_counts(train_steps, val_steps, batch_size):
 
 
 def _setup_phase2_callbacks(config):
-    """Build fresh fine-tuning callbacks and append to the Phase 1 CSV log."""
+    """Build fresh fine-tuning callbacks and append to the Phase 1 CSV log.
+
+    Phase 2 must not inherit Phase 1's decayed schedule: the frozen-backbone
+    phase deliberately anneals its LR toward zero, so reusing that curve would
+    start fine-tuning at a much smaller LR than ``fine_tune_learning_rate`` and
+    leave the backbone effectively frozen.
+    """
+    training_cfg = config.get("training", {})
+    fine_tune_lr = float(
+        training_cfg.get("fine_tune_learning_rate")
+        or config.get("optimizer", {}).get("learning_rate", 1e-4)
+    )
+    total_epochs = int(training_cfg.get("epochs", 0) or 0)
+    unfreeze_epoch = int(training_cfg.get("unfreeze_epoch", 0) or 0)
+    phase2_epochs = max(total_epochs - unfreeze_epoch, 1)
+
+    # Restart the same schedule *shape* from the fine-tuning LR and horizon.
+    lr_override = {
+        "initial_learning_rate": fine_tune_lr,
+        "decay_epochs": float(phase2_epochs),
+    }
     return setup_callbacks(
         config,
         csv_append=True,
         checkpoint_name="best_phase2_model",
         include_throughput=False,
+        lr_schedule_override=lr_override,
     )
 
 
@@ -1180,12 +1227,30 @@ def train_model(config_path="config.yaml"):
         logger.info("Computed applied class weights.")
         if class_weights:
             applied_values = list(class_weights.values())
-            logger.info(
-                "Applying fit-time class weights: classes=%d, range=[%.4f, %.4f]",
-                len(applied_values),
-                min(applied_values),
-                max(applied_values),
+            imbalance_ratio = (
+                float(max(train_class_counts)) / float(min(train_class_counts))
+                if train_class_counts and min(train_class_counts) > 0
+                else float("inf")
             )
+            min_ratio = float(weight_config.get("min_imbalance_ratio", 1.25) or 0.0)
+            if imbalance_ratio < min_ratio:
+                # Near-uniform class counts make inverse-frequency weights pure
+                # noise (e.g. 0.9988..1.0924) that only perturbs the gradient.
+                logger.warning(
+                    "Class weights skipped: training counts are effectively balanced "
+                    "(max/min ratio=%.3f < min_imbalance_ratio=%.2f). "
+                    "Set class_weights.min_imbalance_ratio=0 to force weighting.",
+                    imbalance_ratio,
+                    min_ratio,
+                )
+                class_weights = None
+            if class_weights:
+                logger.info(
+                    "Applying fit-time class weights: classes=%d, range=[%.4f, %.4f]",
+                    len(applied_values),
+                    min(applied_values),
+                    max(applied_values),
+                )
     else:
         logger.info("Class weighting is disabled; skipping class-weight computation.")
 

@@ -63,11 +63,14 @@ def test_full_profile_preserves_model_settings():
     assert full["dataset"]["batch_size"] == 128
     assert full["performance"]["steps_per_execution"] == 32
     assert full["performance"]["jit_compile"] is True
-    assert full["model"]["input_shape"] == [192, 192, 3]
-    assert full["training"]["epochs"] == 8
-    assert full["training"]["unfreeze_epoch"] == 5
-    assert full["callbacks"]["early_stopping"]["patience"] == 4
-    assert full["callbacks"]["fine_tuning_early_stopping"]["patience"] == 2
+    # mobilenetv3_small trains at its native 224 resolution.
+    assert full["model"]["input_shape"] == [224, 224, 3]
+    # The full profile no longer caps the epoch budget or unfreeze point; the
+    # source config owns the training recipe.
+    assert full["training"]["epochs"] == 35
+    assert full["training"]["unfreeze_epoch"] == 6
+    assert full["callbacks"]["early_stopping"]["patience"] == 5
+    assert full["callbacks"]["fine_tuning_early_stopping"]["patience"] == 6
     assert config["model"]["input_shape"] == [224, 224, 3]
     assert config["training"]["epochs"] == 35
     assert config["callbacks"]["early_stopping"]["patience"] == 6

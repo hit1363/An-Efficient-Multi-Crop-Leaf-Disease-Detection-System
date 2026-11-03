@@ -120,7 +120,7 @@ metrics:
   - "accuracy"
 
 performance:
-  validate_dataset_splits: false
+  validate_dataset_splits: true
   mixed_precision: true
   steps_per_execution: 8
   jit_compile: true

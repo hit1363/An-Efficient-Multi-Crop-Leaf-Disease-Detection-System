@@ -1200,12 +1200,19 @@ def setup_callbacks(
     csv_append=None,
     checkpoint_name="best_model",
     include_throughput=True,
+    lr_schedule_override=None,
 ):
     """
     Setup training callbacks
 
     Args:
         config: Configuration dictionary
+        csv_append: Override for the CSV logger append mode
+        checkpoint_name: Base name for the checkpoint file
+        include_throughput: Whether to attach the throughput logger
+        lr_schedule_override: Optional dict merged over ``config["lr_schedule"]``
+            so a training phase can use its own base learning rate and decay
+            horizon (used by the fine-tuning phase).
 
     Returns:
         List of Keras callbacks
@@ -1264,7 +1271,11 @@ def setup_callbacks(
         )
 
     # Learning Rate Scheduler
-    lr_config = config.get("lr_schedule", {})
+    lr_config = dict(config.get("lr_schedule", {}))
+    # A phase may supply its own schedule so fine-tuning does not inherit the
+    # frozen-backbone phase's decayed curve (see setup_phase2_callbacks).
+    if lr_schedule_override:
+        lr_config.update(lr_schedule_override)
     lr_type = lr_config.get("type", "reduce_on_plateau")
     initial_lr = lr_config.get("initial_learning_rate",
                               config.get("optimizer", {}).get("learning_rate", 0.001))
