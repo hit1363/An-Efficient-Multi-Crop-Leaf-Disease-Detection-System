@@ -163,6 +163,36 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "nasnet_mobile",
         "efficientnet_v2_b0",
     )
+    # Recipe v3 (2026-11): shufflenetv2_05 trains from scratch, so its
+    # monitoring and augmentation scope differ from the pretrained baselines.
+    # The other architectures keep Recipe v2 defaults.
+    expected_monitoring = {
+        arch: {
+            "max_train_samples": 500,
+            "checkpoint_monitor": "val_loss",
+            "checkpoint_mode": "min",
+            "early_stopping_monitor": "val_loss",
+            "early_stopping_mode": "min",
+            "early_stopping_patience": 6,
+            "early_stopping_min_delta": 0.0,
+            "fine_tuning_monitor": "val_loss",
+            "fine_tuning_mode": "min",
+            "fine_tuning_patience": 6,
+        }
+        for arch in architectures
+    }
+    expected_monitoring["shufflenetv2_05"] = {
+        "max_train_samples": 100,
+        "checkpoint_monitor": "val_accuracy",
+        "checkpoint_mode": "max",
+        "early_stopping_monitor": "val_accuracy",
+        "early_stopping_mode": "max",
+        "early_stopping_patience": 10,
+        "early_stopping_min_delta": 0.005,
+        "fine_tuning_monitor": "val_loss",
+        "fine_tuning_mode": "min",
+        "fine_tuning_patience": 6,
+    }
     for architecture in architectures:
         config = yaml.safe_load(
             (ROOT / "training" / f"config_{architecture}.yaml").read_text(
@@ -176,23 +206,25 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         assert config["class_weights"]["enabled"] is True
         class_aware = config["augmentation"]["class_aware"]
         assert class_aware["enabled"] is True
-        assert class_aware["max_train_samples"] == 500
         assert class_aware["rotation_range"] == 20
         assert class_aware["zoom_range"] == [0.9, 1.1]
         assert class_aware["horizontal_flip"] is True
         assert class_aware["vertical_flip"] is True
         assert class_aware["contrast_range"] == 0.15
         assert class_aware["brightness_range"] == [0.85, 1.15]
-        assert config["callbacks"]["checkpoint"]["monitor"] == "val_loss"
-        assert config["callbacks"]["checkpoint"]["mode"] == "min"
+        monitoring = expected_monitoring[architecture]
+        assert class_aware["max_train_samples"] == monitoring["max_train_samples"]
+        assert config["callbacks"]["checkpoint"]["monitor"] == monitoring["checkpoint_monitor"]
+        assert config["callbacks"]["checkpoint"]["mode"] == monitoring["checkpoint_mode"]
         assert config["callbacks"]["checkpoint"]["save_best_only"] is True
-        assert config["callbacks"]["early_stopping"]["patience"] == 6
-        assert config["callbacks"]["early_stopping"]["monitor"] == "val_loss"
-        assert config["callbacks"]["early_stopping"]["mode"] == "min"
+        assert config["callbacks"]["early_stopping"]["patience"] == monitoring["early_stopping_patience"]
+        assert config["callbacks"]["early_stopping"]["monitor"] == monitoring["early_stopping_monitor"]
+        assert config["callbacks"]["early_stopping"]["mode"] == monitoring["early_stopping_mode"]
         assert config["callbacks"]["early_stopping"]["restore_best_weights"] is True
-        assert config["callbacks"]["fine_tuning_early_stopping"]["patience"] == 6
-        assert config["callbacks"]["fine_tuning_early_stopping"]["monitor"] == "val_loss"
-        assert config["callbacks"]["fine_tuning_early_stopping"]["mode"] == "min"
+        assert float(config["callbacks"]["early_stopping"].get("min_delta", 0.0) or 0.0) == monitoring["early_stopping_min_delta"]
+        assert config["callbacks"]["fine_tuning_early_stopping"]["patience"] == monitoring["fine_tuning_patience"]
+        assert config["callbacks"]["fine_tuning_early_stopping"]["monitor"] == monitoring["fine_tuning_monitor"]
+        assert config["callbacks"]["fine_tuning_early_stopping"]["mode"] == monitoring["fine_tuning_mode"]
         assert config["callbacks"]["fine_tuning_early_stopping"]["restore_best_weights"] is True
         expected_max_weight = 3.0 if architecture == "mobilenetv2" else 5.0
         assert config["class_weights"]["max_weight"] == expected_max_weight
@@ -208,6 +240,17 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         )
         assert config["dataset"]["cache_mode"] == expected_cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
+
+    # Recipe v3 (2026-11): shufflenetv2_05 runs 40 epochs with a 3-epoch warmup
+    # and reports top-5 accuracy; the pretrained baselines keep Recipe v2.
+    shufflenet_config = yaml.safe_load(
+        (ROOT / "training" / "config_shufflenetv2_05.yaml").read_text(encoding="utf-8")
+    )
+    assert shufflenet_config["training"]["epochs"] == 40
+    assert shufflenet_config["lr_schedule"]["warmup_epochs"] == 3
+    assert shufflenet_config["lr_schedule"]["warmup_start_lr"] == 0.0001
+    assert shufflenet_config["lr_schedule"]["decay_epochs"] == 40
+    assert "top_k_categorical_accuracy" in shufflenet_config["metrics"]
 
     # Recipe v2 (2026-11): every two-phase config runs 20 frozen epochs and
     # then 10 fine-tune epochs; the last 15 epochs of the old 6/9 split were

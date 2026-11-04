@@ -167,6 +167,108 @@ def test_cosine_decay_honors_epoch_offset_for_fine_tuning_restart(tmp_path):
     assert scheduler.schedule(31, None) == pytest.approx(floor)
 
 
+def test_cosine_warmup_ramps_then_decays():
+    config = {
+        "model": {"num_classes": 2},
+        "optimizer": {"learning_rate": 1e-3},
+        "training": {"log_mode": "summary"},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "lr_schedule": {
+            "type": "cosine_decay",
+            "decay_epochs": 10,
+            "alpha": 0.01,
+            "warmup_epochs": 3,
+            "warmup_start_lr": 1e-4,
+        },
+        "callbacks": {
+            "checkpoint": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "tensorboard": {"enabled": False},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    callbacks = setup_callbacks(config, include_throughput=False)
+    scheduler = next(
+        callback
+        for callback in callbacks
+        if isinstance(callback, tf.keras.callbacks.LearningRateScheduler)
+    )
+
+    # Warmup: linear ramp from 1e-4 to 1e-3 over epochs 0, 1, 2.
+    assert scheduler.schedule(0, None) == pytest.approx(1e-4)
+    assert scheduler.schedule(1, None) == pytest.approx(4e-4)
+    assert scheduler.schedule(2, None) == pytest.approx(7e-4)
+    # Warmup end: epoch 3 reaches initial_lr.
+    assert scheduler.schedule(3, None) == pytest.approx(1e-3)
+    # Cosine mid-point: epoch 6 (shifted 3 past warmup, progress 3/7).
+    progress = 3.0 / 7.0
+    mid = 1e-3 * (0.01 + 0.99 * 0.5 * (1.0 + np.cos(np.pi * progress)))
+    assert scheduler.schedule(6, None) == pytest.approx(mid)
+    # Cosine floor: epoch 10 (shifted 7 past warmup, progress 1.0).
+    floor = 1e-3 * 0.01
+    assert scheduler.schedule(10, None) == pytest.approx(floor)
+
+
+def test_cosine_without_warmup_keys_is_unchanged():
+    config = {
+        "model": {"num_classes": 2},
+        "optimizer": {"learning_rate": 1e-3},
+        "training": {"log_mode": "summary"},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "lr_schedule": {"type": "cosine_decay", "decay_epochs": 10, "alpha": 0.01},
+        "callbacks": {
+            "checkpoint": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "tensorboard": {"enabled": False},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    callbacks = setup_callbacks(config, include_throughput=False)
+    scheduler = next(
+        callback
+        for callback in callbacks
+        if isinstance(callback, tf.keras.callbacks.LearningRateScheduler)
+    )
+
+    # No warmup: epoch 0 starts at initial_lr.
+    assert scheduler.schedule(0, None) == pytest.approx(1e-3)
+    # Mid-curve: epoch 5 (progress 0.5).
+    mid = 1e-3 * (0.01 + 0.99 * 0.5 * (1.0 + np.cos(np.pi * 0.5)))
+    assert scheduler.schedule(5, None) == pytest.approx(mid)
+    # Floor: epoch 10 (progress 1.0).
+    floor = 1e-3 * 0.01
+    assert scheduler.schedule(10, None) == pytest.approx(floor)
+
+
+def test_invalid_warmup_raises():
+    config = {
+        "model": {"num_classes": 2},
+        "optimizer": {"learning_rate": 1e-3},
+        "training": {"log_mode": "summary"},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "lr_schedule": {
+            "type": "cosine_decay",
+            "decay_epochs": 10,
+            "alpha": 0.01,
+            "warmup_epochs": 10,  # >= decay_epochs
+        },
+        "callbacks": {
+            "checkpoint": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "tensorboard": {"enabled": False},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    with pytest.raises(ValueError, match="warmup_epochs must be smaller"):
+        setup_callbacks(config, include_throughput=False)
+
+
 @pytest.mark.parametrize(
     ("freeze_base", "expected"),
     [

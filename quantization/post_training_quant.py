@@ -19,13 +19,21 @@ from tensorflow import keras
 
 # Import shared utilities from the training package, with sys.path fallback.
 try:
-    from training.utils import get_preprocess_fn
+    from training.utils import (
+        concrete_model_image_size,
+        get_preprocess_fn,
+        saved_model_image_size,
+    )
 except ImportError:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
     try:
-        from training.utils import get_preprocess_fn
+        from training.utils import (
+            concrete_model_image_size,
+            get_preprocess_fn,
+            saved_model_image_size,
+        )
     except ImportError as exc:  # pragma: no cover - hard configuration error
         raise ImportError(
             "Could not import training.utils.get_preprocess_fn. Run this script "
@@ -260,6 +268,7 @@ def convert_to_tflite(
 
     if _is_saved_model_dir(model_path):
         converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
+        model = None
     else:
         model = _load_keras_model(
             model_path, config_path=config_path, architecture=architecture
@@ -273,6 +282,27 @@ def convert_to_tflite(
     )
     preprocess_fn = get_preprocess_fn(arch)
 
+    # Calibration images must match the model's concrete input resolution. A
+    # SavedModel export from a hosted runtime profile (e.g. Kaggle T4 trains
+    # faster-resolution architectures at 192x192) would otherwise be fed
+    # 224x224 calibration batches and conversion would fail.
+    calibration_image_size = None
+    if _is_saved_model_dir(model_path):
+        calibration_image_size = saved_model_image_size(model_path)
+        if calibration_image_size:
+            print(
+                f"Calibrating at SavedModel input size: "
+                f"{calibration_image_size[0]}x{calibration_image_size[1]}"
+            )
+    elif model is not None:
+        calibration_image_size = concrete_model_image_size(
+            getattr(model, "input_shape", None)
+        )
+        if calibration_image_size:
+            print(
+                f"Calibrating at model input size: "
+                f"{calibration_image_size[0]}x{calibration_image_size[1]}"
+            )
     if quantize:
         print("Applying INT8 quantization...")
 
@@ -286,6 +316,7 @@ def convert_to_tflite(
                 representative_data_dir,
                 num_samples=1000,
                 preprocess_fn=preprocess_fn,
+                image_size=calibration_image_size or (224, 224),
             )
 
             # Enforce full integer quantization

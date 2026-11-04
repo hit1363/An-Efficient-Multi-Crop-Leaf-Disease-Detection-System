@@ -6,7 +6,7 @@ model:
   num_classes: 72
   # Native project implementation; ImageNet weights are intentionally unavailable.
   weights: null
-  dropout_rate: 0.35
+  dropout_rate: 0.25
   classifier_units: 256
 
 dataset:
@@ -22,14 +22,19 @@ dataset:
   cache_memory_limit_gb: 8.0
 
 augmentation:
-  rotation_range: 25
+  # Recipe v3: a randomly initialized backbone underfits train if every image
+  # is rotated 25 degrees each epoch, so the baseline is gentler.
+  rotation_range: 15
   zoom_range: [0.9, 1.1]
   horizontal_flip: true
   vertical_flip: true
   brightness_range: [0.9, 1.1]
   class_aware:
     enabled: true
-    max_train_samples: 500
+    # Recipe v3: the cap-500 benchmark tops out at 350 training images, so the
+    # old cutoff of 500 marked *all* 72 classes as minority and replaced the
+    # baseline policy everywhere. 100 leaves only the true Guava minorities.
+    max_train_samples: 100
     rotation_range: 20
     zoom_range: [0.9, 1.1]
     horizontal_flip: true
@@ -41,9 +46,11 @@ training:
   fine_tuning:
     enabled: true
   # The backbone is randomly initialized, so it must train from epoch one.
-  # Recipe v2 (2026-11): 15 epochs under-trained; a full 30-epoch cosine now
-  # spans the single training phase.
-  epochs: 30
+  # Recipe v3 (2026-11): 30 epochs at a 25-degree baseline with a 500-sample
+  # minority cutoff stalled after epoch 7 (epoch 1 held the best val_loss and
+  # early stopping restored it). The schedule is now long enough for a
+  # from-scratch backbone with three warmup epochs.
+  epochs: 40
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: false
   unfreeze_from_layer: 0
@@ -65,8 +72,12 @@ optimizer:
 
 lr_schedule:
   type: "cosine_decay"
-  decay_epochs: 30 # Single training phase (backbone trains from epoch one)
+  decay_epochs: 40 # Single training phase (backbone trains from epoch one)
   alpha: 0.01
+  # Recipe v3: full LR from step zero made val_loss exceed the uniform-prior
+  # ln(72) ~= 4.28; ramp 1e-4 -> 1e-3 over three epochs before the cosine.
+  warmup_epochs: 3
+  warmup_start_lr: 0.0001
 
 loss:
   # Balanced cap-500 benchmark: cross-entropy + label smoothing replaces
@@ -84,17 +95,20 @@ callbacks:
   checkpoint:
     run_scoped: true
     enabled: true
-    monitor: "val_loss"
+    # Recipe v3: val_loss is a fluke-prone signal for a from-scratch backbone
+    # (epoch 1's random-level loss beat every later epoch in Recipe v2).
+    monitor: "val_accuracy"
     save_best_only: true
     save_weights_only: true
-    mode: "min"
+    mode: "max"
     save_freq: "epoch"
   early_stopping:
     enabled: true
-    monitor: "val_loss"
-    patience: 6
+    monitor: "val_accuracy"
+    patience: 10
+    min_delta: 0.005
     restore_best_weights: true
-    mode: "min"
+    mode: "max"
   fine_tuning_early_stopping:
     enabled: true
     monitor: "val_loss"
@@ -120,6 +134,7 @@ export:
 
 metrics:
   - "accuracy"
+  - "top_k_categorical_accuracy"
 
 performance:
   validate_dataset_splits: true

@@ -27,16 +27,20 @@ try:
     # Support module execution: python -m training.evaluate
     from .utils import (
         _dataset_class_names,
+        concrete_model_image_size,
         get_preprocess_fn,
         load_benchmark_class_names,
+        saved_model_image_size,
         validate_dataset_splits,
     )
 except ImportError:
     # Fallback for script execution: python training/evaluate.py
     from utils import (
         _dataset_class_names,
+        concrete_model_image_size,
         get_preprocess_fn,
         load_benchmark_class_names,
+        saved_model_image_size,
         validate_dataset_splits,
     )
 
@@ -242,9 +246,39 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     input_shape = tuple(config["model"]["input_shape"])
     image_size = input_shape[:2]
 
+    # The exported model is authoritative for input resolution. Hosted runtime
+    # profiles (e.g. the Kaggle T4 profile) train faster-resolution
+    # architectures at 192x192 while the shared config still declares 224x224;
+    # evaluating at the config size would crash the first predict() call.
+    model_image_size = None
+    if _is_saved_model_dir(model_path):
+        model_image_size = saved_model_image_size(model_path)
+        if model_image_size is not None and tuple(model_image_size) != tuple(image_size):
+            print(
+                f"SavedModel signature expects {model_image_size[0]}x"
+                f"{model_image_size[1]} input; config declares "
+                f"{image_size[0]}x{image_size[1]}. Evaluating at the model's "
+                "resolution."
+            )
+            image_size = tuple(model_image_size)
+            input_shape = (image_size[0], image_size[1], input_shape[2])
+
     # Load model
     print(f"Loading model from {model_path}...")
     model = _load_model(model_path, input_shape)
+
+    if model_image_size is None:
+        model_image_size = concrete_model_image_size(
+            getattr(model, "input_shape", None)
+        )
+        if model_image_size is not None and tuple(model_image_size) != tuple(image_size):
+            print(
+                f"Loaded model expects {model_image_size[0]}x"
+                f"{model_image_size[1]} input; config declares "
+                f"{image_size[0]}x{image_size[1]}. Evaluating at the model's "
+                "resolution."
+            )
+            image_size = tuple(model_image_size)
 
     preprocess_fn = get_preprocess_fn(config["model"]["architecture"])
     test_ds, detected_class_names = load_test_dataset(

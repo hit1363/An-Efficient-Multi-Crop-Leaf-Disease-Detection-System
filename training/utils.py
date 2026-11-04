@@ -352,6 +352,50 @@ def get_preprocess_fn(architecture):
     return None
 
 
+def saved_model_image_size(model_path):
+    """Return the (height, width) input size of a SavedModel serving signature.
+
+    Hosted runtime profiles (for example the Kaggle T4 profile) train
+    faster-resolution architectures at 192x192 while the shared config still
+    declares 224x224. The exported SavedModel signature is the authoritative
+    resolution for evaluation and calibration. Returns None when the
+    signature cannot be inspected.
+    """
+    try:
+        loaded = tf.saved_model.load(model_path)
+    except Exception:
+        return None
+    signatures = getattr(loaded, "signatures", None) or {}
+    signature = signatures.get("serving_default")
+    if signature is None and signatures:
+        signature = next(iter(signatures.values()), None)
+    if signature is None:
+        return None
+    structured = getattr(signature, "structured_input_signature", None)
+    specs = []
+    if isinstance(structured, tuple) and len(structured) == 2:
+        positional, keyword = structured
+        specs.extend(positional or ())
+        specs.extend((keyword or {}).values())
+    for spec in specs:
+        shape = getattr(spec, "shape", None)
+        if shape is None or shape.rank != 4:
+            continue
+        height, width = shape[1], shape[2]
+        if height is not None and width is not None and int(height) > 0 and int(width) > 0:
+            return (int(height), int(width))
+    return None
+
+
+def concrete_model_image_size(input_shape_attr):
+    """Extract a concrete (height, width) from a Keras model input_shape."""
+    if isinstance(input_shape_attr, (list, tuple)) and len(input_shape_attr) == 4:
+        height, width = input_shape_attr[1], input_shape_attr[2]
+        if height and width and int(height) > 0 and int(width) > 0:
+            return (int(height), int(width))
+    return None
+
+
 def _dataset_cache_path(name, cache_key=None):
     """Return a writable cache file path for the current notebook/runtime."""
     candidates = []
@@ -1315,6 +1359,7 @@ def setup_callbacks(
         callbacks.append(
             keras.callbacks.EarlyStopping(
                 monitor=es_config.get("monitor", "val_loss"),
+                min_delta=float(es_config.get("min_delta", 0.0) or 0.0),
                 patience=es_config.get("patience", 10),
                 restore_best_weights=es_config.get("restore_best_weights", True),
                 mode=es_config.get("mode", "min"),
@@ -1365,11 +1410,31 @@ def setup_callbacks(
         )
         alpha = lr_config.get("alpha", 0.0)  # minimum LR fraction
         epoch_offset = float(lr_config.get("epoch_offset", 0.0) or 0.0)  # phase restarts
+        # Optional linear warmup. A randomly initialized backbone trained at the
+        # full learning rate from step zero diverges early (val_loss climbs above
+        # the uniform-prior ln(num_classes) while train loss still falls), so the
+        # first epochs ramp up to ``initial_learning_rate`` and the cosine curve
+        # spans the remaining epochs. Omitting the keys keeps the old behavior.
+        warmup_epochs = float(lr_config.get("warmup_epochs", 0.0) or 0.0)
+        warmup_start_lr = float(
+            lr_config.get("warmup_start_lr", initial_lr * 0.1) or 0.0
+        )
+        if warmup_epochs < 0:
+            raise ValueError("lr_schedule.warmup_epochs must be >= 0")
+        if warmup_epochs > 0 and warmup_epochs >= decay_epochs:
+            raise ValueError(
+                "lr_schedule.warmup_epochs must be smaller than decay_epochs"
+            )
+        if warmup_start_lr < 0:
+            raise ValueError("lr_schedule.warmup_start_lr must be >= 0")
+        cosine_span = max(decay_epochs - warmup_epochs, 1.0)
 
         def schedule(epoch, _current_lr):
-            progress = min(
-                max(float(epoch) - epoch_offset, 0.0) / max(decay_epochs, 1.0), 1.0
-            )
+            shifted = max(float(epoch) - epoch_offset, 0.0)
+            if warmup_epochs > 0 and shifted < warmup_epochs:
+                fraction = shifted / warmup_epochs
+                return warmup_start_lr + (initial_lr - warmup_start_lr) * fraction
+            progress = min((shifted - warmup_epochs) / cosine_span, 1.0)
             cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
             return initial_lr * (alpha + (1.0 - alpha) * cosine)
 
