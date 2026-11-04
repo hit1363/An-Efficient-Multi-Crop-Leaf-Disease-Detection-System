@@ -50,9 +50,6 @@ models/exported_tflite/*.tflite
 dataset/raw/**/*.jpg
 dataset/raw/**/*.jpeg
 dataset/raw/**/*.png
-dataset/processed_harmonized/**/*.jpg
-dataset/processed_harmonized/**/*.jpeg
-dataset/processed_harmonized/**/*.png
 dataset/processed/**/*.jpg
 dataset/processed/**/*.jpeg
 dataset/processed/**/*.png
