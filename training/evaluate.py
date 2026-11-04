@@ -216,19 +216,28 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     test_dir = config["dataset"]["test_dir"]
     data_root = os.path.dirname(os.path.abspath(test_dir))
     class_names = load_benchmark_class_names(data_root)
-    split_counts = validate_dataset_splits(
-        config["dataset"]["train_dir"],
-        config["dataset"]["val_dir"],
-        test_dir,
-        class_names=class_names,
-    )
-    print(
-        "Validated split classes and counts: "
-        + json.dumps(
-            {split: values["total"] for split, values in split_counts.items()},
-            sort_keys=True,
+    performance_config = config.get("performance", {})
+    if performance_config.get("validate_dataset_splits", True):
+        split_counts = validate_dataset_splits(
+            config["dataset"]["train_dir"],
+            config["dataset"]["val_dir"],
+            test_dir,
+            class_names=class_names,
+            allow_cross_split_duplicates=performance_config.get(
+                "allow_cross_split_duplicates", False
+            ),
         )
-    )
+        print(
+            "Validated split classes and counts: "
+            + json.dumps(
+                {split: values["total"] for split, values in split_counts.items()},
+                sort_keys=True,
+            )
+        )
+    else:
+        print(
+            "Deep split validation is disabled; skipping cross-split scans and duplicate hashing."
+        )
     batch_size = config["dataset"]["batch_size"]
     input_shape = tuple(config["model"]["input_shape"])
     image_size = input_shape[:2]

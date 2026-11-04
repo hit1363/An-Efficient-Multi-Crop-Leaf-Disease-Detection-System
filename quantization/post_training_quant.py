@@ -9,6 +9,9 @@ os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
 import sys
 import argparse
+import random
+from pathlib import Path
+
 import yaml
 import numpy as np
 import tensorflow as tf
@@ -144,42 +147,91 @@ def _get_dir_size(path):
     return total
 
 
+_CALIBRATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+
+
+def _calibration_image_files(directory):
+    return sorted(
+        path
+        for path in Path(directory).iterdir()
+        if path.is_file() and path.suffix.lower() in _CALIBRATION_EXTENSIONS
+    )
+
+
+def stratified_calibration_paths(data_dir, num_samples=1000, seed=42):
+    """Round-robin, class-balanced sample of calibration image paths.
+
+    The previous generator consumed the first ``num_samples`` images in
+    alphabetical folder order, which on the 72-class benchmark covered only
+    the first ~5 class directories and biased every INT8 activation scale.
+    Round-robin sampling guarantees every class contributes to calibration.
+    """
+    data_dir = Path(data_dir)
+    queues = {}
+    for class_dir in sorted(path for path in data_dir.iterdir() if path.is_dir()):
+        files = _calibration_image_files(class_dir)
+        if files:
+            queues[class_dir.name] = files
+    rng = random.Random(seed)
+    if not queues:
+        # Flat directory of images: fall back to a deterministic shuffle.
+        paths = _calibration_image_files(data_dir)
+        rng.shuffle(paths)
+        return paths[:num_samples]
+    order = sorted(queues)
+    for files in queues.values():
+        rng.shuffle(files)
+    rng.shuffle(order)
+    sampled = []
+    while len(sampled) < num_samples and order:
+        for name in list(order):
+            if not queues[name]:
+                order.remove(name)
+                continue
+            sampled.append(queues[name].pop())
+            if len(sampled) >= num_samples:
+                break
+    return sampled[:num_samples]
+
+
 def representative_dataset_generator(
     data_dir,
     num_samples=1000,
     image_size=(224, 224),
     preprocess_fn=None,
+    seed=42,
 ):
     """
     Generator for representative dataset used in quantization calibration
 
     Args:
-        data_dir: Directory containing sample images
+        data_dir: Directory containing class folders of sample images
         num_samples: Number of calibration samples
         image_size: Input image size
+        preprocess_fn: Optional preprocessing applied the same way as during
+            training, so calibration stays in the model's input domain
+        seed: Deterministic sampling seed
 
     Yields:
         Preprocessed image batches
     """
-    # Load dataset
-    dataset = keras.preprocessing.image_dataset_from_directory(
-        data_dir,
-        image_size=image_size,
-        batch_size=1,
-        shuffle=False,
+    paths = stratified_calibration_paths(
+        data_dir, num_samples=num_samples, seed=seed
     )
-
-    count = 0
-    for images, _ in dataset:
-        if count >= num_samples:
-            break
-
+    print(
+        f"Calibrating INT8 on {len(paths)} images sampled round-robin "
+        f"across classes of {data_dir}",
+        flush=True,
+    )
+    for path in paths:
+        image = keras.utils.load_img(
+            path, target_size=tuple(image_size), color_mode="rgb"
+        )
+        array = np.expand_dims(keras.utils.img_to_array(image), axis=0)
+        images = tf.cast(array, tf.float32)
         if preprocess_fn is not None:
-            images = tf.cast(images, tf.float32)
             images = preprocess_fn(images)
-
         yield [images]
-        count += 1
 
 
 def convert_to_tflite(

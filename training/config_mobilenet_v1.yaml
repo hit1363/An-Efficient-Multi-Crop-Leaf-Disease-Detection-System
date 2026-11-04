@@ -99,6 +99,7 @@ export:
   save_dir: ../models
   formats:
   - saved_model
+  - tflite
   sync_flutter_labels: false
 metrics:
 - accuracy

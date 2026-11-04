@@ -561,3 +561,36 @@ def test_comparison_notebooks_and_common_runner_contract():
         assert "run_comparison" in code
         assert "MODEL_ROOT" in code
         assert "OUTPUT_DIR" in code
+
+
+def test_kaggle_notebooks_auto_select_dedup_benchmark_and_quantize_metrics():
+    for architecture in (
+        "mobilenet_v1",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
+        "shufflenetv2_05",
+    ):
+        path = ROOT / "notebooks" / f"kaggle_{architecture}_training.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        assert (
+            "DEDUP_BENCHMARK_DIR = '/kaggle/working/leaf_dataset/benchmark_dedup'"
+            in code
+        )
+        assert "'validate_dataset_splits'] = True" in code
+        assert "'validate_dataset_splits'] = False" in code
+        assert "allow_cross_split_duplicates'] = True" in code
+        assert "from dataset.prepare_benchmark import prepare_benchmark" in code
+        assert "tflite_metrics_{variant}" in code
+        assert "evaluate_tflite.py" in code
+        assert "runtime_cfg_path = cfg_path" in code
+        assert "copytree" not in code

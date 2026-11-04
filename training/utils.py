@@ -750,6 +750,8 @@ def validate_dataset_splits(
     manifest_path = os.path.join(data_root, "split_manifest.csv")
     manifest_counts = None
     hash_splits = {}
+    hash_labels = {}
+    degenerate_registry = set()
     if os.path.isfile(manifest_path):
         logging.getLogger(__name__).info(
             "Validating split counts from manifest: %s", manifest_path
@@ -762,6 +764,8 @@ def validate_dataset_splits(
                 label = row.get("canonical_label")
                 if digest and split:
                     hash_splits.setdefault(digest, set()).add(split)
+                    if label:
+                        hash_labels.setdefault(digest, set()).add(label)
                 if split in manifest_counts:
                     if not label:
                         raise ValueError(
@@ -770,6 +774,21 @@ def validate_dataset_splits(
                     manifest_counts[split][label] = (
                         manifest_counts[split].get(label, 0) + 1
                     )
+        # Degenerate classes (1-2 unique photos in the source) legitimately
+        # reuse a copy across splits; the benchmark builder registers them in
+        # dataset_info.json and their reuse is not treated as leakage.
+        dataset_info_path = os.path.join(data_root, "dataset_info.json")
+        if os.path.isfile(dataset_info_path):
+            try:
+                with open(dataset_info_path, "r", encoding="utf-8") as handle:
+                    degenerate_registry = set(
+                        json.load(handle).get("degenerate_classes") or {}
+                    )
+            except (json.JSONDecodeError, OSError):
+                logging.getLogger(__name__).warning(
+                    "Could not read degenerate-class registry from %s",
+                    dataset_info_path,
+                )
     counts = {}
     for split_name, split_path in split_paths.items():
         if not os.path.isdir(split_path):
@@ -866,7 +885,15 @@ def validate_dataset_splits(
                             for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
                                 digest.update(chunk)
                         hash_splits.setdefault(digest.hexdigest(), set()).add(split_name)
-    leaking_hashes = [digest for digest, splits in hash_splits.items() if len(splits) > 1]
+    leaking_hashes = [
+        digest
+        for digest, splits in hash_splits.items()
+        if len(splits) > 1
+        and not (
+            hash_labels.get(digest)
+            and hash_labels[digest] <= degenerate_registry
+        )
+    ]
     if leaking_hashes:
         if allow_cross_split_duplicates:
             logging.getLogger(__name__).warning(

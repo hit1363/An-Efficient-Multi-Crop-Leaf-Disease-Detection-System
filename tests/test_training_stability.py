@@ -954,6 +954,53 @@ def test_split_validation_uses_manifest_counts_without_directory_image_scans(tmp
     assert counts["val"]["classes"] == {"healthy": 1, "disease": 0}
 
 
+def test_split_validation_tolerates_registered_degenerate_reuse(tmp_path):
+    """Benchmark builders disclose 1-2 unique-image classes in
+    dataset_info.json; their one shared copy per split must not abort an
+    otherwise manifest-backed strict validation run."""
+    class_names = ["healthy", "Guava___Anthracnose"]
+    for split in ("train", "val", "test"):
+        for class_name in class_names:
+            (tmp_path / split / class_name).mkdir(parents=True)
+
+    rows = [
+        ("train", "healthy", "h-train"),
+        ("val", "healthy", "h-val"),
+        ("test", "healthy", "h-test"),
+        ("train", "Guava___Anthracnose", "g-shared"),
+        ("val", "Guava___Anthracnose", "g-shared"),
+        ("test", "Guava___Anthracnose", "g-shared"),
+    ]
+    with (tmp_path / "split_manifest.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["split", "canonical_label", "source_sha256"]
+        )
+        writer.writeheader()
+        for split, label, digest in rows:
+            writer.writerow(
+                {"split": split, "canonical_label": label, "source_sha256": digest}
+            )
+
+    with pytest.raises(ValueError, match="exact duplicate image hashes"):
+        validate_dataset_splits(
+            tmp_path / "train", tmp_path / "val", tmp_path / "test",
+            class_names=class_names,
+        )
+
+    (tmp_path / "dataset_info.json").write_text(
+        json.dumps({"degenerate_classes": {"Guava___Anthracnose": 1}}),
+        encoding="utf-8",
+    )
+    counts = validate_dataset_splits(
+        tmp_path / "train", tmp_path / "val", tmp_path / "test",
+        class_names=class_names,
+    )
+    assert counts["train"]["classes"] == {"healthy": 1, "Guava___Anthracnose": 1}
+    assert counts["test"]["classes"]["Guava___Anthracnose"] == 1
+
+
 def test_alias_split_validation_hashes_actual_source_folders_without_manifest(tmp_path):
     source_by_canonical = {
         canonical: alias for alias, canonical in LABEL_ALIASES.items()

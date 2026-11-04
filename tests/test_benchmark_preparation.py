@@ -1,5 +1,6 @@
 import csv
 import json
+import shutil
 
 import pytest
 from PIL import Image
@@ -139,3 +140,34 @@ def test_unknown_labels_write_a_validation_report(tmp_path):
         (tmp_path / "unknown_output_validation_report.json").read_text()
     )
     assert report["unknown_source_labels"] == ["UnknownCrop___Disease"]
+
+
+def test_degenerate_class_is_kept_with_disclosed_val_test_copies(tmp_path):
+    source = tmp_path / "source"
+    _make_source_tree(source, images_per_class=4)
+    thin_class = source / CANONICAL_CLASSES[3]
+    shutil.rmtree(thin_class)
+    thin_class.mkdir()
+    Image.new("RGB", (9, 9), (1, 2, 3)).save(thin_class / "only_a.png")
+    Image.new("RGB", (9, 9), (4, 5, 6)).save(thin_class / "only_b.png")
+
+    output = tmp_path / "dedup"
+    result = prepare_benchmark(source, output)
+
+    assert result["degenerate_classes"] == {CANONICAL_CLASSES[3]: 2}
+    assert result["counts"]["train"]["classes"][CANONICAL_CLASSES[3]] == 2
+    assert result["counts"]["val"]["classes"][CANONICAL_CLASSES[3]] == 1
+    assert result["counts"]["test"]["classes"][CANONICAL_CLASSES[3]] == 1
+
+    info = json.loads((output / "dataset_info.json").read_text())
+    assert info["degenerate_classes"] == {CANONICAL_CLASSES[3]: 2}
+
+    with (output / "split_manifest.csv").open(newline="", encoding="utf-8") as handle:
+        manifest = list(csv.DictReader(handle))
+
+    thin_rows = [r for r in manifest if r["canonical_label"] == CANONICAL_CLASSES[3]]
+    assert len(thin_rows) == 4
+    assert len({r["source_sha256"] for r in thin_rows}) == 2
+
+    other_rows = [r for r in manifest if r["canonical_label"] != CANONICAL_CLASSES[3]]
+    assert len({r["source_sha256"] for r in other_rows}) == len(other_rows)
