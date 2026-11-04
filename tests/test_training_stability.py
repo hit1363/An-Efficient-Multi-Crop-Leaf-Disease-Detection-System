@@ -89,6 +89,84 @@ def test_accepts_phase_two_weights_only_on_strict_improvement():
     assert loss == pytest.approx(0.41)
 
 
+def test_phase2_lr_override_restarts_decay_at_unfreeze_epoch(monkeypatch):
+    """Fine-tuning must start a fresh decay curve, not inherit Phase 1's.
+
+    Keras hands the scheduler global epoch indices that continue from the
+    Phase 1 ``initial_epoch``; without ``epoch_offset`` the restart began
+    two-thirds decayed and floored at ``alpha * fine_tune_lr`` within a few
+    epochs (val_loss 0.1856 -> 0.1844 across 9 epochs in run 20261104_053311).
+    """
+    import training.train as train
+
+    captured = {}
+
+    def fake_setup_callbacks(config, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(train, "setup_callbacks", fake_setup_callbacks)
+
+    train._setup_phase2_callbacks(
+        {
+            "training": {
+                "epochs": 30,
+                "unfreeze_epoch": 20,
+                "fine_tune_learning_rate": 2e-5,
+            },
+        }
+    )
+
+    assert captured["lr_schedule_override"] == {
+        "initial_learning_rate": 2e-5,
+        "decay_epochs": 10.0,
+        "epoch_offset": 20.0,
+    }
+
+
+def test_cosine_decay_honors_epoch_offset_for_fine_tuning_restart(tmp_path):
+    config = {
+        "model": {"num_classes": 2},
+        "optimizer": {"learning_rate": 3e-4},
+        "training": {"log_mode": "summary"},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "lr_schedule": {"type": "cosine_decay", "decay_epochs": 10, "alpha": 0.01},
+        "callbacks": {
+            "checkpoint": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "tensorboard": {"enabled": False},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    callbacks = setup_callbacks(
+        config,
+        include_throughput=False,
+        lr_schedule_override={
+            "initial_learning_rate": 2e-5,
+            "decay_epochs": 10,
+            "epoch_offset": 20,
+        },
+    )
+
+    scheduler = next(
+        callback
+        for callback in callbacks
+        if isinstance(callback, tf.keras.callbacks.LearningRateScheduler)
+    )
+
+    # First fine-tune epoch (global index 20) starts the fresh curve peak.
+    assert scheduler.schedule(20, None) == pytest.approx(2e-5)
+    # Global epoch 25 sits mid-curve instead of five-tenths past decayed start.
+    mid_curve = 2e-5 * (0.01 + 0.99 * 0.5 * (1.0 + np.cos(np.pi * 0.5)))
+    assert scheduler.schedule(25, None) == pytest.approx(mid_curve)
+    # The curve reaches its alpha floor when phase 2 completes.
+    floor = 2e-5 * 0.01
+    assert scheduler.schedule(30, None) == pytest.approx(floor)
+    assert scheduler.schedule(31, None) == pytest.approx(floor)
+
+
 @pytest.mark.parametrize(
     ("freeze_base", "expected"),
     [

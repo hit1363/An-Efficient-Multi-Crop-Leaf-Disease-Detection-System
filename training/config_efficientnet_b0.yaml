@@ -38,12 +38,14 @@ augmentation:
     brightness_range: [0.85, 1.15]
 
 training:
-  epochs: 15
+  # Recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at a real
+  # 2e-5 (previously 6/9 with a pre-decayed 5e-6 that floored at 5e-8).
+  epochs: 30
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 180
-  unfreeze_epoch: 6
-  fine_tune_learning_rate: 0.000005
+  unfreeze_epoch: 20
+  fine_tune_learning_rate: 2.0e-05
   fine_tuning:
     enabled: true
 
@@ -58,13 +60,13 @@ optimizer:
 
 lr_schedule:
   type: "cosine_decay"
-  decay_epochs: 9
+  decay_epochs: 20 # Match the frozen-head phase; fine-tuning restarts its own curve
   alpha: 0.01
 
 loss:
-  name: "focal_loss"
-  gamma: 2.0
-  alpha: 0.25
+  # Balanced cap-500 benchmark: cross-entropy + label smoothing replaces
+  # focal loss (which suppressed gradients without correcting any imbalance).
+  name: "categorical_crossentropy"
   label_smoothing: 0.1
 
 class_weights:

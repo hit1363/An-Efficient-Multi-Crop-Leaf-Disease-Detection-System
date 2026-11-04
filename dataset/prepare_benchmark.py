@@ -107,7 +107,7 @@ def prepare_benchmark(
     data_dir,
     output_dir,
     seed=42,
-    max_per_class=300,
+    max_per_class=500,
     ratios=DEFAULT_RATIOS,
 ):
     """Validate, deduplicate, and write a reproducible train/val/test tree.
@@ -304,7 +304,7 @@ def main():
     parser.add_argument("--data-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-per-class", type=int, default=300)
+    parser.add_argument("--max-per-class", type=int, default=500)
     args = parser.parse_args()
     result = prepare_benchmark(
         args.data_dir,

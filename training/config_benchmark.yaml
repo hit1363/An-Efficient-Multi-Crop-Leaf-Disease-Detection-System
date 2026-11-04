@@ -40,12 +40,14 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 20
+  # Shared recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at 2e-5.
+  # compare_models.py can still pass --epochs for quick proxy runs.
+  epochs: 30
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100
-  unfreeze_epoch: 5
-  fine_tune_learning_rate: 0.00001
+  unfreeze_epoch: 20
+  fine_tune_learning_rate: 2.0e-05
 
 optimizer:
   name: "adam"

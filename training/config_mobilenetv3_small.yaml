@@ -41,12 +41,17 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 15
+  # Recipe v2 (2026-11): the class-balanced cap-500 benchmark reached
+  # val_acc ~0.77 in 15 epochs while val_loss was still improving at the
+  # cutoff, and the previous fine-tune LR (5e-6, pre-decayed to 5e-8) moved
+  # val_loss by <1% relative. 20 frozen epochs complete the cosine anneal
+  # and 10 fine-tune epochs now start at a real 2e-5.
+  epochs: 30
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100
-  unfreeze_epoch: 6
-  fine_tune_learning_rate: 0.000005
+  unfreeze_epoch: 20
+  fine_tune_learning_rate: 2.0e-05
 
 optimizer:
   name: "adam"
@@ -59,13 +64,14 @@ optimizer:
 
 lr_schedule:
   type: "cosine_decay"
-  decay_epochs: 9
+  decay_epochs: 20 # Match the frozen-head phase; fine-tuning restarts its own curve
   alpha: 0.01
 
 loss:
-  name: "focal_loss"
-  gamma: 2.0
-  alpha: 0.25
+  # The capped benchmark is class-balanced, so plain cross-entropy with label
+  # smoothing beats focal loss: focal (alpha=0.25) suppresses true-positive
+  # gradients without correcting any imbalance, and under-trained the head.
+  name: "categorical_crossentropy"
   label_smoothing: 0.1
 
 class_weights:

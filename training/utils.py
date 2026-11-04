@@ -1259,6 +1259,13 @@ def setup_callbacks(
             so a training phase can use its own base learning rate and decay
             horizon (used by the fine-tuning phase).
 
+    Notes:
+        ``lr_schedule.epoch_offset`` shifts the schedule's epoch reference so a
+        phase that resumes ``fit`` with ``initial_epoch`` starts its own decay
+        curve at progress zero. Keras hands the scheduler global epoch indices,
+        so a fine-tuning restart at ``initial_epoch=N`` must subtract ``N`` or
+        it would inherit the previous phase's already-decayed progress.
+
     Returns:
         List of Keras callbacks
     """
@@ -1340,10 +1347,14 @@ def setup_callbacks(
             lr_config.get("decay_epochs", config.get("training", {}).get("epochs", 50))
         )
         decay_rate = lr_config.get("decay_rate", 0.96)
+        epoch_offset = float(lr_config.get("epoch_offset", 0.0) or 0.0)
 
         def schedule(epoch, _current_lr):
-            exponent = int(epoch) if lr_config.get("staircase", False) else float(epoch)
-            return initial_lr * (decay_rate ** (exponent / max(decay_epochs, 1.0)))
+            shifted = float(epoch) - epoch_offset
+            exponent = int(shifted) if lr_config.get("staircase", False) else shifted
+            return initial_lr * (
+                decay_rate ** (max(exponent, 0.0) / max(decay_epochs, 1.0))
+            )
 
         callbacks.append(
             keras.callbacks.LearningRateScheduler(schedule, verbose=callback_verbose)
@@ -1353,9 +1364,12 @@ def setup_callbacks(
             lr_config.get("decay_epochs", config.get("training", {}).get("epochs", 50))
         )
         alpha = lr_config.get("alpha", 0.0)  # minimum LR fraction
+        epoch_offset = float(lr_config.get("epoch_offset", 0.0) or 0.0)  # phase restarts
 
         def schedule(epoch, _current_lr):
-            progress = min(float(epoch) / max(decay_epochs, 1.0), 1.0)
+            progress = min(
+                max(float(epoch) - epoch_offset, 0.0) / max(decay_epochs, 1.0), 1.0
+            )
             cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
             return initial_lr * (alpha + (1.0 - alpha) * cosine)
 
@@ -1431,5 +1445,5 @@ if __name__ == "__main__":
     print("Testing utility functions...")
 
     # Test class weight computation
-    # class_weights = compute_class_weights('../dataset/processed_harmonized/train')
+    # class_weights = compute_class_weights('../dataset/processed/train')
     # print("Class weights:", class_weights)

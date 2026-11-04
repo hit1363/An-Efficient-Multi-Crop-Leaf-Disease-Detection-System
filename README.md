@@ -25,7 +25,7 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 ├── requirements.txt
 ├── dataset/
 │   ├── raw/
-│   ├── processed_harmonized/
+│   ├── processed/
 │   ├── taxonomy.py
 │   └── prepare_benchmark.py
 ├── notebooks/
@@ -86,10 +86,12 @@ pip install -r requirements.txt
 Build the canonical 72-class benchmark from raw class folders. An existing `train/val/test` tree is also accepted, but its old boundaries are discarded and regenerated:
 
 ```bash
-python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed_harmonized --seed 42
+python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed --seed 42
 ```
 
 The builder applies the explicit taxonomy, retains `Invalid` as class 72, removes exact duplicates, converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
+
+**Per-class cap.** `--max-per-class` (default `500`) bounds every class before splitting so no crop dominates training. With seed 42 the cap-500 benchmark yields ≈24.8k train / ≈5.3k val / ≈5.3k test images (≈350 train images per class for classes with ≥500 raw images). The earlier cap-300 processed tree kept only ≈15k train images and under-trained every model, so recipe v2 (below) is tuned for the cap-500 rebuild. Upload the rebuilt directory (with its `split_manifest.csv`) to Kaggle as the training dataset; notebooks detect the manifest automatically and validate splits without re-hashing. Never rebuild from an already-capped tree — that only re-caps the survivors and cannot recover discarded images. Note that the new deterministic selection and split assignment differ from the cap-300 build, so older test-set numbers are not directly comparable; re-evaluate models on the same benchmark manifest when comparing.
 
 ### Training
 
@@ -105,18 +107,9 @@ python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
-Training configs use either bounded, normalized categorical cross-entropy or
-focal loss, as specified by each model configuration. When enabled, class
-weights are computed from the training split and passed to `model.fit` as
-per-example weighting; this is intentionally visible in the run metadata
-because it changes the scale of reported training loss. Class-aware
-augmentation is enabled for underrepresented classes, and
-validation-loss early stopping restores the best checkpoint (patience 6).
-Training validates the train/validation/test class folders and split manifest
-before a full run, and checks exact duplicate hashes when a manifest is not
-available. Pretrained backbones use a short frozen-head warmup before
-fine-tuning; ShuffleNetV2 is trained end-to-end because its backbone is
-randomly initialized.
+**Recipe v2 (November 2026).** All model configs share one corrected recipe: 30 total epochs — 20 frozen-head epochs under a full cosine decay (`lr_schedule.decay_epochs: 20`), then 10 fine-tuning epochs that restart the schedule at `fine_tune_learning_rate: 2e-5` via `epoch_offset` (earlier runs restarted two-thirds decayed and floored at ~5e-8, wasting the fine-tune phase). The loss is categorical cross-entropy with label smoothing 0.1 (the capped benchmark is class-balanced; focal loss suppressed true-positive gradients without correcting any imbalance). Configs that never used focal loss (MobileNet V1/V3-Large, NASNet, EfficientNetV2-B0) keep their `reduce_on_plateau` schedule.
+
+Training configs use bounded, normalized categorical cross-entropy. When enabled, class weights are computed from the training split and passed to `model.fit` as per-example weighting; this is intentionally visible in the run metadata because it changes the scale of reported training loss. Class-aware augmentation is enabled for underrepresented classes, and validation-loss early stopping restores the best checkpoint (patience 6). Training validates the train/validation/test class folders and split manifest before a full run, and checks exact duplicate hashes when a manifest is not available. Pretrained backbones use the frozen-head warmup before fine-tuning; ShuffleNetV2 is trained end-to-end for its full 30-epoch cosine because its backbone is randomly initialized.
 
 If a hosted runtime disables the filesystem split scan to reduce startup time,
 the training metadata marks validation/test per-class counts as unknown rather
@@ -128,7 +121,7 @@ before comparing models.
 Run the full mobile model comparison after preparing the benchmark:
 
 ```bash
-python training/compare_models.py --data-dir dataset/processed_harmonized --output-dir results/mobile_model_comparison
+python training/compare_models.py --data-dir dataset/processed --output-dir results/mobile_model_comparison
 ```
 
 The comparison covers MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile,
@@ -162,8 +155,8 @@ python quantization/post_training_quant.py \
 python quantization/post_training_quant.py \
   --model_path <path-to-model> \
   --output_path models/exported_tflite/mobilenetv2_int8.tflite \
-  --representative_data dataset/processed_harmonized/train \
-  --evaluate --test_data dataset/processed_harmonized/test \
+  --representative_data dataset/processed/train \
+  --evaluate --test_data dataset/processed/test \
   --arch mobilenetv2
 ```
 
@@ -175,7 +168,7 @@ conversion script.
 
 ## Google Colab and Kaggle Workflows
 
-Use a model-specific notebook to train one candidate, evaluate it, export dynamic-range and full INT8 TFLite models, and benchmark CPU inference. The Kaggle MobileNetV3-Small workflow trains on the mounted dataset directly; the runtime profile tolerates genuine cross-split duplicates in raw hosted inputs (see `performance.allow_cross_split_duplicates`). A manifest-backed, exact-deduplicated benchmark can be built instead by setting `LEAF_USE_DEDUP_BENCHMARK=1` before the notebook runs — it removes the same cross-split leakage from validation/test metrics at the cost of one preprocessing pass. The harmonized comparison notebook reuses an existing benchmark under `/kaggle/working/harmonized_benchmark` instead of rebuilding it. The separate ShuffleNetV2 experiment and the existing combined notebooks remain available for backward compatibility.
+Use a model-specific notebook to train one candidate, evaluate it, export dynamic-range and full INT8 TFLite models, and benchmark CPU inference. Each Kaggle notebook now detects a manifest-backed benchmark wherever `split_manifest.csv` sits — either a locally rebuilt benchmark uploaded as a Kaggle dataset, or one built on Kaggle by the notebook's optional preparation cell, which reads the uncapped **raw** class-folder dataset and defaults to `MAX_PER_CLASS=500` (override via environment; `RAW_DATASET_ROOT` forces the raw tree explicitly). The runtime profile tolerates genuine cross-split duplicates in raw hosted inputs (see `performance.allow_cross_split_duplicates`). When a manifest is present it is authoritative: split validation finishes in seconds and the reported validation/test counts are leakage-free. The harmonized comparison notebook reuses an existing benchmark under `/kaggle/working/harmonized_benchmark` instead of rebuilding it. The separate ShuffleNetV2 experiment and the existing combined notebooks remain available for backward compatibility.
 
 | Model | Google Colab | Kaggle |
 |---|---|---|
@@ -250,6 +243,7 @@ Place your deployed model and labels here:
 - Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
 - Classes: 72
 - Split: 70% train, 15% val, 15% test
+- Per-class cap: 500 (exact-deduplicated before selection; the earlier cap-300 build with 15,102 train images under-trained all models and is retired)
 
 ## License
 

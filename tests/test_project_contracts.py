@@ -209,16 +209,19 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         assert config["dataset"]["cache_mode"] == expected_cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
 
+    # Recipe v2 (2026-11): every two-phase config runs 20 frozen epochs and
+    # then 10 fine-tune epochs; the last 15 epochs of the old 6/9 split were
+    # spent on a learning rate that had already decayed to its floor.
     expected_unfreeze_epochs = {
-        "benchmark": 5,
-        "mobilenetv2": 6,
-        "mobilenetv3_small": 6,
-        "efficientnet_b0": 6,
-        "efficientnet_lite0": 6,
-        "mobilenet_v1": 5,
-        "mobilenet_v3_large": 5,
-        "nasnet_mobile": 5,
-        "efficientnet_v2_b0": 5,
+        "benchmark": 20,
+        "mobilenetv2": 20,
+        "mobilenetv3_small": 20,
+        "efficientnet_b0": 20,
+        "efficientnet_lite0": 20,
+        "mobilenet_v1": 20,
+        "mobilenet_v3_large": 20,
+        "nasnet_mobile": 20,
+        "efficientnet_v2_b0": 20,
     }
     for architecture, unfreeze_epoch in expected_unfreeze_epochs.items():
         config = yaml.safe_load(

@@ -41,7 +41,9 @@ training:
   fine_tuning:
     enabled: true
   # The backbone is randomly initialized, so it must train from epoch one.
-  epochs: 15
+  # Recipe v2 (2026-11): 15 epochs under-trained; a full 30-epoch cosine now
+  # spans the single training phase.
+  epochs: 30
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: false
   unfreeze_from_layer: 0
@@ -63,13 +65,13 @@ optimizer:
 
 lr_schedule:
   type: "cosine_decay"
-  decay_epochs: 9
+  decay_epochs: 30 # Single training phase (backbone trains from epoch one)
   alpha: 0.01
 
 loss:
-  name: "focal_loss"
-  gamma: 2.0
-  alpha: 0.25
+  # Balanced cap-500 benchmark: cross-entropy + label smoothing replaces
+  # focal loss (which suppressed gradients without correcting any imbalance).
+  name: "categorical_crossentropy"
   label_smoothing: 0.1
 
 class_weights:

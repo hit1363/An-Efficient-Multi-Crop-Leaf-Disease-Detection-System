@@ -934,9 +934,14 @@ def _setup_phase2_callbacks(config):
     phase2_epochs = max(total_epochs - unfreeze_epoch, 1)
 
     # Restart the same schedule *shape* from the fine-tuning LR and horizon.
+    # epoch_offset realigns the curve: Keras calls the scheduler with global
+    # epoch indices that continue from Phase 1 (initial_epoch), so without the
+    # offset the fine-tuning phase would start already 2/3 decayed and land on
+    # the alpha floor almost immediately.
     lr_override = {
         "initial_learning_rate": fine_tune_lr,
         "decay_epochs": float(phase2_epochs),
+        "epoch_offset": float(unfreeze_epoch),
     }
     callback_kwargs = {
         "csv_append": True,
