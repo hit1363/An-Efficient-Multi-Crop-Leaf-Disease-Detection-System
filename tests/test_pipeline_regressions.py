@@ -258,3 +258,34 @@ def test_phase2_callback_factory_requests_phase2_checkpoint(monkeypatch):
         "checkpoint_name": "best_phase2_model",
         "include_throughput": False,
     }
+
+
+def test_load_model_handles_exported_savedmodel_without_keras_metadata(tmp_path):
+    """``model.export()`` writes a SavedModel with no ``keras_metadata.pb``.
+
+    On this Keras version ``keras.models.load_model`` does NOT raise on such a
+    directory — it returns a bare ``_UserObject`` with no ``predict`` — so the
+    loader must validate the loaded object before falling back to the
+    SavedModel signature. Without this guard the whole evaluation crashes at
+    the first ``model.predict`` call.
+    """
+    import tensorflow as tf
+    from tensorflow import keras
+
+    model = keras.Sequential(
+        [
+            keras.Input(shape=(224, 224, 3)),
+            keras.layers.Flatten(),
+            keras.layers.Dense(72, activation="softmax"),
+        ]
+    )
+    model.compile(optimizer="adam", loss="categorical_crossentropy")
+
+    saved_dir = tmp_path / "saved_model_20261105_045056"
+    model.export(str(saved_dir))
+    assert not (saved_dir / "keras_metadata.pb").exists()
+
+    loaded = evaluate._load_model(str(saved_dir), (224, 224, 3))
+    assert hasattr(loaded, "predict")
+    outputs = loaded.predict(tf.zeros((1, 224, 224, 3), dtype=tf.float32), verbose=0)
+    assert np.asarray(outputs).shape == (1, 72)

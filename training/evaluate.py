@@ -105,16 +105,24 @@ class _SavedModelPredictor:
 
 
 def _load_model(model_path, input_shape):
+    model = None
     try:
-        return keras.models.load_model(model_path)
+        model = keras.models.load_model(model_path)
     except (ValueError, OSError):
-        if _is_saved_model_dir(model_path):
-            if hasattr(keras.layers, "TFSMLayer"):
-                print("Detected SavedModel directory; using TFSMLayer for inference.")
-                return _load_saved_model_as_keras(model_path, input_shape)
-            print("Detected SavedModel directory; using its serving signature.")
-            return _SavedModelPredictor(model_path)
-        raise
+        model = None
+    # ``model.export()`` writes a SavedModel without ``keras_metadata.pb``. On
+    # this Keras version ``load_model`` does NOT raise on such a directory — it
+    # returns a bare ``_UserObject`` with no ``predict`` — so the success case
+    # must be validated explicitly before the SavedModel fallback is skipped.
+    if model is not None and hasattr(model, "predict"):
+        return model
+    if _is_saved_model_dir(model_path):
+        if hasattr(keras.layers, "TFSMLayer"):
+            print("Detected SavedModel directory; using TFSMLayer for inference.")
+            return _load_saved_model_as_keras(model_path, input_shape)
+        print("Detected SavedModel directory; using its serving signature.")
+        return _SavedModelPredictor(model_path)
+    raise ValueError(f"Could not load a callable model from {model_path}")
 
 
 def load_config(config_path="config.yaml"):
