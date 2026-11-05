@@ -219,7 +219,7 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "early_stopping_monitor": "val_accuracy",
         "early_stopping_mode": "max",
         "early_stopping_patience": 10,
-        "early_stopping_min_delta": 0.005,
+        "early_stopping_min_delta": 0.001,
         "fine_tuning_monitor": "val_loss",
         "fine_tuning_mode": "min",
         "fine_tuning_patience": 6,
@@ -234,6 +234,9 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
             "categorical_crossentropy",
             "focal_loss",
         }
+        # Recipe guard: no config may drift back to the 1e-3 peak LR that
+        # destabilized the from-scratch shufflenetv2_05 run (Recipe v4).
+        assert float(config["optimizer"]["learning_rate"]) <= 5e-4
         assert config["class_weights"]["enabled"] is True
         class_aware = config["augmentation"]["class_aware"]
         assert class_aware["enabled"] is True
@@ -296,6 +299,20 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     assert shufflenet_config["lr_schedule"]["warmup_start_lr"] == 0.0001
     assert shufflenet_config["lr_schedule"]["decay_epochs"] == 40
     assert "top_k_categorical_accuracy" in shufflenet_config["metrics"]
+
+    # Recipe v4 (2026-11): the v3 peak LR of 1e-3 destabilized the from-scratch
+    # backbone (train accuracy peaked ~14% at epoch 9 then declined while
+    # val_accuracy hovered at random). Guard the stabilizers so the recipe
+    # cannot silently regress to the diverging configuration.
+    assert shufflenet_config["optimizer"]["learning_rate"] <= 5e-4
+    assert float(shufflenet_config["optimizer"].get("decay", 0.0) or 0.0) > 0
+    assert (
+        float(
+            shufflenet_config["callbacks"]["early_stopping"].get("min_delta", 0.0)
+            or 0.0
+        )
+        <= 0.001
+    )
 
     # Recipe v2 (2026-11): every two-phase config runs 20 frozen epochs and
     # then 10 fine-tune epochs; the last 15 epochs of the old 6/9 split were
@@ -685,3 +702,49 @@ def test_kaggle_notebooks_auto_select_dedup_benchmark_and_quantize_metrics():
         assert "evaluate_tflite.py" in code
         assert "runtime_cfg_path = cfg_path" in code
         assert "copytree" not in code
+
+
+def test_colab_notebooks_guard_manifest_less_split_validation():
+    """Colab notebooks download the Kaggle archive at runtime, so they cannot
+    assume split_manifest.csv exists. Without the guard, train.py falls back
+    to silently hashing every image for 10-25 minutes and then aborts on the
+    disclosed degenerate Guava copies."""
+    for architecture in (
+        "mobilenet_v1",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
+        "shufflenetv2_05",
+    ):
+        path = ROOT / "notebooks" / f"colab_{architecture}_training.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code_cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
+        config_cell = next(
+            source for source in code_cells if "apply_runtime_profile" in source
+        )
+
+        assert (
+            'manifest_backed = os.path.isfile(os.path.join(DATASET_BASE, "split_manifest.csv"))'
+            in config_cell
+        )
+        assert 'cfg["performance"]["validate_dataset_splits"] = True' in config_cell
+        assert 'cfg["performance"]["validate_dataset_splits"] = False' in config_cell
+        assert (
+            'cfg["performance"]["allow_cross_split_duplicates"] = True' in config_cell
+        )
+        assert '"Run mode:"' in config_cell
+        # The guard must run after the runtime profile copies the config...
+        assert config_cell.index("apply_runtime_profile") < config_cell.index(
+            "manifest_backed"
+        )
+        # ...and before the resolved config is written back to disk.
+        assert config_cell.index("manifest_backed") < config_cell.index("yaml.safe_dump")
+        compile(config_cell, f"{path}:config", "exec")

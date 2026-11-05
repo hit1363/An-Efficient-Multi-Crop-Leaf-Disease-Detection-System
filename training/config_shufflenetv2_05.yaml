@@ -50,6 +50,11 @@ training:
   # minority cutoff stalled after epoch 7 (epoch 1 held the best val_loss and
   # early stopping restored it). The schedule is now long enough for a
   # from-scratch backbone with three warmup epochs.
+  # Recipe v4 (2026-11): v3's peak LR of 1e-3 destabilized the from-scratch
+  # backbone — train accuracy peaked at ~14% around epoch 9 then declined
+  # while val_accuracy hovered at random (ln(72) uniform-prior floor). The
+  # peak drops to 3e-4 with a small Adam weight decay, and early stopping's
+  # min_delta shrinks so real sub-0.5pp gains still reset the patience.
   epochs: 40
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: false
@@ -63,19 +68,22 @@ training:
 
 optimizer:
   name: "adam"
-  learning_rate: 0.001
+  learning_rate: 0.0003
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
   clipnorm: 1.0
-  decay: 0.0
+  # Small Adam weight decay stabilizes the from-scratch backbone; 0.0 let the
+  # weights wander at high LR (train accuracy declining after epoch 9).
+  decay: 1.0e-5
 
 lr_schedule:
   type: "cosine_decay"
   decay_epochs: 40 # Single training phase (backbone trains from epoch one)
   alpha: 0.01
   # Recipe v3: full LR from step zero made val_loss exceed the uniform-prior
-  # ln(72) ~= 4.28; ramp 1e-4 -> 1e-3 over three epochs before the cosine.
+  # ln(72) ~= 4.28; ramp 1e-4 -> the peak over three epochs before the cosine.
+  # Recipe v4 keeps the 3-epoch ramp (1e-4 -> 3e-4) and the 40-epoch cosine.
   warmup_epochs: 3
   warmup_start_lr: 0.0001
 
@@ -106,7 +114,9 @@ callbacks:
     enabled: true
     monitor: "val_accuracy"
     patience: 10
-    min_delta: 0.005
+    # Recipe v4: 0.005 was coarser than the epoch-to-epoch val_accuracy gains
+    # of a from-scratch backbone, so genuine progress burned patience.
+    min_delta: 0.001
     restore_best_weights: true
     mode: "max"
   fine_tuning_early_stopping:

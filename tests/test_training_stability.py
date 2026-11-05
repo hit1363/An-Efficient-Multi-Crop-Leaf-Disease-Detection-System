@@ -1205,6 +1205,31 @@ def test_split_validation_tolerates_registered_degenerate_reuse(tmp_path):
     assert counts["test"]["classes"]["Guava___Anthracnose"] == 1
 
 
+def test_split_validation_logs_hashing_progress_without_manifest(tmp_path, caplog, monkeypatch):
+    """Hosted runs without split_manifest.csv hash every image in silence;
+    the scan must emit a visible heartbeat so the wait is diagnosable."""
+    import training.utils as utils_module
+
+    monkeypatch.setattr(utils_module, "_HASH_PROGRESS_INTERVAL", 1)
+    for split in ("train", "val", "test"):
+        for class_name in ("healthy", "disease"):
+            class_dir = tmp_path / split / class_name
+            class_dir.mkdir(parents=True)
+            (class_dir / "sample.jpg").write_bytes(
+                f"{split}-{class_name}".encode("utf-8")
+            )
+
+    with caplog.at_level(logging.INFO, logger="training.utils"):
+        counts = validate_dataset_splits(
+            tmp_path / "train", tmp_path / "val", tmp_path / "test"
+        )
+
+    assert counts["train"]["total"] == 2
+    assert "Hashed 1 images" in caplog.text
+    assert "current split:" in caplog.text
+    assert "Finished hashing 6 images" in caplog.text
+
+
 def test_alias_split_validation_hashes_actual_source_folders_without_manifest(tmp_path):
     source_by_canonical = {
         canonical: alias for alias, canonical in LABEL_ALIASES.items()

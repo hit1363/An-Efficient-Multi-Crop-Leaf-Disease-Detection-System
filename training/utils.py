@@ -279,6 +279,12 @@ def _normalize_cache_dtype(cache_dtype):
     return dtype.name
 
 
+# Progress heartbeat for the manifest-less duplicate-hash scan. Hosted runs
+# without split_manifest.csv hash tens of thousands of images in silence;
+# this interval keeps the wait visible.
+_HASH_PROGRESS_INTERVAL = 2000
+
+
 def _estimate_dataset_cache_gb(
     train_count,
     val_count,
@@ -922,7 +928,10 @@ def validate_dataset_splits(
 
     # Without a manifest, hash every image to preserve split-isolation checks.
     if manifest_counts is None:
-        logging.getLogger(__name__).warning(
+        hash_progress_interval = _HASH_PROGRESS_INTERVAL
+        hashed_total = 0
+        hashing_logger = logging.getLogger(__name__)
+        hashing_logger.warning(
             "Split manifest is unavailable; validating by scanning image files."
         )
         for split_name, split_path in split_paths.items():
@@ -951,6 +960,19 @@ def validate_dataset_splits(
                             for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
                                 digest.update(chunk)
                         hash_splits.setdefault(digest.hexdigest(), set()).add(split_name)
+                        hashed_total += 1
+                        if hashed_total % hash_progress_interval == 0:
+                            hashing_logger.info(
+                                "Hashed %d images (current split: %s); "
+                                "install split_manifest.csv to skip this scan",
+                                hashed_total,
+                                split_name,
+                            )
+        hashing_logger.info(
+            "Finished hashing %d images across %d splits for duplicate validation",
+            hashed_total,
+            len(split_paths),
+        )
     leaking_hashes = [
         digest
         for digest, splits in hash_splits.items()
