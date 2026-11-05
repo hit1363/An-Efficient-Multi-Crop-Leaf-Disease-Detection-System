@@ -262,7 +262,7 @@ def test_kaggle_diagnostic_profile_isolated_and_keeps_training_recipe():
             "cache_mode": "auto",
             "shuffle_buffer": 1000,
         },
-        "augmentation": {"class_aware": {"enabled": True, "max_train_samples": 500}},
+        "augmentation": {"class_aware": {"enabled": True, "max_train_samples": 100}},
         "class_weights": {"enabled": True, "max_weight": 8.0, "normalize": True},
         "performance": {"mixed_precision": True, "jit_compile": True},
         "training": {"epochs": 50, "log_mode": "summary"},
