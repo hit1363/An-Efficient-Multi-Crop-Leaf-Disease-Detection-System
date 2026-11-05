@@ -153,15 +153,37 @@ def get_training_class_counts(train_dir, class_names=None):
     return counts
 
 
-def get_minority_class_indices(class_counts, max_train_samples=500):
-    """Return label indices with positive counts below the configured cutoff."""
+def get_minority_class_indices(class_counts, max_train_samples=500, logger=None):
+    """Return label indices with positive counts below the configured cutoff.
+
+    The class-aware augmentation swaps in a stronger policy only for the
+    returned indices. A cutoff set above the dataset's largest class count
+    silently selects every class and disables the baseline policy, so that
+    degenerate case is reported loudly instead of degrading quietly.
+    """
     if max_train_samples is None:
         return []
     cutoff = int(max_train_samples)
     if cutoff < 1:
         raise ValueError("augmentation.class_aware.max_train_samples must be >= 1")
-    values = class_counts.values() if isinstance(class_counts, dict) else class_counts
-    return [index for index, count in enumerate(values) if 0 < int(count) < cutoff]
+    values = list(class_counts.values() if isinstance(class_counts, dict) else class_counts)
+    indices = [index for index, count in enumerate(values) if 0 < int(count) < cutoff]
+    if logger is not None:
+        supported = sum(1 for count in values if int(count) > 0)
+        # Require a meaningful vocabulary so small test datasets, where one
+        # minority is perfectly normal, do not trip the warning.
+        if supported >= 4 and len(indices) * 2 >= supported:
+            logger.warning(
+                "Class-aware cutoff %s selects %d/%d classes; the baseline "
+                "augmentation is effectively disabled. Lower "
+                "augmentation.class_aware.max_train_samples (the largest "
+                "training class has %d images).",
+                cutoff,
+                len(indices),
+                supported,
+                max(int(count) for count in values),
+            )
+    return indices
 
 
 def configure_runtime(config):

@@ -1112,12 +1112,16 @@ def train_model(config_path="config.yaml"):
     minority_indices = get_minority_class_indices(
         training_class_counts,
         class_aware_config.get("max_train_samples", 500),
+        logger=logger,
     ) if class_aware_config.get("enabled", False) else []
     minority_class_names = [expected_class_names[index] for index in minority_indices]
     logger.info(
-        "Class-aware augmentation: enabled=%s, cutoff=%s, minority_classes=%s",
+        "Class-aware augmentation: enabled=%s, cutoff=%s, selected=%d/%d, "
+        "minority_classes=%s",
         bool(class_aware_config.get("enabled", False)),
         class_aware_config.get("max_train_samples"),
+        len(minority_indices),
+        len(expected_class_names),
         minority_class_names,
     )
 

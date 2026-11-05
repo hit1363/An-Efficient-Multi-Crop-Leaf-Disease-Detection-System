@@ -33,7 +33,10 @@ augmentation:
   brightness_range: [0.9, 1.1]
   class_aware:
     enabled: true
-    max_train_samples: 500
+    # The cap-500 benchmark tops out at 350 training images per class, so a
+    # cutoff of 500 marked every class minority and disabled the baseline
+    # augmentation. 100 reserves the strong policy for the true Guava classes.
+    max_train_samples: 100
     rotation_range: 20
     zoom_range: [0.9, 1.1]
     horizontal_flip: true

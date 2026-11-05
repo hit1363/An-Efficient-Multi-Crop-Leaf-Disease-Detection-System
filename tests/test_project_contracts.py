@@ -11,6 +11,35 @@ from IPython.core.interactiveshell import InteractiveShell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _benchmark_like_class_counts():
+    """Per-class training counts shaped like the shipped cap-500 benchmark.
+
+    Mirrors the observed distribution: most classes sit near the 350 cap and a
+    handful of Guava classes are true minorities. This keeps the contract test
+    dependency-light (``training.utils`` imports TensorFlow) while still
+    exercising the degenerate-cutoff condition.
+    """
+    counts = [350] * 67
+    counts[0] = 193
+    counts[1] = 252
+    counts[2] = 261
+    counts[3] = 274
+    counts[4] = 280
+    counts[5] = 296
+    counts[6] = 319
+    counts.append(2)
+    counts.append(2)
+    counts.append(6)
+    counts.append(3)
+    counts.append(3)
+    return counts
+
+
+def _minority_indices(counts, cutoff):
+    """Local mirror of ``training.utils.get_minority_class_indices``."""
+    return [index for index, count in enumerate(counts) if 0 < int(count) < int(cutoff)]
+
+
 def test_training_and_quantization_sources_parse():
     source_files = [
         *sorted((ROOT / "training").glob("*.py")),
@@ -163,12 +192,14 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "nasnet_mobile",
         "efficientnet_v2_b0",
     )
-    # Recipe v3 (2026-11): shufflenetv2_05 trains from scratch, so its
-    # monitoring and augmentation scope differ from the pretrained baselines.
-    # The other architectures keep Recipe v2 defaults.
+    # Recipe v3 (2026-11): the minority cutoff is 100 for every architecture.
+    # The benchmark caps classes at 350 training images, so the old cutoff of
+    # 500 selected all 72 classes and disabled the baseline augmentation.
+    # shufflenetv2_05 additionally trains from scratch, so its monitoring
+    # differs from the pretrained baselines.
     expected_monitoring = {
         arch: {
-            "max_train_samples": 500,
+            "max_train_samples": 100,
             "checkpoint_monitor": "val_loss",
             "checkpoint_mode": "min",
             "early_stopping_monitor": "val_loss",
@@ -240,6 +271,20 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         )
         assert config["dataset"]["cache_mode"] == expected_cache_mode
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
+
+        # The cutoff must leave the baseline policy in charge of the bulk of
+        # the benchmark. Without a shipped dataset we use the canonical
+        # cap-500 benchmark distribution: most classes sit near the cap and
+        # only a handful of true minorities fall below it.
+        benchmark_counts = _benchmark_like_class_counts()
+        selected = _minority_indices(
+            benchmark_counts, class_aware["max_train_samples"]
+        )
+        assert len(selected) * 2 < len(benchmark_counts), (
+            f"{architecture}: cutoff {class_aware['max_train_samples']} selects "
+            f"{len(selected)}/{len(benchmark_counts)} classes and disables the "
+            "baseline augmentation policy"
+        )
 
     # Recipe v3 (2026-11): shufflenetv2_05 runs 40 epochs with a 3-epoch warmup
     # and reports top-5 accuracy; the pretrained baselines keep Recipe v2.
