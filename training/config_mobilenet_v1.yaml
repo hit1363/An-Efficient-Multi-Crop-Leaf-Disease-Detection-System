@@ -51,10 +51,13 @@ training:
     enabled: true
   # Recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at 2e-5
   # (previously total 20 with fine-tuning starting after only 5 epochs).
+  # Recipe v2.1: unfreeze_from_layer 100 exceeded the 86-layer MobileNetV1
+  # backbone, so layers[100:] was empty and phase 2 silently fine-tuned no
+  # backbone at all. Unfreeze the top half (43+) instead.
   epochs: 30
   log_mode: progress
   freeze_base: true
-  unfreeze_from_layer: 100
+  unfreeze_from_layer: 43
   unfreeze_epoch: 20
   fine_tune_learning_rate: 2.0e-05
 optimizer:

@@ -85,9 +85,23 @@ def test_new_architecture_configs_share_the_benchmark_recipe():
         )
         assert config["model"]["architecture"] == architecture
         assert config["model"]["num_classes"] == 72
+        # unfreeze_from_layer is a layer index into a specific backbone, so it
+        # is deliberately architecture-specific: mobilenet_v1's 86-layer
+        # backbone cannot share mobilenetv2's index 100 (which would freeze
+        # every layer and leave phase 2 with zero trainable layers).
+        benchmark_training = {
+            key: value
+            for key, value in benchmark["training"].items()
+            if key != "unfreeze_from_layer"
+        }
+        config_training = {
+            key: value
+            for key, value in config["training"].items()
+            if key != "unfreeze_from_layer"
+        }
+        assert config_training == benchmark_training
         for section in (
             "augmentation",
-            "training",
             "optimizer",
             "loss",
             "lr_schedule",
