@@ -769,3 +769,103 @@ def test_colab_notebooks_guard_manifest_less_split_validation():
         # ...and before the resolved config is written back to disk.
         assert config_cell.index("manifest_backed") < config_cell.index("yaml.safe_dump")
         compile(config_cell, f"{path}:config", "exec")
+
+
+def test_kaggle_notebooks_expose_a_filelink_download_cell():
+    """Kaggle's Output panel silently refuses files over ~20 MB, which is
+    smaller than every exported model archive, so each Kaggle notebook must
+    offer a FileLink that streams the archive from the live session.
+
+    FileLink renders a *relative* href: passing an absolute path produces a
+    link that resolves against the Kaggle page URL and 404s, so the cell must
+    pass the bare basename.
+    """
+    architectures = [
+        "mobilenet_v1",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
+        "shufflenetv2_05",
+    ]
+    shell = InteractiveShell()
+    for architecture in architectures:
+        path = ROOT / "notebooks" / f"kaggle_{architecture}_training.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        cells = notebook["cells"]
+
+        archive_index = next(
+            index
+            for index, cell in enumerate(cells)
+            if "make_archive" in "".join(cell.get("source", []))
+        )
+        archive_source = "".join(cells[archive_index]["source"])
+        variable = "archive_path" if "archive_path" in archive_source else "zip_path"
+
+        download_cell = cells[archive_index + 1]
+        assert download_cell["cell_type"] == "code"
+        source = "".join(download_cell["source"])
+
+        # The link must be served from the session using a relative filename.
+        assert "FileLink(os.path.basename(%s))" % variable in source
+        assert "FileLink(%s)" % variable not in source
+        assert "os.path.getsize(%s)" % variable in source
+        compile(shell.transform_cell(source), f"{path}:download", "exec")
+
+        # The surrounding documentation must state the limitation and fallback.
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in cells
+            if cell["cell_type"] == "markdown"
+        )
+        assert "Downloading the archive:" in markdown
+        assert "kaggle kernels output" in markdown
+
+
+def test_all_kaggle_notebooks_offer_a_working_archive_download():
+    """Every Kaggle notebook that exports an archive must also render a
+    FileLink for it, and the link must use a bare filename.
+
+    FileLink emits a *relative* href, so ``FileLink("/kaggle/working/x.zip")``
+    produces a link that resolves against the Kaggle page URL and 404s.
+    """
+    shell = InteractiveShell()
+    notebooks = [
+        "kaggle_training_notebook.ipynb",
+        "kaggle_model_comparison.ipynb",
+        "kaggle_harmonized_comparison.ipynb",
+    ]
+    for name in notebooks:
+        path = ROOT / "notebooks" / name
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code_cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
+        combined = "\n".join(code_cells)
+
+        link_cells = [cell for cell in code_cells if "FileLink(" in cell]
+        assert link_cells, f"{name} renders no download link"
+        for source in link_cells:
+            # Only basename-relative links resolve correctly on Kaggle.
+            assert "FileLink(os.path.basename(" in source, name
+            assert "/kaggle/working/" not in source.split("FileLink", 1)[1].split(")")[0], name
+            compile(shell.transform_cell(source), f"{path}:link", "exec")
+
+        # An archive must actually be produced for the link to point at; the
+        # comparison notebook delegates that to model_comparison_common.py.
+        archiver = "make_archive" in combined or "run_comparison" in combined
+        assert archiver, f"{name} archives nothing"
+        # And the documentation must warn about the Output panel limitation.
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        assert "~20 MB" in markdown, name
+        assert "kaggle kernels output" in markdown, name
+

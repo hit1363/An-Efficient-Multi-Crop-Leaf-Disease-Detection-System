@@ -183,6 +183,27 @@ Use a model-specific notebook to train one candidate, evaluate it, export dynami
 
 For artifact evaluation and ranking, use the [Colab comparison notebook](notebooks/colab_model_comparison.ipynb) or [Kaggle comparison notebook](notebooks/kaggle_model_comparison.ipynb). To rebuild and train the harmonized benchmark on Kaggle, use the [harmonized comparison notebook](notebooks/kaggle_harmonized_comparison.ipynb).
 
+### Downloading the trained artifacts from Kaggle
+
+Kaggle's Output panel silently refuses browser downloads of any single file larger than about 20 MB — the button simply does nothing, with no error, in every browser — while every exported model archive is larger than that. Each Kaggle training notebook therefore ends its archiving step with a `FileLink` cell that prints the archive size and renders a clickable link to the zip:
+
+```python
+from IPython.display import FileLink, display
+print(f"Archive size: {os.path.getsize(archive_path) / 1e6:.1f} MB")
+display(FileLink(os.path.basename(archive_path)))
+```
+
+`FileLink` streams the file from the running kernel session, which bypasses the Output panel's limit. Two constraints are worth knowing:
+
+- The link only works while the interactive session is alive. It does not work in a `Save & Run All` version, after the 20-minute idle timeout, or after the kernel restarts — click it right after the cell runs.
+- Always pass the bare filename (`os.path.basename(...)`). `FileLink` builds a relative href, so an absolute `/kaggle/working/...` path renders a link that resolves against the Kaggle page URL and returns 404.
+
+For a committed version, pull the output through the Kaggle API instead, which has no browser size limit:
+
+```bash
+kaggle kernels output <your-username>/<notebook-slug> -p ./kaggle_out
+```
+
 Hosted notebooks support two runtime profiles through `TRAINING_RUN_MODE`:
 
 - `smoke` (the default) uses a short run, fast startup settings, moderate
