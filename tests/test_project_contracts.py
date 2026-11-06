@@ -400,13 +400,20 @@ def test_colab_training_notebooks_stream_live_keras_progress():
             for source in code_cells
             if '"train.py"' in source
             and '"--config"' in source
-            and "subprocess.run" in source
+            and "subprocess.Popen" in source
         )
 
         assert 'cfg["training"]["log_mode"] = "progress"' in all_code
         assert '"-u"' in training_cell
         assert 'PYTHONUNBUFFERED' in training_cell
         assert "capture_output=True" not in training_cell
+        # Colab only renders output written through sys.stdout, so the child's
+        # stdio must be piped back and re-printed line-by-line as it arrives.
+        assert "stdout=subprocess.PIPE" in training_cell
+        assert "stderr=subprocess.STDOUT" in training_cell
+        assert "text=True" in training_cell
+        assert "bufsize=1" in training_cell
+        assert 'print(output_line, end="", flush=True)' in training_cell
 
     generic_path = ROOT / "notebooks" / "colab_training_notebook.ipynb"
     generic_notebook = json.loads(generic_path.read_text(encoding="utf-8"))
