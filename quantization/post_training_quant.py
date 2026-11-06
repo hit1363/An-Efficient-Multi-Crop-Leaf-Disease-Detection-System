@@ -9,7 +9,10 @@ os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
 import sys
 import argparse
+import copy
 import random
+import re
+import traceback
 from pathlib import Path
 
 import yaml
@@ -106,7 +109,16 @@ def _get_model_factory():
             ) from exc
 
 
-def _build_model_from_config(config, architecture_override=None):
+# Architectures whose heads are built from an explicit head_units stack.
+_HEAD_UNITS_ARCHITECTURES = {"mobilenetv2", "efficientnet_b0"}
+
+
+_UNSET = object()
+
+
+def _build_model_from_config(
+    config, architecture_override=None, weights_override=_UNSET
+):
     if not config or "model" not in config:
         raise ValueError("Model config is missing or invalid.")
 
@@ -115,20 +127,37 @@ def _build_model_from_config(config, architecture_override=None):
     input_shape = tuple(model_cfg.get("input_shape", [224, 224, 3]))
     num_classes = int(model_cfg.get("num_classes", 2))
     dropout_rate = float(model_cfg.get("dropout_rate", 0.5))
-    weights = model_cfg.get("weights", "imagenet")
+    if weights_override is _UNSET:
+        weights = model_cfg.get("weights", "imagenet")
+    else:
+        # Explicit value (including None) - a checkpoint rebuild must not
+        # re-download ImageNet weights it is about to overwrite anyway.
+        weights = weights_override
+
+    model_kwargs = {
+        "architecture": architecture,
+        "input_shape": input_shape,
+        "num_classes": num_classes,
+        "dropout_rate": dropout_rate,
+        "weights": weights,
+        "hub_url": model_cfg.get("hub_url"),
+        "hub_cache_dir": model_cfg.get("hub_cache_dir"),
+        "hub_download_retries": model_cfg.get("hub_download_retries", 1),
+        "hub_download_delay_sec": model_cfg.get("hub_download_delay_sec", 5),
+    }
+    # train.py passes these for the two architectures that own a configurable
+    # dense head; omitting them rebuilds a differently shaped model whose
+    # checkpoint cannot be loaded.
+    if str(architecture).lower() in _HEAD_UNITS_ARCHITECTURES:
+        model_kwargs["head_units"] = tuple(model_cfg.get("head_units", [256, 128]))
+        model_kwargs["l2_regularization"] = model_cfg.get("l2_regularization", 0.0)
+    if "classifier_units" in model_cfg:
+        model_kwargs["classifier_units"] = model_cfg["classifier_units"]
+    if "include_preprocessing" in model_cfg:
+        model_kwargs["include_preprocessing"] = model_cfg["include_preprocessing"]
 
     get_model = _get_model_factory()
-    model, _ = get_model(
-        architecture=architecture,
-        input_shape=input_shape,
-        num_classes=num_classes,
-        dropout_rate=dropout_rate,
-        weights=weights,
-        hub_url=model_cfg.get("hub_url"),
-        hub_cache_dir=model_cfg.get("hub_cache_dir"),
-        hub_download_retries=model_cfg.get("hub_download_retries", 1),
-        hub_download_delay_sec=model_cfg.get("hub_download_delay_sec", 5),
-    )
+    model, _ = get_model(**model_kwargs)
 
     return model
 
@@ -145,6 +174,176 @@ def _load_keras_model(model_path, config_path=None, architecture=None):
         return model
 
     return keras.models.load_model(model_path)
+
+
+# Run-scoped hosted artifacts are laid out as
+#   <save_dir>/<arch>/saved_model_<ts>/
+#   <save_dir>/<arch>/runs/<ts>/checkpoints/best_model.weights.h5
+#   <save_dir>/<arch>/runs/<ts>/resolved_config.yaml
+_RUN_TIMESTAMP_RE = re.compile(r"saved_model_(\d{8}_\d{6})")
+
+
+def _run_timestamp_from_saved_model(model_path):
+    """Return the training run timestamp encoded in a SavedModel dir name."""
+    match = _RUN_TIMESTAMP_RE.search(os.path.basename(os.path.normpath(model_path)))
+    return match.group(1) if match else None
+
+
+def _find_run_checkpoint(model_path):
+    """Locate the checkpoint and run metadata that produced a SavedModel export.
+
+    Returns a ``(checkpoint_path, run_config_path)`` tuple; either element may
+    be ``None`` when the export predates run-scoped checkpointing.
+    """
+    arch_dir = os.path.dirname(os.path.abspath(os.path.normpath(model_path)))
+    run_timestamp = _run_timestamp_from_saved_model(model_path)
+
+    run_dir = None
+    if run_timestamp:
+        candidate = os.path.join(arch_dir, "runs", run_timestamp)
+        if os.path.isdir(candidate):
+            run_dir = candidate
+
+    checkpoint_path = None
+    search_dirs = []
+    if run_dir:
+        search_dirs.append(os.path.join(run_dir, "checkpoints"))
+    search_dirs.append(os.path.join(arch_dir, "checkpoints"))
+    for directory in search_dirs:
+        for filename in ("best_model.weights.h5", "best_model.h5"):
+            candidate = os.path.join(directory, filename)
+            if os.path.isfile(candidate):
+                checkpoint_path = candidate
+                break
+        if checkpoint_path:
+            break
+
+    run_config_path = None
+    if run_dir:
+        for filename in ("resolved_config.yaml", "config.yaml"):
+            candidate = os.path.join(run_dir, filename)
+            if os.path.isfile(candidate):
+                run_config_path = candidate
+                break
+
+    return checkpoint_path, run_config_path
+
+
+def _saved_model_output_classes(model_path):
+    """Infer the classifier width from a SavedModel serving signature."""
+    try:
+        loaded = tf.saved_model.load(model_path)
+        signatures = getattr(loaded, "signatures", None) or {}
+        signature = signatures.get("serving_default")
+        if signature is None and signatures:
+            signature = next(iter(signatures.values()))
+        outputs = getattr(signature, "structured_outputs", None) if signature else None
+        if not outputs:
+            return None
+        for tensor_spec in outputs.values():
+            shape = getattr(tensor_spec, "shape", None)
+            if shape is None or shape.rank is None or shape.rank < 2:
+                continue
+            last_dim = shape[-1]
+            if isinstance(last_dim, int) and last_dim > 0:
+                return int(last_dim)
+    except Exception:
+        return None
+    return None
+
+
+def _rebuild_float32_model_from_checkpoint(
+    model_path, config_path=None, architecture=None
+):
+    """Rebuild the trained model as float32 from its run-scoped checkpoint.
+
+    A SavedModel exported straight from a mixed_float16 training model keeps
+    float16 operations in its graph, which the built-in TFLite converter cannot
+    lower; training/export.py works around this by converting a float32 clone of
+    the same weights. This mirrors that proven path for post-hoc quantization,
+    where only the SavedModel and the run checkpoint are available.
+
+    Returns the rebuilt model, or ``None`` when no checkpoint exists (the caller
+    then keeps the plain SavedModel conversion path).
+    """
+    checkpoint_path, run_config_path = _find_run_checkpoint(model_path)
+    if not checkpoint_path:
+        return None
+
+    # The run config records what training actually applied (runtime profiles
+    # rewrite the resolution, e.g. 192x192 on Kaggle), so it wins over --config.
+    config = None
+    for candidate in (run_config_path, config_path):
+        if not candidate:
+            continue
+        try:
+            loaded = _load_config(candidate)
+        except Exception as exc:  # pragma: no cover - unreadable config
+            print(f"Warning: could not read config {candidate}: {exc}")
+            continue
+        if loaded and loaded.get("model"):
+            config = copy.deepcopy(loaded)
+            break
+    if config is None:
+        print(
+            "Warning: found a run checkpoint but no usable config; "
+            "cannot rebuild the model for conversion.",
+        )
+        return None
+
+    model_cfg = config.setdefault("model", {})
+    if architecture:
+        model_cfg["architecture"] = architecture
+    image_size = saved_model_image_size(model_path)
+    if image_size:
+        existing = tuple(model_cfg.get("input_shape", ()))
+        matches = len(existing) >= 2 and (
+            existing[0], existing[1]
+        ) == tuple(image_size)
+        if not matches:
+            model_cfg["input_shape"] = [int(image_size[0]), int(image_size[1]), 3]
+    if not model_cfg.get("num_classes"):
+        inferred = _saved_model_output_classes(model_path)
+        if inferred:
+            model_cfg["num_classes"] = inferred
+    if not model_cfg.get("num_classes"):
+        print(
+            "Warning: could not determine num_classes; "
+            "falling back to SavedModel conversion.",
+        )
+        return None
+
+    print(
+        f"Rebuilding float32 model from checkpoint: {checkpoint_path}"
+    )
+    print(
+        f"Rebuild architecture={model_cfg.get('architecture')} "
+        f"input_shape={tuple(model_cfg.get('input_shape'))} "
+        f"num_classes={model_cfg.get('num_classes')}",
+    )
+
+    previous_policy = tf.keras.mixed_precision.global_policy()
+    tf.keras.mixed_precision.set_global_policy("float32")
+    try:
+        model = _build_model_from_config(
+            config,
+            architecture_override=model_cfg.get("architecture"),
+            weights_override=None,
+        )
+        if checkpoint_path.lower().endswith(".weights.h5"):
+            model.load_weights(checkpoint_path)
+        else:
+            loaded_model = keras.models.load_model(checkpoint_path)
+            model.set_weights(loaded_model.get_weights())
+    except Exception as exc:
+        print(f"Warning: could not rebuild from checkpoint: {exc}")
+        print(traceback.format_exc())
+        return None
+    finally:
+        tf.keras.mixed_precision.set_global_policy(previous_policy)
+
+    print("Rebuilt float32 model from checkpoint weights.")
+    return model
 
 
 def _get_dir_size(path):
@@ -267,8 +466,18 @@ def convert_to_tflite(
     config = _load_config(config_path) if config_path else None
 
     if _is_saved_model_dir(model_path):
-        converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
-        model = None
+        # A SavedModel exported from a mixed_float16 training model keeps
+        # float16 operations that the TFLite converter cannot lower. Rebuild
+        # the same weights as a float32 Keras model from the run checkpoint
+        # (the path training/export.py already uses) and fall back to the raw
+        # SavedModel only when no checkpoint accompanies the export.
+        model = _rebuild_float32_model_from_checkpoint(
+            model_path, config_path=config_path, architecture=architecture
+        )
+        if model is not None:
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        else:
+            converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
     else:
         model = _load_keras_model(
             model_path, config_path=config_path, architecture=architecture
@@ -287,20 +496,20 @@ def convert_to_tflite(
     # faster-resolution architectures at 192x192) would otherwise be fed
     # 224x224 calibration batches and conversion would fail.
     calibration_image_size = None
-    if _is_saved_model_dir(model_path):
-        calibration_image_size = saved_model_image_size(model_path)
-        if calibration_image_size:
-            print(
-                f"Calibrating at SavedModel input size: "
-                f"{calibration_image_size[0]}x{calibration_image_size[1]}"
-            )
-    elif model is not None:
+    if model is not None:
         calibration_image_size = concrete_model_image_size(
             getattr(model, "input_shape", None)
         )
         if calibration_image_size:
             print(
                 f"Calibrating at model input size: "
+                f"{calibration_image_size[0]}x{calibration_image_size[1]}"
+            )
+    elif _is_saved_model_dir(model_path):
+        calibration_image_size = saved_model_image_size(model_path)
+        if calibration_image_size:
+            print(
+                f"Calibrating at SavedModel input size: "
                 f"{calibration_image_size[0]}x{calibration_image_size[1]}"
             )
     if quantize:
@@ -330,7 +539,15 @@ def convert_to_tflite(
 
     # Convert model
     print("Converting model...")
-    tflite_model = converter.convert()
+    try:
+        tflite_model = converter.convert()
+    except Exception:
+        # The converter raises a generic message while the actionable detail
+        # lives in the captured TensorFlow log. Print the full traceback so a
+        # caller running this through subprocess(check=True) surfaces it.
+        print("\nTFLite conversion failed. Full traceback:", file=sys.stderr)
+        traceback.print_exc()
+        raise
 
     # Save model
     output_dir = os.path.dirname(output_path)

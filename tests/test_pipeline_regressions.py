@@ -289,3 +289,142 @@ def test_load_model_handles_exported_savedmodel_without_keras_metadata(tmp_path)
     assert hasattr(loaded, "predict")
     outputs = loaded.predict(tf.zeros((1, 224, 224, 3), dtype=tf.float32), verbose=0)
     assert np.asarray(outputs).shape == (1, 72)
+
+
+def test_find_run_checkpoint_maps_savedmodel_to_run_scoped_artifacts(tmp_path):
+    """The SavedModel name carries the timestamp that locates its run checkpoint."""
+    arch_dir = tmp_path / "efficientnet_b0"
+    saved_dir = arch_dir / "saved_model_20261105_151511"
+    saved_dir.mkdir(parents=True)
+    (saved_dir / "saved_model.pb").write_bytes(b"")
+    run_dir = arch_dir / "runs" / "20261105_151511"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "checkpoints" / "best_model.weights.h5").write_bytes(b"")
+    (run_dir / "resolved_config.yaml").write_text(
+        "model:\n  architecture: efficientnet_b0\n"
+    )
+
+    checkpoint, run_config = post_training_quant._find_run_checkpoint(str(saved_dir))
+
+    assert checkpoint == str(run_dir / "checkpoints" / "best_model.weights.h5")
+    assert run_config == str(run_dir / "resolved_config.yaml")
+
+
+def test_find_run_checkpoint_without_checkpoint_returns_none(tmp_path):
+    """Exports predating run-scoped checkpointing must keep the legacy path."""
+    saved_dir = tmp_path / "efficientnet_b0" / "saved_model_20261105_151511"
+    saved_dir.mkdir(parents=True)
+    (saved_dir / "saved_model.pb").write_bytes(b"")
+
+    checkpoint, run_config = post_training_quant._find_run_checkpoint(str(saved_dir))
+
+    assert checkpoint is None
+    assert run_config is None
+
+
+def test_convert_savedmodel_uses_float32_rebuild_from_run_checkpoint(
+    monkeypatch, tmp_path, capsys
+):
+    """A SavedModel backed by a run checkpoint converts through a float32 rebuild.
+
+    Converting a SavedModel exported from a mixed_float16 training model fails
+    inside the TFLite converter. The run checkpoint holds the identical final
+    weights, so the script rebuilds a float32 model and converts that instead —
+    the same path training/export.py already proves on hosted runtimes.
+    """
+    import tensorflow as tf
+
+    from tensorflow import keras
+
+    num_classes = 4
+    input_shape = (32, 32, 3)
+
+    def build_model(num_classes=num_classes, input_shape=input_shape, **kwargs):
+        layers = [
+            keras.Input(shape=input_shape),
+            keras.layers.Conv2D(4, 3, activation="relu"),
+            keras.layers.GlobalAveragePooling2D(),
+            keras.layers.Dense(num_classes, activation="softmax"),
+        ]
+        model = keras.Sequential(layers)
+        model.compile(optimizer="adam", loss="categorical_crossentropy")
+        return model, None
+
+    arch_dir = tmp_path / "efficientnet_b0"
+    run_dir = arch_dir / "runs" / "20261105_151511"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "resolved_config.yaml").write_text(
+        "model:\n"
+        "  architecture: efficientnet_b0\n"
+        f"  input_shape: [{input_shape[0]}, {input_shape[1]}, 3]\n"
+        f"  num_classes: {num_classes}\n"
+        "  dropout_rate: 0.2\n"
+        "  weights: null\n"
+    )
+
+    trained = build_model()[0]
+    checkpoint_path = str(run_dir / "checkpoints" / "best_model.weights.h5")
+    trained.save_weights(checkpoint_path)
+
+    saved_dir = arch_dir / "saved_model_20261105_151511"
+    trained.export(str(saved_dir))
+
+    monkeypatch.setattr(post_training_quant, "_get_model_factory", lambda: build_model)
+
+    def fail_from_saved_model(*args, **kwargs):
+        raise AssertionError("from_saved_model must not be used when a checkpoint exists")
+
+    monkeypatch.setattr(
+        tf.lite.TFLiteConverter, "from_saved_model", fail_from_saved_model
+    )
+
+    output_path = tmp_path / "out" / "model.tflite"
+    result = post_training_quant.convert_to_tflite(
+        str(saved_dir), str(output_path), quantize=False,
+        architecture="efficientnet_b0",
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Rebuilding float32 model from checkpoint" in stdout
+    assert "Calibrating at model input size: 32x32" in stdout
+    assert result == str(output_path)
+    assert output_path.is_file() and output_path.stat().st_size > 0
+
+    interpreter = tf.lite.Interpreter(model_path=str(output_path))
+    interpreter.allocate_tensors()
+    details = interpreter.get_input_details()[0]
+    assert tuple(details["shape"]) == (1, input_shape[0], input_shape[1], 3)
+
+
+def test_convert_failure_prints_traceback(monkeypatch, tmp_path, capsys):
+    """A converter failure must print its traceback for the parent process."""
+    import tensorflow as tf
+
+    from tensorflow import keras
+
+    model_path = tmp_path / "model.h5"
+    keras.Sequential(
+        [keras.Input(shape=(8, 8, 3)), keras.layers.Flatten(), keras.layers.Dense(2)]
+    ).save(str(model_path))
+
+    class BrokenConverter:
+        def __init__(self):
+            self.optimizations = []
+            self.representative_dataset = None
+            self.target_spec = type("Spec", (), {})()
+
+        def convert(self):
+            raise RuntimeError("converter exploded")
+
+    monkeypatch.setattr(
+        tf.lite.TFLiteConverter, "from_keras_model", lambda model: BrokenConverter()
+    )
+
+    with pytest.raises(RuntimeError, match="converter exploded"):
+        post_training_quant.convert_to_tflite(
+            str(model_path), str(tmp_path / "out.tflite"), quantize=False
+        )
+
+    stderr = capsys.readouterr().err
+    assert "TFLite conversion failed" in stderr
+    assert "converter exploded" in stderr
