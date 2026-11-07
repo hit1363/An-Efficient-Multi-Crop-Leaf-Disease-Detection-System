@@ -884,14 +884,17 @@ def test_inline_progress_repaints_one_line_per_epoch(capsys):
     assert "val_loss:" in output
     assert "val_accuracy:" in output
 
-    # Each rendered line is the final repaint before that epoch's newline.
+    # The epoch's last repaint is the completed-epoch line: full bar plus both
+    # train and validation metrics, with no leftover step counter.
     epoch_lines = [line for line in output.split("\n") if line.strip()]
     assert len(epoch_lines) == 2
-    for line in epoch_lines:
+    for index, line in enumerate(epoch_lines):
         final = line.split("\r")[-1]
-        assert "Epoch " in final
-        assert "4/4" not in final  # validation overwrote the train line
-        assert "2/2" in final
+        assert final.startswith(f"Epoch {index + 1}/2 [====================] -")
+        assert "loss:" in final
+        assert "accuracy:" in final
+        assert "val_loss:" in final
+        assert "val_accuracy:" in final
 
 
 def test_inline_progress_pads_to_clear_stale_characters(capsys):
@@ -937,6 +940,27 @@ def test_inline_progress_status_reports_extra_metrics():
     assert "val_loss: 4.1000" in validation_status
     assert "val_accuracy: 0.2000" in validation_status
     assert "val_top5_acc: 0.6000" in validation_status
+
+
+def test_inline_progress_final_line_uses_validation_values():
+    # The completed-epoch line must pull each val metric from the val_-prefixed
+    # epoch log, not re-render the train value under a val_ label, and it must
+    # list train metrics first, then validation metrics.
+    progress = InlineProgressBar(train_steps=175, validation_steps=38)
+    progress.params = {"epochs": 20}
+    progress.on_epoch_begin(1)
+    text = progress._final_text(
+        {
+            "loss": 3.6636,
+            "accuracy": 0.1861,
+            "val_loss": 3.2269,
+            "val_accuracy": 0.2831,
+        }
+    )
+    assert text == (
+        "Epoch 2/20 [====================] - loss: 3.6636 - accuracy: 0.1861"
+        " - val_loss: 3.2269 - val_accuracy: 0.2831"
+    )
 
 
 def test_inline_progress_drops_the_redundant_epoch_heading(capsys):

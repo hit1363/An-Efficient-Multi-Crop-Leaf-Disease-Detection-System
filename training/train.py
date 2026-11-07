@@ -1183,9 +1183,52 @@ class InlineProgressBar(keras.callbacks.Callback):
             ),
         )
 
+    def _final_text(self, logs):
+        """Build the completed-epoch line: full bar, train metrics then val metrics."""
+        logs = logs or {}
+        total = self.train_steps
+        epoch_label = (
+            f"Epoch {self._epoch}/{self._total_epochs}"
+            if self._total_epochs
+            else f"Epoch {self._epoch}"
+        )
+        parts = [f"{epoch_label} {self._bar(total, total)}"]
+        seen = set()
+        for prefix in ("", "val_"):
+            for label, candidates in self._METRIC_LABELS:
+                value = next(
+                    (
+                        logs[prefix + key]
+                        for key in candidates
+                        if prefix + key in logs
+                    ),
+                    None,
+                )
+                if value is None:
+                    continue
+                try:
+                    rendered = f"{prefix}{label}: {float(value):.4f}"
+                except (TypeError, ValueError):
+                    continue
+                if rendered in seen:
+                    continue
+                seen.add(rendered)
+                parts.append(rendered)
+        return " - ".join(parts)
+
     def on_epoch_end(self, epoch, logs=None):
-        del epoch, logs
-        self._finish_line()
+        del epoch
+        # Replace the in-flight validation line with the completed-epoch line
+        # (Keras' familiar "Epoch N/M [====] - loss: ..." shape), then end it so
+        # the checkpoint and throughput summaries land on their own lines. The
+        # line is finalized with "\n", so unlike a repaint it is not clipped to
+        # the terminal width; a wrapped completed line stays readable.
+        text = self._final_text(logs)
+        tail = " " * max(0, self._last_length - len(text))
+        prefix = "" if self._at_line_start else "\r"
+        self._write(prefix + text + tail + "\n")
+        self._last_length = 0
+        self._at_line_start = True
 
     def on_train_end(self, logs=None):
         del logs

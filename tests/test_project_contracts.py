@@ -444,6 +444,51 @@ def test_colab_training_notebooks_stream_live_keras_progress():
     assert "!python -u train.py --config config_efficientnet_lite0.yaml" in generic_code
 
 
+def test_kaggle_training_notebooks_stream_live_keras_progress():
+    architectures = (
+        "mobilenet_v1",
+        "mobilenetv2",
+        "efficientnet_b0",
+        "efficientnet_lite0",
+        "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_v2_b0",
+        "shufflenetv2_05",
+    )
+    for architecture in architectures:
+        path = ROOT / "notebooks" / f"kaggle_{architecture}_training.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code_cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
+        training_cell = next(
+            source
+            for source in code_cells
+            if "'train.py'" in source
+            and "'--config'" in source
+            and "subprocess.Popen" in source
+        )
+
+        # Kaggle's Jupyter front-end renders "\r" in place, so the child must
+        # opt into the single repainted status line and its output must be
+        # streamed in chunks; a line iterator would buffer every repaint
+        # until the end-of-epoch newline.
+        assert "training_config['training']['progress_style'] = 'inline'" in training_cell
+        assert "runtime_environment['TF_CPP_MIN_LOG_LEVEL'] = '2'" in training_cell
+        assert "stdout=subprocess.PIPE" in training_cell
+        assert "stderr=subprocess.STDOUT" in training_cell
+        assert "bufsize=0" in training_cell
+        assert ".read(4096)" in training_cell
+        assert "decode('utf-8', errors='replace')" in training_cell
+        assert "print(output_text, end='', flush=True)" in training_cell
+        assert "capture_output=True" not in training_cell
+        assert "text=True" not in training_cell
+        assert "for output_line in training_process.stdout" not in training_cell
+
+
 def test_colab_efficientnet_b0_notebook_pins_b0_architecture():
     path = ROOT / "notebooks" / "colab_efficientnet_b0_training.ipynb"
     notebook = json.loads(path.read_text(encoding="utf-8"))
