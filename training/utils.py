@@ -1328,6 +1328,25 @@ def get_epoch_log_mode(config):
     return mode
 
 
+def get_progress_style(config):
+    """Return how non-interactive progress is rendered.
+
+    ``inline`` repaints one carriage-return line and is what hosted notebooks
+    need: they render ``\\r`` in place, so training shows a single continuously
+    updating status line plus one summary per epoch. ``lines`` keeps the
+    newline-per-update output, which stays the default because carriage
+    returns collapse into unreadable re-renders in ordinary log files.
+    """
+    raw = config.get("training", {}).get("progress_style", "lines")
+    style = str(raw or "lines").strip().lower()
+    if style not in {"inline", "lines"}:
+        raise ValueError(
+            "training.progress_style must be either 'inline' or 'lines'; "
+            f"got {style!r}"
+        )
+    return style
+
+
 def setup_callbacks(
     config,
     csv_append=None,
@@ -1361,6 +1380,12 @@ def setup_callbacks(
     callback_config = config.get("callbacks", {})
     performance_config = config.get("performance", {})
     callback_verbose = 1 if get_epoch_log_mode(config) == "progress" else 0
+    # In inline mode the single status line already reports the learning rate
+    # live, so the scheduler's own "Epoch N: LearningRateScheduler setting
+    # learning rate to ..." line would just be extra clutter. ModelCheckpoint
+    # keeps ``callback_verbose`` because "Epoch N: val_accuracy improved from
+    # ... to ..." is exactly the end-of-epoch summary requested for notebooks.
+    schedule_verbose = 0 if get_progress_style(config) == "inline" else callback_verbose
 
     if performance_config.get("terminate_on_nan", True):
         callbacks.append(keras.callbacks.TerminateOnNaN())
@@ -1446,7 +1471,7 @@ def setup_callbacks(
             )
 
         callbacks.append(
-            keras.callbacks.LearningRateScheduler(schedule, verbose=callback_verbose)
+            keras.callbacks.LearningRateScheduler(schedule, verbose=schedule_verbose)
         )
     elif lr_type == "cosine_decay":
         decay_epochs = float(
@@ -1483,7 +1508,7 @@ def setup_callbacks(
             return initial_lr * (alpha + (1.0 - alpha) * cosine)
 
         callbacks.append(
-            keras.callbacks.LearningRateScheduler(schedule, verbose=callback_verbose)
+            keras.callbacks.LearningRateScheduler(schedule, verbose=schedule_verbose)
         )
 
     # TensorBoard

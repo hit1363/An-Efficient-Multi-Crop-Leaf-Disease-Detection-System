@@ -19,6 +19,7 @@ from training.train import (
     _configure_progress_logging,
     _prefetch_to_device_for_single_replica,
     _progress_log_interval,
+    _progress_style,
     _resolve_fit_step_counts,
     _save_native_keras_model,
     _should_skip_final_export,
@@ -32,6 +33,7 @@ from training.train import (
     BatchProgressLogger,
     EpochThroughputLogger,
     DiagnosticBatchProgress,
+    InlineProgressBar,
     phase_one_heading,
     save_run_metadata,
     select_final_weights,
@@ -801,6 +803,195 @@ def test_piped_stdout_uses_newline_safe_progress_logging(monkeypatch):
     assert progress.validation_steps == 151
     assert existing in callbacks
     assert messages and "newline-safe progress logging" in messages[0][0]
+
+
+def _inline_config(style="inline"):
+    return {
+        "training": {"progress_style": style},
+        "performance": {"steps_per_execution": 8},
+    }
+
+
+def test_inline_progress_style_replaces_newline_per_batch_logging(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: False)
+    existing = train_module.keras.callbacks.EarlyStopping()
+
+    callbacks, verbosity = _configure_progress_logging(
+        [existing],
+        _inline_config(),
+        "progress",
+        700,
+        151,
+    )
+
+    assert verbosity == 0
+    progress = callbacks[0]
+    assert isinstance(progress, InlineProgressBar)
+    assert not any(isinstance(cb, BatchProgressLogger) for cb in callbacks)
+    assert progress.train_steps == 700
+    assert progress.validation_steps == 151
+    assert existing in callbacks
+
+
+def test_inline_progress_style_is_opt_in_and_validated():
+    # Plain non-notebook runs keep the newline-safe output, because carriage
+    # returns collapse into unreadable re-renders in ordinary log files.
+    assert _progress_style({}) == "lines"
+    assert _progress_style({"training": {}}) == "lines"
+    assert _progress_style(_inline_config()) == "inline"
+    assert _progress_style({"training": {"progress_style": "  INLINE "}}) == "inline"
+    assert _progress_style({"training": {"progress_style": "lines"}}) == "lines"
+    with pytest.raises(ValueError, match="training.progress_style"):
+        _progress_style({"training": {"progress_style": "compact"}})
+
+
+def test_inline_progress_repaints_one_line_per_epoch(capsys):
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+    model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+    features = tf.reshape(tf.range(32 * 4, dtype=tf.float32) / 100.0, (32, 4))
+    labels = tf.one_hot(tf.range(32) % 2, depth=2)
+    dataset = tf.data.Dataset.from_tensor_slices((features, labels)).batch(8)
+    progress = InlineProgressBar(
+        train_steps=4, validation_steps=2, min_interval=0.0
+    )
+
+    model.fit(
+        dataset,
+        validation_data=dataset,
+        epochs=2,
+        steps_per_epoch=4,
+        validation_steps=2,
+        callbacks=[progress],
+        verbose=0,
+    )
+
+    output = capsys.readouterr().out
+    # One newline per epoch: the live status line is repainted with "\r".
+    assert output.count("\n") == 2
+    assert output.count("\r") >= 4
+    assert "Train progress:" not in output
+    assert "Epoch 1/2" in output
+    assert "Epoch 2/2" in output
+    # The rendered line reports a fixed-width bar, ETA, and live metrics.
+    assert "[" in output and "]" in output
+    assert "loss:" in output
+    assert "accuracy:" in output
+    assert "val_loss:" in output
+    assert "val_accuracy:" in output
+
+    # Each rendered line is the final repaint before that epoch's newline.
+    epoch_lines = [line for line in output.split("\n") if line.strip()]
+    assert len(epoch_lines) == 2
+    for line in epoch_lines:
+        final = line.split("\r")[-1]
+        assert "Epoch " in final
+        assert "4/4" not in final  # validation overwrote the train line
+        assert "2/2" in final
+
+
+def test_inline_progress_pads_to_clear_stale_characters(capsys):
+    progress = InlineProgressBar(train_steps=10, validation_steps=0, min_interval=0.0)
+    progress.params = {"epochs": 1}
+    progress.on_epoch_begin(0)
+
+    # Force a long first render, then a short one that must overwrite it.
+    progress._last_length = 0
+    progress._at_line_start = True
+    progress._write("X" * 40)
+    progress._last_length = 40
+    progress._at_line_start = False
+    capsys.readouterr()
+
+    progress._completed = 1
+    progress._phase = "train"
+    progress.status_text = lambda logs=None: "short"
+    progress._render({}, force=True)
+
+    line = capsys.readouterr().out
+    assert line.startswith("\r")
+    assert line == "\r" + "short" + " " * (40 - len("short"))
+
+
+def test_inline_progress_status_reports_extra_metrics():
+    progress = InlineProgressBar(train_steps=10, validation_steps=5, min_interval=0.0)
+    progress.params = {"epochs": 3}
+    progress.on_epoch_begin(0)
+    progress._completed = 4
+
+    status = progress.status_text(
+        {"loss": 4.7198, "accuracy": 0.1074, "top_k_categorical_accuracy": 0.42}
+    )
+    assert "loss: 4.7198" in status
+    assert "accuracy: 0.1074" in status
+    assert "top5_acc: 0.4200" in status
+
+    progress._phase = "validation"
+    validation_status = progress.status_text(
+        {"loss": 4.1, "accuracy": 0.2, "top_k_categorical_accuracy": 0.6}
+    )
+    assert "val_loss: 4.1000" in validation_status
+    assert "val_accuracy: 0.2000" in validation_status
+    assert "val_top5_acc: 0.6000" in validation_status
+
+
+def test_inline_progress_drops_the_redundant_epoch_heading(capsys):
+    # The bar already names the epoch, so "Epoch 1/1 started" would be a
+    # duplicate line above the very line it describes.
+    inline_logger = EpochThroughputLogger(
+        samples=4, log_mode="summary", progress_style="inline"
+    )
+    inline_logger.params = {"epochs": 1}
+    inline_logger.model = SimpleNamespace(optimizer=SimpleNamespace(learning_rate=1e-3))
+    inline_logger.on_epoch_begin(0)
+    assert capsys.readouterr().out == ""
+
+    # Plain log-file runs keep the heading, which is all they get.
+    lines_logger = EpochThroughputLogger(
+        samples=4, log_mode="summary", progress_style="lines"
+    )
+    lines_logger.params = {"epochs": 1}
+    lines_logger.model = SimpleNamespace(optimizer=SimpleNamespace(learning_rate=1e-3))
+    lines_logger.on_epoch_begin(0)
+    assert "Epoch 1/1 started" in capsys.readouterr().out
+
+
+def test_inline_progress_silences_the_learning_rate_scheduler(capsys):
+    base_config = {
+        "model": {"num_classes": 2},
+        "optimizer": {"learning_rate": 1e-3},
+        "dataset": {"batch_size": 2},
+        "performance": {"terminate_on_nan": False},
+        "lr_schedule": {"type": "cosine_decay", "decay_epochs": 10},
+        "callbacks": {
+            "checkpoint": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "tensorboard": {"enabled": False},
+            "csv_logger": {"enabled": False},
+        },
+    }
+
+    def scheduler_verbose(progress_style):
+        config = {
+            **base_config,
+            "training": {"log_mode": "progress", "progress_style": progress_style},
+        }
+        callbacks = setup_callbacks(config, include_throughput=False)
+        scheduler = next(
+            callback
+            for callback in callbacks
+            if isinstance(callback, tf.keras.callbacks.LearningRateScheduler)
+        )
+        # Keras prints the "Epoch N: LearningRateScheduler setting learning
+        # rate to ..." line only when verbose is set.
+        return getattr(scheduler, "verbose", 0)
+
+    assert scheduler_verbose("inline") == 0
+    assert scheduler_verbose("lines") == 1
 
 
 def test_piped_stdout_respects_configured_progress_interval(monkeypatch):

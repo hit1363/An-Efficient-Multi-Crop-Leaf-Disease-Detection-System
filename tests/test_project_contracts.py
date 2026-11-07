@@ -418,12 +418,19 @@ def test_colab_training_notebooks_stream_live_keras_progress():
         assert 'PYTHONUNBUFFERED' in training_cell
         assert "capture_output=True" not in training_cell
         # Colab only renders output written through sys.stdout, so the child's
-        # stdio must be piped back and re-printed line-by-line as it arrives.
+        # stdio must be piped back and re-printed as it arrives. The reads are
+        # chunked rather than line-based because train.py repaints a single
+        # in-place progress line with "\r", which a line iterator would buffer
+        # until the end-of-epoch newline.
         assert "stdout=subprocess.PIPE" in training_cell
         assert "stderr=subprocess.STDOUT" in training_cell
-        assert "text=True" in training_cell
-        assert "bufsize=1" in training_cell
-        assert 'print(output_line, end="", flush=True)' in training_cell
+        assert "bufsize=0" in training_cell
+        assert '.read(4096)' in training_cell
+        assert 'decode("utf-8", errors="replace")' in training_cell
+        assert 'print(output_text, end="", flush=True)' in training_cell
+        # The single updating line is what the notebook UI shows; the parent
+        # must therefore opt into it explicitly on the resolved config.
+        assert 'cfg["training"]["progress_style"] = "inline"' in all_code
 
     generic_path = ROOT / "notebooks" / "colab_training_notebook.ipynb"
     generic_notebook = json.loads(generic_path.read_text(encoding="utf-8"))

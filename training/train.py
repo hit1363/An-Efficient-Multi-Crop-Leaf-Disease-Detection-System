@@ -37,6 +37,7 @@ try:
         choose_batch_size,
         validate_dataset_batch,
         get_epoch_log_mode,
+        get_progress_style,
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
@@ -57,6 +58,7 @@ except ImportError:
         choose_batch_size,
         validate_dataset_batch,
         get_epoch_log_mode,
+        get_progress_style,
     )
 
 
@@ -295,6 +297,19 @@ def _progress_log_interval(config):
         return 0
 
 
+def _progress_style(config):
+    """Return how non-interactive progress is rendered.
+
+    Delegates to :func:`training.utils.get_progress_style` so the validation
+    rules live in exactly one place. ``inline`` repaints a single
+    carriage-return line, which is what hosted notebook streams render as one
+    continuously updating status line. ``lines`` keeps the newline-per-update
+    output, which stays the default because carriage returns collapse into
+    unreadable re-renders in ordinary log files.
+    """
+    return get_progress_style(config)
+
+
 def _configure_progress_logging(
     callbacks,
     config,
@@ -332,6 +347,23 @@ def _configure_progress_logging(
         return callbacks, _fit_verbosity(log_mode)
 
     interval = _progress_log_interval(config) or 64
+    if _progress_style(config) == "inline":
+        callbacks.insert(
+            0,
+            InlineProgressBar(
+                train_steps=train_steps,
+                validation_steps=validation_steps,
+                steps_per_execution=steps_per_execution,
+            ),
+        )
+        if logger is not None:
+            logger.info(
+                "Non-interactive stdout: using a single in-place progress line "
+                "(every %.2fs) instead of one line per batch",
+                callbacks[0].min_interval,
+            )
+        return callbacks, _fit_verbosity("summary")
+
     callbacks.insert(
         0,
         BatchProgressLogger(
@@ -673,17 +705,20 @@ def create_fine_tune_optimizer(config):
 class EpochThroughputLogger(keras.callbacks.Callback):
     """Record throughput and optionally emit a compact per-epoch summary."""
 
-    def __init__(self, samples, log_mode="progress"):
+    def __init__(self, samples, log_mode="progress", progress_style="lines"):
         super().__init__()
         self.samples = max(0, int(samples))
         self.log_mode = log_mode
+        # The inline bar already names the running epoch, so the extra
+        # "Epoch n/N started" heading would be a duplicate line.
+        self.progress_style = progress_style
         self.epoch_started = None
         self.train_elapsed = None
         self.epoch_learning_rate = None
 
     def on_epoch_begin(self, epoch, logs=None):
         del logs
-        if self.log_mode == "summary":
+        if self.log_mode == "summary" and self.progress_style != "inline":
             total_epochs = self.params.get("epochs", epoch + 1)
             print(f"Epoch {epoch + 1}/{total_epochs} started", flush=True)
         self.epoch_started = time.perf_counter()
@@ -954,9 +989,216 @@ class BatchProgressLogger(keras.callbacks.Callback):
         self._validation_execution_reported = completed >= first_execution
 
 
-def _add_throughput_callback(callbacks, sample_count, log_mode="progress"):
+def _format_duration(seconds):
+    """Format a duration as ``H:MM:SS`` or ``M:SS``."""
+    total = int(max(float(seconds), 0.0))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+class InlineProgressBar(keras.callbacks.Callback):
+    """Repaint one carriage-return status line instead of printing per batch.
+
+    Keras' own ``Progbar`` only repaints in place when ``sys.stdout`` is a
+    TTY, so a hosted notebook that streams training through a pipe gets one
+    line per update (``Train progress: 64/700 batches completed`` and so on).
+    Colab and Jupyter do render ``\\r`` as an in-place overwrite, so this
+    callback keeps Keras' familiar layout while emitting a single updating
+    line::
+
+        Epoch 1/5 64/700 [==>.........] - ETA 21:32 - loss: 4.7198 - accuracy: 0.1074
+
+    The line is finalized with a newline at the end of each epoch so the
+    per-epoch summary and callback messages stay on their own lines.
+    """
+
+    def __init__(
+        self,
+        train_steps,
+        validation_steps,
+        steps_per_execution=1,
+        min_interval=0.25,
+        width=None,
+        stream=None,
+    ):
+        super().__init__()
+        self.train_steps = max(1, int(train_steps))
+        self.validation_steps = max(0, int(validation_steps))
+        self.steps_per_execution = max(1, int(steps_per_execution))
+        self.min_interval = max(0.0, float(min_interval))
+        self.width = int(width) if width else self._detect_width()
+        self.stream = stream
+        self._epoch = 0
+        self._total_epochs = 0
+        self._phase = "train"
+        self._phase_started = 0.0
+        self._completed = 0
+        self._last_render = 0.0
+        self._last_length = 0
+        self._at_line_start = True
+
+    @staticmethod
+    def _detect_width():
+        """Return a printable width, honouring an explicit COLUMNS override."""
+        try:
+            return max(40, int(os.environ.get("COLUMNS", "")))
+        except (TypeError, ValueError):
+            return 100
+
+    @staticmethod
+    def _bar(completed, total, bar_width=20):
+        """Render a fixed-width progress bar."""
+        if total <= 0:
+            return "[" + "-" * bar_width + "]"
+        fraction = min(max(float(completed) / float(total), 0.0), 1.0)
+        filled = int(round(fraction * bar_width))
+        if filled >= bar_width:
+            return "[" + "=" * bar_width + "]"
+        return "[" + "=" * filled + ">" + "." * (bar_width - filled - 1) + "]"
+
+    def _get_stream(self):
+        return self.stream if self.stream is not None else sys.stdout
+
+    def _write(self, text):
+        try:
+            self._get_stream().write(text)
+            self._get_stream().flush()
+        except (AttributeError, ValueError, OSError):
+            # A closed or exotic stdout must never abort training.
+            pass
+
+    # Keras reports custom metrics under their decorated names, and the same
+    # metric can arrive more than once across replays. Fold them onto the short
+    # labels a human reads, and keep the first occurrence of each.
+    _METRIC_LABELS = (
+        ("loss", ("loss",)),
+        ("accuracy", ("accuracy", "categorical_accuracy", "sparse_categorical_accuracy")),
+        ("top5_acc", ("top_k_categorical_accuracy", "top_k_categorical_accuracy_1")),
+        ("precision", ("precision",)),
+        ("recall", ("recall",)),
+        ("auc", ("auc",)),
+    )
+
+    def _phase_fields(self, logs):
+        """Return loss/metric pairs, prefixed with ``val_`` during validation."""
+        logs = logs or {}
+        prefix = "val_" if self._phase == "validation" else ""
+        fields = []
+        seen = set()
+        for label, candidates in self._METRIC_LABELS:
+            value = next((logs[key] for key in candidates if key in logs), None)
+            if value is None:
+                continue
+            try:
+                rendered = f"{prefix}{label}: {float(value):.4f}"
+            except (TypeError, ValueError):
+                continue
+            if rendered in seen:
+                continue
+            seen.add(rendered)
+            fields.append(rendered)
+        return fields
+
+    def status_text(self, logs=None):
+        """Build the current status line body without carriage-return framing."""
+        total = self.train_steps if self._phase == "train" else self.validation_steps
+        completed = min(self._completed, total) if total else 0
+        epoch_label = (
+            f"Epoch {self._epoch}/{self._total_epochs}"
+            if self._total_epochs
+            else f"Epoch {self._epoch}"
+        )
+        parts = [f"{epoch_label} {completed}/{total} {self._bar(completed, total)}"]
+        elapsed = time.perf_counter() - self._phase_started
+        if completed > 0 and total > completed:
+            eta = elapsed / completed * (total - completed)
+            parts.append(f"ETA {_format_duration(eta)}")
+        parts.extend(self._phase_fields(logs))
+        return " - ".join(parts)
+
+    def _render(self, logs=None, force=False):
+        now = time.perf_counter()
+        throttled = (
+            not force
+            and self.min_interval
+            and (now - self._last_render) < self.min_interval
+        )
+        if throttled:
+            return
+        self._last_render = now
+        text = self.status_text(logs)[: self.width]
+        # Pad to the previous length so a shorter line cannot leave stale
+        # characters from the previous repaint visible.
+        tail = " " * max(0, self._last_length - len(text))
+        self._last_length = len(text)
+        # A fresh line needs no carriage return; the first repaint must return
+        # to column zero before overwriting.
+        prefix = "" if self._at_line_start else "\r"
+        self._at_line_start = False
+        self._write(prefix + text + tail)
+
+    def _finish_line(self):
+        """Terminate the current line, unless one was just terminated."""
+        if self._at_line_start:
+            return
+        self._write("\n")
+        self._last_length = 0
+        self._at_line_start = True
+
+    def on_epoch_begin(self, epoch, logs=None):
+        del logs
+        self._epoch = int(epoch) + 1
+        try:
+            self._total_epochs = int(self.params.get("epochs", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            self._total_epochs = 0
+        self._phase = "train"
+        self._phase_started = time.perf_counter()
+        self._completed = 0
+        self._last_length = 0
+
+    def on_train_batch_end(self, batch, logs=None):
+        self._phase = "train"
+        self._completed = min(int(batch) + 1, self.train_steps)
+        self._render(logs, force=self._completed >= self.train_steps)
+
+    def on_test_begin(self, logs=None):
+        del logs
+        self._phase = "validation"
+        self._phase_started = time.perf_counter()
+        self._completed = 0
+        # Keep _last_length: the validation line overwrites the still-unfinished
+        # train line, so the tail padding must still cover the longer text.
+
+    def on_test_batch_end(self, batch, logs=None):
+        self._completed = min(int(batch) + 1, self.validation_steps)
+        self._render(
+            logs,
+            force=bool(
+                self.validation_steps
+                and self._completed >= self.validation_steps
+            ),
+        )
+
+    def on_epoch_end(self, epoch, logs=None):
+        del epoch, logs
+        self._finish_line()
+
+    def on_train_end(self, logs=None):
+        del logs
+        self._finish_line()
+
+
+def _add_throughput_callback(
+    callbacks, sample_count, log_mode="progress", progress_style="lines"
+):
     """Place throughput before CSVLogger so the rate is persisted in history."""
-    throughput_callback = EpochThroughputLogger(sample_count, log_mode=log_mode)
+    throughput_callback = EpochThroughputLogger(
+        sample_count, log_mode=log_mode, progress_style=progress_style
+    )
     csv_logger_index = next(
         (
             index
@@ -1451,7 +1693,10 @@ def train_model(config_path="config.yaml"):
     # compact per-epoch summary line while keeping sparse batch progress.
     effective_log_mode = log_mode if _stdout_is_interactive() else "summary"
     _add_throughput_callback(
-        callbacks, fit_sample_count, log_mode=effective_log_mode
+        callbacks,
+        fit_sample_count,
+        log_mode=effective_log_mode,
+        progress_style=_progress_style(config),
     )
     profiler_callback = _make_profiler_callback(
         config, config_path, run_timestamp, logger
@@ -1529,6 +1774,7 @@ def train_model(config_path="config.yaml"):
             phase2_callbacks,
             fit_sample_count,
             log_mode=effective_log_mode,
+            progress_style=_progress_style(config),
         )
         phase2_best = BestValidationWeights()
         phase2_callbacks.append(phase2_best)
