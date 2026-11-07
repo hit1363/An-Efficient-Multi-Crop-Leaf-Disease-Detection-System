@@ -185,18 +185,31 @@ For artifact evaluation and ranking, use the [Colab comparison notebook](noteboo
 
 ### Downloading the trained artifacts from Kaggle
 
-Kaggle's Output panel silently refuses browser downloads of any single file larger than about 20 MB — the button simply does nothing, with no error, in every browser — while every exported model archive is larger than that. Each Kaggle training notebook therefore ends its archiving step with a `FileLink` cell that prints the archive size and renders a clickable link to the zip:
+Kaggle's Output panel silently refuses browser downloads of any single file larger than about 20 MB — the button simply does nothing, with no error, in every browser — while every exported model archive is larger than that. Each Kaggle notebook therefore ends its archiving step with a `FileLink` cell that prints the archive size and renders a clickable link to the zip:
 
 ```python
+import os
 from IPython.display import FileLink, display
+
+os.chdir(os.path.dirname(archive_path))  # FileLink resolves paths against the kernel CWD
 print(f"Archive size: {os.path.getsize(archive_path) / 1e6:.1f} MB")
 display(FileLink(os.path.basename(archive_path)))
 ```
 
-`FileLink` streams the file from the running kernel session, which bypasses the Output panel's limit. Two constraints are worth knowing:
+`FileLink` streams the file from the running kernel session, which bypasses the Output panel's limit. Three constraints are worth knowing:
 
+- `FileLink` resolves *both* its existence check and the rendered href against the kernel's current working directory, and the training cells `chdir` into the cloned repository — hence the `os.chdir(os.path.dirname(archive_path))` above. Without it the display degrades into a `Path (efficientnet_b0_outputs.zip) doesn't exist` notice even though the zip is perfectly fine.
+- Always pass the bare filename (`os.path.basename(...)`). The href is relative, so an absolute `/kaggle/working/...` path renders a link that resolves against the Kaggle page URL and returns 404.
 - The link only works while the interactive session is alive. It does not work in a `Save & Run All` version, after the 20-minute idle timeout, or after the kernel restarts — click it right after the cell runs.
-- Always pass the bare filename (`os.path.basename(...)`). `FileLink` builds a relative href, so an absolute `/kaggle/working/...` path renders a link that resolves against the Kaggle page URL and returns 404.
+
+Real archives routinely exceed the panel's limit (a full EfficientNetB0 export is ~190 MB), so the same cell also splits the zip into `MAX_PART_BYTES = 19 * 1024 * 1024` chunks named `<stem>.part00`, `<stem>.part01`, … and renders one link per chunk. Stale parts from an earlier run are deleted first so a rejoin cannot mix two archives. Download the parts, then rejoin them:
+
+```bash
+# Windows
+copy /b efficientnet_b0_outputs.part00+efficientnet_b0_outputs.part01+... efficientnet_b0_outputs.zip
+# macOS / Linux
+cat efficientnet_b0_outputs.part* > efficientnet_b0_outputs.zip
+```
 
 For a committed version, pull the output through the Kaggle API instead, which has no browser size limit:
 

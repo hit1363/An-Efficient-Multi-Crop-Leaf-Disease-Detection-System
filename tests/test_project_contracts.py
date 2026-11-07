@@ -778,7 +778,10 @@ def test_kaggle_notebooks_expose_a_filelink_download_cell():
 
     FileLink renders a *relative* href: passing an absolute path produces a
     link that resolves against the Kaggle page URL and 404s, so the cell must
-    pass the bare basename.
+    pass the bare basename. It also resolves the existence check against the
+    kernel working directory, and the training cells chdir into the cloned
+    repo, so the download cell must chdir back to the archive's folder -- or
+    IPython prints a "Path doesn't exist" notice instead of the link.
     """
     architectures = [
         "mobilenet_v1",
@@ -813,6 +816,11 @@ def test_kaggle_notebooks_expose_a_filelink_download_cell():
         assert "FileLink(os.path.basename(%s))" % variable in source
         assert "FileLink(%s)" % variable not in source
         assert "os.path.getsize(%s)" % variable in source
+        # ...after moving back to the folder that holds the archive, because
+        # FileLink checks existence against the kernel working directory.
+        assert "os.chdir(os.path.dirname(%s))" % variable in source
+        # An archive over the panel's limit is also split into 19 MB parts.
+        assert "MAX_PART_BYTES" in source
         compile(shell.transform_cell(source), f"{path}:download", "exec")
 
         # The surrounding documentation must state the limitation and fallback.
@@ -830,7 +838,10 @@ def test_all_kaggle_notebooks_offer_a_working_archive_download():
     FileLink for it, and the link must use a bare filename.
 
     FileLink emits a *relative* href, so ``FileLink("/kaggle/working/x.zip")``
-    produces a link that resolves against the Kaggle page URL and 404s.
+    produces a link that resolves against the Kaggle page URL and 404s. It
+    also checks existence against the kernel working directory, so every link
+    cell must chdir to the archive's folder first and offer 19 MB part files
+    for archives above the panel's download limit.
     """
     shell = InteractiveShell()
     notebooks = [
@@ -854,6 +865,11 @@ def test_all_kaggle_notebooks_offer_a_working_archive_download():
             # Only basename-relative links resolve correctly on Kaggle.
             assert "FileLink(os.path.basename(" in source, name
             assert "/kaggle/working/" not in source.split("FileLink", 1)[1].split(")")[0], name
+            # FileLink checks existence against the kernel CWD, which earlier
+            # cells may have changed, so the cell pins it to the archive folder.
+            assert "os.chdir(os.path.dirname(" in source, name
+            # Oversized archives are additionally split into servable parts.
+            assert "MAX_PART_BYTES" in source, name
             compile(shell.transform_cell(source), f"{path}:link", "exec")
 
         # An archive must actually be produced for the link to point at; the
