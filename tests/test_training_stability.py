@@ -1,6 +1,7 @@
 import csv
 import json
 import logging
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,9 +16,13 @@ from training.train import (
     _fit_verbosity,
     _fit_sample_count,
     _add_keras_progress_logger,
+    _configure_progress_logging,
     _prefetch_to_device_for_single_replica,
+    _progress_log_interval,
     _resolve_fit_step_counts,
+    _save_native_keras_model,
     _should_skip_final_export,
+    _stdout_is_interactive,
     build_metrics,
     compile_model,
     compile_fine_tune_model,
@@ -726,6 +731,157 @@ def test_progress_logging_matches_keras_epoch_layout(tmp_path, capsys):
 def test_training_log_mode_rejects_unknown_value():
     with pytest.raises(ValueError, match="training.log_mode"):
         get_epoch_log_mode({"training": {"log_mode": "compact"}})
+
+
+class _FakeStdout:
+    def __init__(self, interactive):
+        self._interactive = interactive
+
+    def isatty(self):
+        return self._interactive
+
+
+class _BrokenStdout:
+    def isatty(self):
+        raise ValueError("I/O operation on closed file")
+
+
+def test_stdout_is_interactive_tolerates_unusual_streams():
+    assert _stdout_is_interactive(_FakeStdout(True)) is True
+    assert _stdout_is_interactive(_FakeStdout(False)) is False
+    # Streams without isatty() (some notebook/kernel replacements) and closed
+    # streams must both degrade to the safe newline-terminated path.
+    assert _stdout_is_interactive(object()) is False
+    assert _stdout_is_interactive(_BrokenStdout()) is False
+
+
+@pytest.mark.parametrize(
+    ("training_section", "expected"),
+    [
+        ({"progress_log_interval": "summary-only"}, 0),
+        ({"progress_log_interval": 32}, 32),
+        ({"progress_log_interval": "64"}, 64),
+        ({"progress_log_interval": None}, 0),
+        ({}, 0),
+    ],
+)
+def test_progress_log_interval_ignores_legacy_string_values(
+    training_section, expected
+):
+    assert _progress_log_interval({"training": training_section}) == expected
+
+
+def test_piped_stdout_uses_newline_safe_progress_logging(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: False)
+    existing = train_module.keras.callbacks.EarlyStopping()
+    messages = []
+    logger = SimpleNamespace(info=lambda *args: messages.append(args))
+
+    callbacks, verbosity = _configure_progress_logging(
+        [existing],
+        {"training": {}, "performance": {"steps_per_execution": 8}},
+        "progress",
+        700,
+        151,
+        logger=logger,
+    )
+
+    assert verbosity == 0
+    assert not any(
+        isinstance(callback, train_module.keras.callbacks.ProgbarLogger)
+        for callback in callbacks
+    )
+    progress = callbacks[0]
+    assert isinstance(progress, BatchProgressLogger)
+    assert progress.interval == 64
+    assert progress.steps_per_execution == 8
+    assert progress.train_steps == 700
+    assert progress.validation_steps == 151
+    assert existing in callbacks
+    assert messages and "newline-safe progress logging" in messages[0][0]
+
+
+def test_piped_stdout_respects_configured_progress_interval(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: False)
+
+    callbacks, verbosity = _configure_progress_logging(
+        [],
+        {"training": {"progress_log_interval": 128}},
+        "progress",
+        700,
+        151,
+    )
+
+    assert verbosity == 0
+    assert callbacks[0].interval == 128
+
+
+def test_interactive_stdout_keeps_the_live_keras_progress_bar(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: True)
+
+    callbacks, verbosity = _configure_progress_logging(
+        [], {"training": {}}, "progress", 700, 151
+    )
+
+    assert verbosity == 1
+    assert isinstance(callbacks[-1], train_module.keras.callbacks.ProgbarLogger)
+    assert not any(isinstance(cb, BatchProgressLogger) for cb in callbacks)
+
+
+def test_interactive_summary_mode_adds_sparse_progress_when_configured(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: True)
+
+    callbacks, verbosity = _configure_progress_logging(
+        [], {"training": {"progress_log_interval": 32}}, "summary", 700, 151
+    )
+
+    assert verbosity == 0
+    assert isinstance(callbacks[0], BatchProgressLogger)
+    assert callbacks[0].interval == 32
+    assert not any(
+        isinstance(callback, train_module.keras.callbacks.ProgbarLogger)
+        for callback in callbacks
+    )
+
+
+def test_diagnostic_runs_keep_their_own_progress_logging(monkeypatch):
+    import training.train as train_module
+
+    monkeypatch.setattr(train_module, "_stdout_is_interactive", lambda *_: False)
+    existing = train_module.keras.callbacks.EarlyStopping()
+
+    callbacks, verbosity = _configure_progress_logging(
+        [existing],
+        {"training": {}},
+        "summary",
+        10,
+        5,
+        diagnostic_run=True,
+    )
+
+    assert callbacks == [existing]
+    assert verbosity == 0
+
+
+def test_native_keras_export_roundtrips(tmp_path):
+    model = tf.keras.Sequential(
+        [tf.keras.layers.InputLayer((4,)), tf.keras.layers.Dense(2, activation="softmax")]
+    )
+
+    path = _save_native_keras_model(model, str(tmp_path), "tiny", "20260101_000000")
+
+    assert path == str(tmp_path / "tiny" / "tiny_20260101_000000.keras")
+    assert os.path.exists(path)
+    restored = tf.keras.models.load_model(path)
+    assert restored.output_shape == (None, 2)
 
 
 def test_runtime_warns_when_multiple_gpus_are_visible_but_strategy_is_single(

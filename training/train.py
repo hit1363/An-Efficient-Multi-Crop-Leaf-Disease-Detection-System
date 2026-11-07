@@ -11,6 +11,7 @@ import argparse
 import json
 import numpy as np
 import subprocess
+import sys
 import time
 import tensorflow as tf
 import yaml
@@ -271,6 +272,84 @@ def _add_keras_progress_logger(callbacks, log_mode):
     return callbacks
 
 
+def _stdout_is_interactive(stream=None):
+    """Return True when stdout can repaint a progress bar in place.
+
+    Hosted notebooks run training as a subprocess, so stdout is a pipe and
+    Keras' carriage-return progress bar degenerates into hundreds of partial
+    lines. Non-interactive streams therefore get newline-safe logging.
+    """
+    stream = sys.stdout if stream is None else stream
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def _progress_log_interval(config):
+    """Return the sparse progress interval, ignoring legacy string values."""
+    raw = config.get("training", {}).get("progress_log_interval", 0)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _configure_progress_logging(
+    callbacks,
+    config,
+    log_mode,
+    train_steps,
+    validation_steps,
+    diagnostic_run=False,
+    logger=None,
+):
+    """Attach progress callbacks that survive a piped (non-TTY) stdout.
+
+    Returns ``(callbacks, fit_verbose)``. Interactive terminals keep Keras'
+    live progress bar; piped runs drop the carriage-return bar in favor of
+    sparse, newline-terminated progress plus the compact per-epoch summary.
+    """
+    if diagnostic_run:
+        return callbacks, _fit_verbosity(log_mode)
+
+    steps_per_execution = config.get("performance", {}).get(
+        "steps_per_execution", 1
+    )
+    if _stdout_is_interactive():
+        progress_interval = _progress_log_interval(config)
+        if progress_interval > 0 and log_mode != "progress":
+            callbacks.insert(
+                0,
+                BatchProgressLogger(
+                    train_steps=train_steps,
+                    validation_steps=validation_steps,
+                    interval=progress_interval,
+                    steps_per_execution=steps_per_execution,
+                ),
+            )
+        _add_keras_progress_logger(callbacks, log_mode)
+        return callbacks, _fit_verbosity(log_mode)
+
+    interval = _progress_log_interval(config) or 64
+    callbacks.insert(
+        0,
+        BatchProgressLogger(
+            train_steps=train_steps,
+            validation_steps=validation_steps,
+            interval=interval,
+            steps_per_execution=steps_per_execution,
+        ),
+    )
+    if logger is not None:
+        logger.info(
+            "Non-interactive stdout: using newline-safe progress logging "
+            "(every %d batches) instead of the carriage-return progress bar",
+            interval,
+        )
+    return callbacks, _fit_verbosity("summary")
+
+
 def _resolve_fit_step_counts(train_steps, validation_steps, runtime_config):
     """Apply optional diagnostic caps without changing dataset cardinalities."""
     def resolve(value, name):
@@ -307,6 +386,18 @@ def _fit_sample_count(
 def _should_skip_final_export(config):
     """Return whether a diagnostic run should stop after validating training."""
     return bool(config.get("runtime", {}).get("diagnostic", False))
+
+
+def _save_native_keras_model(model, save_dir, model_name, timestamp, logger=None):
+    """Save the native ``.keras`` artifact and return its path."""
+    keras_path = os.path.join(
+        save_dir, model_name, f"{model_name}_{timestamp}.keras"
+    )
+    os.makedirs(os.path.dirname(keras_path), exist_ok=True)
+    model.save(keras_path)
+    if logger is not None:
+        logger.info(f"Saved Keras model: {keras_path}")
+    return keras_path
 
 
 def _git_revision(repo_dir):
@@ -1356,7 +1447,12 @@ def train_model(config_path="config.yaml"):
     # Setup callbacks
     logger.info("Setting up callbacks...")
     callbacks = setup_callbacks(config, include_throughput=False)
-    _add_throughput_callback(callbacks, fit_sample_count, log_mode=log_mode)
+    # Piped stdout cannot render Keras' carriage-return bar; fall back to the
+    # compact per-epoch summary line while keeping sparse batch progress.
+    effective_log_mode = log_mode if _stdout_is_interactive() else "summary"
+    _add_throughput_callback(
+        callbacks, fit_sample_count, log_mode=effective_log_mode
+    )
     profiler_callback = _make_profiler_callback(
         config, config_path, run_timestamp, logger
     )
@@ -1372,24 +1468,15 @@ def train_model(config_path="config.yaml"):
                 validation_steps=fit_val_steps,
             ),
         )
-    else:
-        progress_interval = int(
-            config.get("training", {}).get("progress_log_interval", 0) or 0
-        )
-        if progress_interval > 0 and log_mode != "progress":
-            callbacks.insert(
-                0,
-                BatchProgressLogger(
-                    train_steps=fit_train_steps,
-                    validation_steps=fit_val_steps,
-                    interval=progress_interval,
-                    steps_per_execution=config.get("performance", {}).get(
-                        "steps_per_execution", 1
-                    ),
-                ),
-            )
-    if not diagnostic_run:
-        _add_keras_progress_logger(callbacks, log_mode)
+    callbacks, phase1_verbose = _configure_progress_logging(
+        callbacks,
+        config,
+        log_mode,
+        fit_train_steps,
+        fit_val_steps,
+        diagnostic_run=diagnostic_run,
+        logger=logger,
+    )
 
     # Phase 1 either warms up the classifier head or trains a randomly
     # initialized backbone end-to-end, depending on freeze_base.
@@ -1405,7 +1492,7 @@ def train_model(config_path="config.yaml"):
         class_weight=class_weights,
         steps_per_epoch=fit_train_steps,
         validation_steps=fit_val_steps,
-        verbose=_fit_verbosity(log_mode),
+        verbose=phase1_verbose,
     )
 
     # The last Phase 1 epoch is not necessarily the best validation point.
@@ -1441,27 +1528,19 @@ def train_model(config_path="config.yaml"):
         _add_throughput_callback(
             phase2_callbacks,
             fit_sample_count,
-            log_mode=log_mode,
+            log_mode=effective_log_mode,
         )
         phase2_best = BestValidationWeights()
         phase2_callbacks.append(phase2_best)
-        if not diagnostic_run:
-            progress_interval = int(
-                config.get("training", {}).get("progress_log_interval", 0) or 0
-            )
-            if progress_interval > 0 and log_mode != "progress":
-                phase2_callbacks.insert(
-                    0,
-                    BatchProgressLogger(
-                        train_steps=fit_train_steps,
-                        validation_steps=fit_val_steps,
-                        interval=progress_interval,
-                        steps_per_execution=config.get("performance", {}).get(
-                            "steps_per_execution", 1
-                        ),
-                    ),
-                )
-            _add_keras_progress_logger(phase2_callbacks, log_mode)
+        phase2_callbacks, phase2_verbose = _configure_progress_logging(
+            phase2_callbacks,
+            config,
+            log_mode,
+            fit_train_steps,
+            fit_val_steps,
+            diagnostic_run=diagnostic_run,
+            logger=logger,
+        )
 
         # Continue training
         history2 = model.fit(
@@ -1473,7 +1552,7 @@ def train_model(config_path="config.yaml"):
             class_weight=class_weights,
             steps_per_epoch=fit_train_steps,
             validation_steps=fit_val_steps,
-            verbose=_fit_verbosity(log_mode),
+            verbose=phase2_verbose,
         )
         final_weights, selected_phase, selected_loss = select_final_weights(
             phase1_best, phase1_best_weights, phase2_best
@@ -1507,6 +1586,10 @@ def train_model(config_path="config.yaml"):
 
     # Save in multiple formats
     is_lite0_arch = model_name.lower() in ["efficientnet", "efficientnet_lite0"]
+
+    if "keras" in config["export"]["formats"]:
+        # Native Keras format: no HDF5 legacy warning and no config loss.
+        _save_native_keras_model(model, save_dir, model_name, timestamp, logger)
 
     if "h5" in config["export"]["formats"]:
         if is_lite0_arch:

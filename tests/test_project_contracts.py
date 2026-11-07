@@ -328,6 +328,16 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         <= 0.001
     )
 
+    # Recipe v5 (2026-11): the smoke run reproduced the v4 divergence (val loss
+    # 4.27 at epoch 1 climbing to 6.02 by epoch 5 while train loss fell), so the
+    # peak halves to 2e-4, dropout rises to 0.35, and the baseline policy stops
+    # flipping leaves vertically. Monitoring stays on val_accuracy: v3 showed
+    # val_loss is a fluke-prone signal for a from-scratch backbone.
+    assert shufflenet_config["optimizer"]["learning_rate"] == 0.0002
+    assert shufflenet_config["model"]["dropout_rate"] >= 0.3
+    assert shufflenet_config["augmentation"]["vertical_flip"] is False
+    assert "keras" in shufflenet_config["export"]["formats"]
+
     # Recipe v2 (2026-11): every two-phase config runs 20 frozen epochs and
     # then 10 fine-tune epochs; the last 15 epochs of the old 6/9 split were
     # spent on a learning rate that had already decayed to its floor.

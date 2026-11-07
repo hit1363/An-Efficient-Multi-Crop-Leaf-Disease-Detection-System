@@ -6,7 +6,10 @@ model:
   num_classes: 72
   # Native project implementation; ImageNet weights are intentionally unavailable.
   weights: null
-  dropout_rate: 0.25
+  # Recipe v5: 0.25 was too weak for a 0.6M-parameter from-scratch model,
+  # whose train loss fell to 2.77 by epoch 5 while val loss climbed past the
+  # ln(72) uniform floor (confidently wrong predictions).
+  dropout_rate: 0.35
   classifier_units: 256
 
 dataset:
@@ -27,7 +30,9 @@ augmentation:
   rotation_range: 15
   zoom_range: [0.9, 1.1]
   horizontal_flip: true
-  vertical_flip: true
+  # Recipe v5: leaf disease images are never upside down, and a vertical flip
+  # was teaching the from-scratch backbone an invariance it cannot use.
+  vertical_flip: false
   brightness_range: [0.9, 1.1]
   class_aware:
     enabled: true
@@ -55,6 +60,9 @@ training:
   # while val_accuracy hovered at random (ln(72) uniform-prior floor). The
   # peak drops to 3e-4 with a small Adam weight decay, and early stopping's
   # min_delta shrinks so real sub-0.5pp gains still reset the patience.
+  # Recipe v5 (2026-11): the smoke run reproduced the same divergence (val
+  # loss 4.27 at epoch 1 -> 6.02 by epoch 5), so the peak halves again to
+  # 2e-4 and stronger dropout/regularization carries the rest.
   epochs: 40
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: false
@@ -68,7 +76,7 @@ training:
 
 optimizer:
   name: "adam"
-  learning_rate: 0.0003
+  learning_rate: 0.0002
   beta_1: 0.9
   beta_2: 0.999
   epsilon: 1.0e-7
@@ -84,6 +92,7 @@ lr_schedule:
   # Recipe v3: full LR from step zero made val_loss exceed the uniform-prior
   # ln(72) ~= 4.28; ramp 1e-4 -> the peak over three epochs before the cosine.
   # Recipe v4 keeps the 3-epoch ramp (1e-4 -> 3e-4) and the 40-epoch cosine.
+  # Recipe v5 ramps 1e-4 -> 2e-4 to match the lower peak.
   warmup_epochs: 3
   warmup_start_lr: 0.0001
 
@@ -139,7 +148,9 @@ callbacks:
 
 export:
   save_dir: "../models"
-  formats: ["h5", "saved_model", "tflite"]
+  # Recipe v5 adds the native .keras format (no HDF5 legacy save warning);
+  # h5 stays for model_comparison_common.py and the QAT scripts.
+  formats: ["keras", "h5", "saved_model", "tflite"]
   sync_flutter_labels: false
 
 metrics:
