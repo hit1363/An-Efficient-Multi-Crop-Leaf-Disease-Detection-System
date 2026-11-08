@@ -209,14 +209,27 @@ def load_test_dataset(
     return test_ds, class_names
 
 
-def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
+def evaluate_model(
+    model_path,
+    config_path="config.yaml",
+    results_dir=None,
+    tta="none",
+):
     """
     Evaluate trained model on test set
 
     Args:
         model_path: Path to trained model (.h5 or SavedModel)
         config_path: Path to configuration file
+        results_dir: Directory for evaluation artifacts
+        tta: "none" (default) or "flip" — average softmax outputs of the
+            image and its horizontal mirror before argmax. Zero-cost boost
+            for fine-grained classes; recorded in metrics_summary.json.
     """
+    if str(tta).strip().lower() not in {"none", "flip"}:
+        raise ValueError(f"Unsupported tta mode {tta!r}; expected 'none' or 'flip'")
+    tta_mode = str(tta).strip().lower()
+
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
@@ -312,6 +325,12 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
 
     for images, labels in test_ds:
         predictions = model.predict(images, verbose=0)
+        if tta_mode == "flip":
+            # Horizontal flip is label-preserving for leaves; averaging the
+            # two softmax views reduces orientation-sensitive misses.
+            flipped = tf.image.flip_left_right(images)
+            flipped_predictions = model.predict(flipped, verbose=0)
+            predictions = (predictions + flipped_predictions) / 2.0
         if predictions.shape[-1] != len(class_names):
             raise ValueError(
                 f"Model returned {predictions.shape[-1]} outputs, but the test set "
@@ -408,6 +427,7 @@ def evaluate_model(model_path, config_path="config.yaml", results_dir=None):
     summary = {
         "model_path": os.path.abspath(model_path),
         "model_size_mb": round(_get_model_size_mb(model_path), 4),
+        "tta": tta_mode,
         "samples": int(len(y_true)),
         "class_names": class_names,
         "classes_without_test_support": [
@@ -532,6 +552,16 @@ def main():
     parser.add_argument(
         "--results-dir", type=str, default=None, help="Directory for evaluation reports"
     )
+    parser.add_argument(
+        "--tta",
+        type=str,
+        default="none",
+        choices=["none", "flip"],
+        help=(
+            "Test-time augmentation: 'flip' averages softmax outputs of the image "
+            "and its horizontal mirror before argmax (zero-cost accuracy boost)"
+        ),
+    )
 
     args = parser.parse_args()
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -553,7 +583,9 @@ def main():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     # Evaluate model
-    evaluate_model(args.model, config_path, results_dir=args.results_dir)
+    evaluate_model(
+        args.model, config_path, results_dir=args.results_dir, tta=args.tta
+    )
 
 
 if __name__ == "__main__":

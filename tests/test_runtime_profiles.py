@@ -132,7 +132,6 @@ def test_full_profile_preserves_disabled_early_stopping_settings():
     "architecture",
     [
         "mobilenetv2",
-        "efficientnet_b0",
         "shufflenetv2_05",
     ],
 )
@@ -151,6 +150,35 @@ def test_full_profile_uses_192_input_for_supported_architectures(
     # No epoch capping: implementation respects config.
     assert runtime["training"]["epochs"] == 10
     assert runtime["training"].get("unfreeze_epoch") is None
+
+
+def test_full_profile_keeps_efficientnet_b0_input_size():
+    config = {
+        "model": {"architecture": "efficientnet_b0", "input_shape": [224, 224, 3]},
+        "training": {"epochs": 10, "freeze_base": False},
+    }
+
+    runtime = apply_runtime_profile(config, "full", platform="kaggle")
+
+    # efficientnet_b0 keeps its native 224 resolution: fine-grained lesions
+    # (rice/sugarcane/tomato clusters) need the extra pixels, and the 2xT4
+    # budget still fits.
+    assert runtime["model"]["input_shape"] == [224, 224, 3]
+    assert runtime["training"]["epochs"] == 10
+
+
+def test_full_profile_raises_kaggle_cache_limit_for_224_input():
+    config = {
+        "model": {"architecture": "efficientnet_b0", "input_shape": [224, 224, 3]},
+        "training": {"epochs": 10},
+    }
+
+    runtime = apply_runtime_profile(config, "full", platform="kaggle")
+
+    # The 224x224 float16 cache estimate (~7.9 GB) would brush a pinned 8 GB
+    # limit; the Kaggle profile raises the ceiling so 224 stays cached in RAM.
+    assert runtime["dataset"]["cache_memory_limit_gb"] == 12.0
+    assert runtime["dataset"]["cache_mode"] == "memory"
 
 
 def test_full_profile_uses_192_input_for_mobilenetv3_small_no_cap_224():

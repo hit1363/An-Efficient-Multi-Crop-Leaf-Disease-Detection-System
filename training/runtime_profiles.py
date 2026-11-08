@@ -94,6 +94,11 @@ def apply_runtime_profile(
         )
         # Enable memory cache for faster I/O on Kaggle GPUs (80K images ~ 6GB uncompressed).
         dataset["cache_mode"] = "memory"
+        # At 224x224 float16 the train+val cache estimate is ~7.9 GB, which
+        # would brush the pinned 8.0 GB config limit and trigger a downgrade;
+        # Kaggle sessions have ~29 GB RAM, so 12 GB keeps 224 cached in RAM.
+        # The resolved decision (estimate vs limit) is logged by the trainer.
+        dataset["cache_memory_limit_gb"] = 12.0
         # Relax duplicate enforcement for raw hosted Kaggle datasets.
         runtime_config["performance"]["allow_cross_split_duplicates"] = True
         if normalized_mode == "full":
@@ -169,9 +174,13 @@ def apply_runtime_profile(
         architecture = str(
             runtime_config["model"].get("architecture", "")
         ).strip().lower().replace("-", "_")
+        # efficientnet_b0 stays at its native 224x224: the 2xT4 budget still
+        # fits (~120 img/s steady at the shared batch size), and fine-grained
+        # lesions (rice hispa spots, sugarcane pustules, tomato rings) need
+        # the extra pixels — the 87.1% baseline lost most accuracy inside
+        # exactly those crops.
         faster_resolution_architectures = {
             "mobilenetv2",
-            "efficientnet_b0",
             "shufflenetv2_05",
             "shufflenet_v2_05",
             "shufflenetv2_0.5x",
