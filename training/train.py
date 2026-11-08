@@ -6,6 +6,10 @@ Uses transfer learning with MobileNetV2 or EfficientNet-Lite0
 import os
 
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+# Silence TensorFlow's C++ absl logging before the first import: otherwise every
+# INFO notice ("Reduce to ... then broadcast", NCCL collectives, ...) is printed
+# once by absl and once again by TensorFlow's Python logger.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import argparse
 import json
@@ -318,6 +322,7 @@ def _configure_progress_logging(
     validation_steps,
     diagnostic_run=False,
     logger=None,
+    sample_count=None,
 ):
     """Attach progress callbacks that survive a piped (non-TTY) stdout.
 
@@ -354,6 +359,7 @@ def _configure_progress_logging(
                 train_steps=train_steps,
                 validation_steps=validation_steps,
                 steps_per_execution=steps_per_execution,
+                samples=sample_count,
             ),
         )
         if logger is not None:
@@ -742,9 +748,14 @@ class EpochThroughputLogger(keras.callbacks.Callback):
         throughput = self.samples / elapsed
         if logs is not None:
             logs["examples_per_second"] = throughput
-            if self.log_mode == "progress" and self.epoch_learning_rate is not None:
+            if self.epoch_learning_rate is not None:
                 logs["lr"] = self.epoch_learning_rate
         if self.log_mode == "summary":
+            if self.progress_style == "inline":
+                # The inline bar owns the single per-epoch line and already
+                # reports lr and throughput; a second summary line here would
+                # duplicate the epoch twice in the log.
+                return
             metrics = logs or {}
             total_epochs = self.params.get("epochs", epoch + 1)
             fields = [f"Epoch {epoch + 1}/{total_epochs}"]
@@ -1023,6 +1034,7 @@ class InlineProgressBar(keras.callbacks.Callback):
         min_interval=0.25,
         width=None,
         stream=None,
+        samples=None,
     ):
         super().__init__()
         self.train_steps = max(1, int(train_steps))
@@ -1031,6 +1043,9 @@ class InlineProgressBar(keras.callbacks.Callback):
         self.min_interval = max(0.0, float(min_interval))
         self.width = int(width) if width else self._detect_width()
         self.stream = stream
+        # Finished-epoch throughput requires the epoch's sample count. When it
+        # is unknown (tests, ad-hoc use) the final line omits lr/throughput.
+        self.samples = max(0, int(samples)) if samples is not None else None
         self._epoch = 0
         self._total_epochs = 0
         self._phase = "train"
@@ -1039,6 +1054,8 @@ class InlineProgressBar(keras.callbacks.Callback):
         self._last_render = 0.0
         self._last_length = 0
         self._at_line_start = True
+        self._train_elapsed = None
+        self._learning_rate = None
 
     @staticmethod
     def _detect_width():
@@ -1159,6 +1176,14 @@ class InlineProgressBar(keras.callbacks.Callback):
         self._phase_started = time.perf_counter()
         self._completed = 0
         self._last_length = 0
+        self._train_elapsed = None
+        self._learning_rate = None
+        try:
+            self._learning_rate = float(
+                keras.backend.get_value(self.model.optimizer.learning_rate)
+            )
+        except (AttributeError, TypeError, ValueError):
+            self._learning_rate = None
 
     def on_train_batch_end(self, batch, logs=None):
         self._phase = "train"
@@ -1167,6 +1192,9 @@ class InlineProgressBar(keras.callbacks.Callback):
 
     def on_test_begin(self, logs=None):
         del logs
+        # Freeze the training-only duration before the validation timer resets,
+        # so throughput excludes validation exactly as the CSV column does.
+        self._train_elapsed = max(time.perf_counter() - self._phase_started, 1e-9)
         self._phase = "validation"
         self._phase_started = time.perf_counter()
         self._completed = 0
@@ -1214,10 +1242,23 @@ class InlineProgressBar(keras.callbacks.Callback):
                     continue
                 seen.add(rendered)
                 parts.append(rendered)
+        if self.samples is not None:
+            # One line per epoch: fold the learning rate and the steady-state
+            # throughput into the bar's final line instead of printing a second
+            # summary line from EpochThroughputLogger.
+            if self._learning_rate is not None:
+                parts.append(f"lr: {self._learning_rate:.3e}")
+            elapsed = self._train_elapsed
+            if elapsed:
+                parts.append(f"examples_per_second: {self.samples / elapsed:.1f}")
         return " - ".join(parts)
 
     def on_epoch_end(self, epoch, logs=None):
         del epoch
+        # Without a validation pass on_test_begin never fired; measure the
+        # training-only duration here instead.
+        if self._train_elapsed is None and self._phase == "train":
+            self._train_elapsed = max(time.perf_counter() - self._phase_started, 1e-9)
         # Replace the in-flight validation line with the completed-epoch line
         # (Keras' familiar "Epoch N/M [====] - loss: ..." shape), then end it so
         # the checkpoint and throughput summaries land on their own lines. The
@@ -1266,6 +1307,159 @@ def _finite_dataset_steps(dataset, split_name):
             f"got {steps}"
         )
     return steps
+
+
+def _log_run_header(
+    logger,
+    config,
+    model,
+    run_dir,
+    runtime_info,
+    train_steps,
+    validation_steps,
+    sample_count,
+    initial_epochs,
+    total_epochs,
+    class_weights=None,
+    class_names=None,
+):
+    """Print the compact, auditable summary of what this run will actually do."""
+    model_config = config.get("model", {})
+    training_config = config.get("training", {})
+    performance = config.get("performance", {})
+    optimizer_config = config.get("optimizer", {})
+    loss_config = config.get("loss", {})
+    dataset_config = config.get("dataset", {})
+
+    trainable = sum(np.prod(weight.shape) for weight in model.trainable_weights)
+    total = model.count_params()
+    input_shape = tuple(model_config.get("input_shape", ()))
+
+    logger.info("-" * 50)
+    logger.info(
+        "Run: %s @ %s | dir: %s",
+        model_config.get("architecture", "unknown"),
+        os.path.basename(run_dir),
+        run_dir,
+    )
+    logger.info(
+        "Model: %s params (%s trainable), input %s, dropout %s, head %s",
+        f"{int(total):,}",
+        f"{int(trainable):,}",
+        "x".join(str(int(value)) for value in input_shape) if input_shape else "?",
+        model_config.get("dropout_rate"),
+        model_config.get("head_units", "-"),
+    )
+    logger.info(
+        "Runtime: policy=%s, replicas=%d, GPUs=%d, batch=%s, "
+        "steps_per_execution=%s, jit_compile=%s",
+        keras.mixed_precision.global_policy().name,
+        runtime_info.get("num_replicas", 1),
+        len(tf.config.list_physical_devices("GPU")),
+        dataset_config.get("batch_size"),
+        performance.get("steps_per_execution"),
+        performance.get("jit_compile"),
+    )
+    fine_tune_lr = training_config.get("fine_tune_learning_rate")
+    logger.info(
+        "Schedule: %d frozen + %d fine-tune epochs, lr %s -> %s, loss %s, metrics %s",
+        initial_epochs,
+        max(int(total_epochs) - int(initial_epochs), 0),
+        optimizer_config.get("learning_rate"),
+        fine_tune_lr if fine_tune_lr is not None else optimizer_config.get("learning_rate"),
+        loss_config.get("name", "categorical_crossentropy"),
+        config.get("metrics", ["accuracy"]),
+    )
+    logger.info(
+        "Steps: train=%d, val=%d (%s samples/epoch)",
+        train_steps,
+        validation_steps,
+        f"{int(sample_count):,}" if sample_count else "?",
+    )
+    if class_weights:
+        weights = list(class_weights.values())
+        logger.info(
+            "Class weights: n=%d, applied range [%.4f, %.4f]",
+            len(weights),
+            min(weights),
+            max(weights),
+        )
+    elif class_names is not None:
+        logger.info("Class weights: none applied to this fit")
+    logger.info("-" * 50)
+
+
+def _log_run_summary(logger, history, selected_phase, selected_loss, elapsed_seconds, artifacts):
+    """Print the end-of-run block: winner weights, timing, throughput, artifacts."""
+    history = history or {}
+    epochs = len(history.get("loss", []))
+
+    def _best(key):
+        values = history.get(key) or []
+        pairs = [(float(value), index + 1) for index, value in enumerate(values)]
+        pairs = [pair for pair in pairs if np.isfinite(pair[0])]
+        if not pairs:
+            return None, None
+        value, epoch = min(pairs) if "loss" in key else max(pairs)
+        return value, epoch
+
+    best_val_loss, best_epoch = _best("val_loss")
+    best_val_accuracy, _ = _best("val_accuracy")
+    throughputs = [
+        float(value)
+        for value in (history.get("examples_per_second") or [])
+        if np.isfinite(float(value))
+    ]
+    # Epoch 1 includes dataset cache fill and graph tracing, so it is excluded
+    # from the steady-state figure and reported separately.
+    steady = throughputs[1:] if len(throughputs) > 1 else throughputs
+
+    logger.info("-" * 50)
+    details = [f"weights={selected_phase}"]
+    if best_val_loss is not None:
+        details.append(f"best_epoch={best_epoch}")
+        details.append(f"val_loss={best_val_loss:.4f}")
+    if best_val_accuracy is not None:
+        details.append(f"val_accuracy={best_val_accuracy:.4f}")
+    details.append(f"epochs={epochs}")
+    details.append(f"duration={_format_duration(elapsed_seconds)}")
+    if steady:
+        details.append(f"steady_throughput={float(np.median(steady)):.1f} img/s")
+    if throughputs:
+        details.append(f"first_epoch={throughputs[0]:.1f} img/s (includes cache warm-up)")
+    logger.info("Best: %s", ", ".join(details))
+    if selected_loss is not None and np.isfinite(float(selected_loss)):
+        logger.info("Selected val_loss: %.6f", float(selected_loss))
+    for name, path in (artifacts or {}).items():
+        logger.info("Artifact %s: %s", name, path)
+    logger.info("-" * 50)
+
+
+def _summarize_split_counts(split_counts, estimated=False):
+    """Render split totals as one readable line instead of a raw dict dump."""
+    parts = []
+    for split_name in ("train", "val", "test"):
+        counts = split_counts.get(split_name) or {}
+        total = counts.get("total")
+        if total is None:
+            parts.append(f"{split_name}=?")
+        else:
+            parts.append(f"{split_name}={int(total)}")
+    class_totals = []
+    for split_name in ("train", "val", "test"):
+        classes = (split_counts.get(split_name) or {}).get("classes") or {}
+        values = [value for value in classes.values() if value is not None]
+        if values:
+            class_totals.append((min(values), max(values)))
+    summary = "Split totals: " + ", ".join(parts)
+    if class_totals:
+        summary += (
+            f" (per-class {min(low for low, _ in class_totals)}-"
+            f"{max(high for _, high in class_totals)}; details in run_metadata.json)"
+        )
+    if estimated:
+        summary += " [estimated: validation/test per-class counts are unknown]"
+    return summary
 
 
 def _estimated_split_counts(train_steps, val_steps, batch_size, class_names=None):
@@ -1401,7 +1595,7 @@ def _maybe_loss_scale_optimizer(optimizer):
 
 
 def _prefetch_to_device_for_single_replica(train_ds, val_ds, strategy, logger):
-    """Use experimental GPU prefetch only outside mirrored training."""
+    """Use experimental GPU prefetch only outside mirrored, GPU-backed training."""
     replica_count = int(strategy.num_replicas_in_sync)
     if replica_count > 1:
         logger.info(
@@ -1409,6 +1603,13 @@ def _prefetch_to_device_for_single_replica(train_ds, val_ds, strategy, logger):
             "using regular dataset prefetch",
             replica_count,
         )
+        return train_ds, val_ds
+
+    # prefetch_to_device("/gpu:0") succeeds on a CPU-only host but pins buffered
+    # batches into host memory, so only apply it when a GPU actually exists.
+    gpus = tf.config.list_physical_devices("GPU")
+    if not gpus:
+        logger.info("No GPU detected; keeping host prefetch for the dataset pipeline")
         return train_ds, val_ds
 
     try:
@@ -1541,7 +1742,10 @@ def train_model(config_path="config.yaml"):
     )
     if config.get("performance", {}).get("finite_batch_check", False):
         validate_dataset_batch(train_ds, logger)
-    train_ds = train_ds.repeat()
+    # repeat() is applied to the finite dataset (steps were measured above), so
+    # prefetch here survives the epoch boundary instead of being torn down and
+    # rebuilt on every epoch boundary.
+    train_ds = train_ds.repeat().prefetch(tf.data.AUTOTUNE)
 
     # Device prefetch is not compatible with the serialized dataset graph used
     # by MirroredStrategy. load_dataset already adds ordinary tf.data prefetch.
@@ -1557,7 +1761,6 @@ def train_model(config_path="config.yaml"):
     )
 
     logger.info(f"Found {len(class_names)} classes")
-    logger.info(f"Classes: {class_names}")
 
     if len(class_names) != config["model"]["num_classes"]:
         raise ValueError(
@@ -1584,7 +1787,7 @@ def train_model(config_path="config.yaml"):
                 "allow_cross_split_duplicates", False
             ),
         )
-        logger.info("Validated split counts: %s", split_counts)
+        logger.info("%s", _summarize_split_counts(split_counts))
         for split_name in ("val", "test"):
             unsupported = sorted(
                 class_name
@@ -1611,11 +1814,7 @@ def train_model(config_path="config.yaml"):
             "total": sum(training_class_counts.values()),
             "classes": training_class_counts,
         }
-        logger.info(
-            "Estimated split totals (validation/test per-class counts are unknown; "
-            "run evaluation after training): %s",
-            split_counts,
-        )
+        logger.info("%s", _summarize_split_counts(split_counts, estimated=True))
 
     # Compute weights only for explicitly enabled imbalance-focused runs.
     # Fast baseline runs do not construct class-count lists or weight metadata.
@@ -1623,16 +1822,13 @@ def train_model(config_path="config.yaml"):
     raw_class_weights = None
     if weight_config.get("enabled", False):
         train_class_counts = [training_class_counts[class_name] for class_name in class_names]
-        logger.info("Computing raw class weights from validated training counts...")
         raw_class_weights = compute_class_weights_from_counts(train_class_counts)
-        logger.info("Computed raw class weights.")
-        logger.info("Computing applied class weights from validated training counts...")
         class_weights = compute_class_weights_from_counts(
             train_class_counts,
             max_weight=weight_config.get("max_weight"),
             normalize=weight_config.get("normalize", True),
         )
-        logger.info("Computed applied class weights.")
+        raw_values = list(raw_class_weights.values()) if raw_class_weights else []
         if class_weights:
             applied_values = list(class_weights.values())
             imbalance_ratio = (
@@ -1654,10 +1850,15 @@ def train_model(config_path="config.yaml"):
                 class_weights = None
             if class_weights:
                 logger.info(
-                    "Applying fit-time class weights: classes=%d, range=[%.4f, %.4f]",
+                    "Class weights: n=%d, raw=[%.4f, %.4f], applied=[%.4f, %.4f] "
+                    "(max_weight=%s, normalize=%s)",
                     len(applied_values),
+                    min(raw_values) if raw_values else float("nan"),
+                    max(raw_values) if raw_values else float("nan"),
                     min(applied_values),
                     max(applied_values),
+                    weight_config.get("max_weight"),
+                    weight_config.get("normalize", True),
                 )
     else:
         logger.info("Class weighting is disabled; skipping class-weight computation.")
@@ -1764,7 +1965,24 @@ def train_model(config_path="config.yaml"):
         fit_val_steps,
         diagnostic_run=diagnostic_run,
         logger=logger,
+        sample_count=fit_sample_count,
     )
+
+    _log_run_header(
+        logger,
+        config,
+        model,
+        run_dir,
+        runtime_info,
+        fit_train_steps,
+        fit_val_steps,
+        fit_sample_count,
+        initial_epochs,
+        total_epochs,
+        class_weights=class_weights,
+        class_names=class_names,
+    )
+    training_started_at = time.perf_counter()
 
     # Phase 1 either warms up the classifier head or trains a randomly
     # initialized backbone end-to-end, depending on freeze_base.
@@ -1789,6 +2007,11 @@ def train_model(config_path="config.yaml"):
 
     # Phase 2: Fine-tune with unfrozen layers
     history2 = None
+    # Defaults for the single-phase path so the end-of-run summary below always
+    # has a defined selection to report.
+    selected_phase = "phase_1"
+    selected_loss = getattr(phase1_best, "best", None)
+    selected_checkpoint = None
     if freeze_base and fine_tuning_enabled and initial_epochs < total_epochs:
         logger.info("\n" + "=" * 50)
         logger.info("Phase 2: Fine-tuning (unfreezing base layers)")
@@ -1829,6 +2052,7 @@ def train_model(config_path="config.yaml"):
             fit_val_steps,
             diagnostic_run=diagnostic_run,
             logger=logger,
+            sample_count=fit_sample_count,
         )
 
         # Continue training
@@ -1864,6 +2088,14 @@ def train_model(config_path="config.yaml"):
     history1.history = merged_history
 
     if _should_skip_final_export(config):
+        _log_run_summary(
+            logger,
+            merged_history,
+            selected_phase,
+            selected_loss,
+            time.perf_counter() - training_started_at,
+            artifacts={},
+        )
         logger.info("Diagnostic run complete; skipping final model exports.")
         return model, history1
 
@@ -1872,13 +2104,18 @@ def train_model(config_path="config.yaml"):
     save_dir = config.get("export", {}).get("save_dir", "../models")
     model_name = config.get("model", {}).get("architecture", "model")
     timestamp = run_timestamp
+    artifacts = {}
 
     # Save in multiple formats
     is_lite0_arch = model_name.lower() in ["efficientnet", "efficientnet_lite0"]
 
     if "keras" in config["export"]["formats"]:
         # Native Keras format: no HDF5 legacy warning and no config loss.
-        _save_native_keras_model(model, save_dir, model_name, timestamp, logger)
+        keras_path = _save_native_keras_model(
+            model, save_dir, model_name, timestamp, logger
+        )
+        if keras_path:
+            artifacts["keras"] = keras_path
 
     if "h5" in config["export"]["formats"]:
         if is_lite0_arch:
@@ -1891,6 +2128,7 @@ def train_model(config_path="config.yaml"):
             os.makedirs(os.path.dirname(h5_path), exist_ok=True)
             model.save(h5_path)
             logger.info(f"Saved H5 model: {h5_path}")
+            artifacts["h5"] = h5_path
 
     if "saved_model" in config["export"]["formats"]:
         sm_path = os.path.join(save_dir, model_name, f"saved_model_{timestamp}")
@@ -1902,6 +2140,7 @@ def train_model(config_path="config.yaml"):
             # Legacy Keras 2 behavior.
             model.save(sm_path)
         logger.info(f"Saved SavedModel: {sm_path}")
+        artifacts["saved_model"] = sm_path
 
     if "tflite" in config["export"]["formats"]:
         tflite_path = os.path.join(
@@ -1916,10 +2155,12 @@ def train_model(config_path="config.yaml"):
         with open(tflite_path, "wb") as f:
             f.write(tflite_model)
         logger.info(f"Saved TFLite model: {tflite_path}")
+        artifacts["tflite"] = tflite_path
 
     class_names_path = os.path.join(save_dir, model_name, "class_names.txt")
     save_class_names(class_names, class_names_path)
     logger.info(f"Saved class names: {class_names_path}")
+    artifacts["class_names"] = class_names_path
 
     if config.get("export", {}).get("sync_flutter_labels", False):
         flutter_labels_path = os.path.normpath(
@@ -1935,7 +2176,19 @@ def train_model(config_path="config.yaml"):
         if os.path.exists(os.path.dirname(flutter_labels_path)):
             save_class_names(class_names, flutter_labels_path)
             logger.info(f"Synchronized Flutter labels: {flutter_labels_path}")
+            artifacts["flutter_labels"] = flutter_labels_path
 
+    if selected_checkpoint:
+        artifacts["winner_checkpoint"] = selected_checkpoint
+
+    _log_run_summary(
+        logger,
+        merged_history,
+        selected_phase,
+        selected_loss,
+        time.perf_counter() - training_started_at,
+        artifacts=artifacts,
+    )
     logger.info("Training completed successfully!")
 
     return model, history1
@@ -1968,8 +2221,12 @@ def main():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     # Check GPU availability
-    print("GPU Available:", tf.config.list_physical_devices("GPU"))
-    print("Using config:", config_path)
+    devices = tf.config.list_physical_devices("GPU")
+    print(
+        f"Device: {'GPU' if devices else 'CPU'} "
+        f"({len(devices)} visible), config: {config_path}",
+        flush=True,
+    )
 
     # Train model
     train_model(config_path)

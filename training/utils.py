@@ -310,6 +310,65 @@ def _estimate_dataset_cache_gb(
     )
 
 
+class _RepeatedLineFilter(logging.Filter):
+    """Drop identical log records that arrive within a short window.
+
+    TensorFlow and NCCL re-emit the same startup notice several times per run
+    (e.g. ``Collective all_reduce tensors: ...``), which buries the training
+    milestones. The filter keeps the first occurrence and suppresses verbatim
+    repeats so the run log stays readable.
+    """
+
+    _MAX_TRACKED = 512
+
+    def __init__(self, window_seconds=30.0):
+        super().__init__()
+        self.window_seconds = max(0.0, float(window_seconds))
+        self._last_seen = {}
+
+    def filter(self, record):
+        if self.window_seconds <= 0:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:  # pragma: no cover - defensive against bad args
+            return True
+        key = (record.levelno, record.name, message)
+        now = time.monotonic()
+        previous = self._last_seen.get(key)
+        if previous is not None and (now - previous) < self.window_seconds:
+            self._last_seen[key] = now
+            return False
+        if len(self._last_seen) >= self._MAX_TRACKED:
+            self._last_seen.clear()
+        self._last_seen[key] = now
+        return True
+
+
+def _quiet_tensorflow_logging(level_name="WARNING"):
+    """Align TensorFlow's Python-side logger with the C++ absl verbosity."""
+    try:
+        tf_level = getattr(logging, str(level_name).upper())
+    except (AttributeError, TypeError):
+        tf_level = logging.WARNING
+    for name in ("tensorflow", "absl"):
+        logging.getLogger(name).setLevel(tf_level)
+    try:
+        tf.get_logger().setLevel(tf_level)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+    # TensorFlow attaches its own stderr handler to the "tensorflow" logger while
+    # leaving it propagating to root, so every Python-side warning is formatted
+    # twice: once as absl's undated "WARNING:tensorflow:..." and once by the root
+    # handler. Dropping TensorFlow's private handler leaves a single record that
+    # root formats like the rest of the run and that the dedupe filter can see.
+    tf_logger = logging.getLogger("tensorflow")
+    for handler in list(tf_logger.handlers):
+        if isinstance(handler, logging.StreamHandler):
+            tf_logger.removeHandler(handler)
+    tf_logger.propagate = True
+
+
 def setup_logging(config):
     """Setup logging configuration"""
     log_config = config.get("logging", {})
@@ -321,7 +380,23 @@ def setup_logging(config):
         format=format_str,
     )
 
+    # TensorFlow mirrors every C++ absl message through Python logging, so an
+    # active INFO root logger prints each notice twice. Keep framework chatter
+    # out of the training narrative; raise logging.tensorflow_level to debug.
+    _quiet_tensorflow_logging(log_config.get("tensorflow_level", "WARNING"))
+
+    dedupe_window = log_config.get("dedupe_window_seconds", 30.0)
+    try:
+        dedupe_window = float(dedupe_window)
+    except (TypeError, ValueError):
+        dedupe_window = 30.0
+
     logger = logging.getLogger(__name__)
+
+    if dedupe_window > 0:
+        repeat_filter = _RepeatedLineFilter(dedupe_window)
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(repeat_filter)
 
     # Save to file if enabled
     if log_config.get("save_to_file", False):
@@ -331,6 +406,8 @@ def setup_logging(config):
             os.makedirs(log_dir, exist_ok=True)
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(logging.Formatter(format_str))
+        if dedupe_window > 0:
+            file_handler.addFilter(_RepeatedLineFilter(dedupe_window))
         logger.addHandler(file_handler)
 
     return logger
@@ -466,7 +543,15 @@ def _available_disk_gb(path):
         return None
 
 
-def _resolve_cache_mode(
+def _cardinality_int(dataset):
+    """Return a dataset's cardinality as a plain int, or ``None`` if unknown."""
+    try:
+        return int(tf.data.experimental.cardinality(dataset).numpy())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _resolve_cache_record(
     cache_mode,
     train_ds,
     val_ds,
@@ -475,10 +560,24 @@ def _resolve_cache_mode(
     memory_limit_gb=8.0,
     cache_dtype="float32",
 ):
-    """Resolve ``auto`` caching without risking an uncontrolled RAM cache."""
+    """Resolve the dataset cache mode and explain the decision.
+
+    Returns a dict with ``mode``, ``requested``, ``estimate_gb``, ``limit_gb``,
+    ``available_gb`` and ``reason`` so the run log and the run metadata can
+    document why a run cached to RAM, to disk, or not at all.
+    """
     requested = _normalize_cache_mode(cache_mode)
-    if requested not in {"auto", "disk"}:
-        return requested
+    record = {
+        "requested": requested,
+        "estimate_gb": None,
+        "limit_gb": float(memory_limit_gb),
+        "available_gb": None,
+        "reason": "",
+    }
+    if requested not in {"auto", "disk", "memory"}:
+        record["mode"] = requested
+        record["reason"] = "explicitly disabled"
+        return record
 
     train_cardinality = tf.data.experimental.cardinality(train_ds)
     val_cardinality = tf.data.experimental.cardinality(val_ds)
@@ -505,18 +604,31 @@ def _resolve_cache_mode(
             label_count=label_count or 1,
             label_dtype=label_spec.dtype,
         )
-
     available_gb = _available_host_memory_gb()
+    record["estimate_gb"] = required_gb if required_gb > 0 else None
+    record["available_gb"] = available_gb
+    limit_gb = float(memory_limit_gb)
+
     # Available RAM is not the same as safe cache capacity: TensorFlow,
     # multiprocessing workers, model weights, and augmentation need the rest.
     # Keep large hosted datasets on disk even when the VM reports abundant RAM.
-    if requested == "auto" and (
-        available_gb is not None
-        and required_gb > 0
-        and required_gb <= float(memory_limit_gb)
-        and available_gb >= required_gb * 1.5
-    ):
-        return "memory"
+    memory_fits = (
+        required_gb > 0
+        and required_gb <= limit_gb
+        and (available_gb is None or available_gb >= required_gb * 1.5)
+    )
+
+    if requested == "memory" and not memory_fits:
+        # An explicit memory request used to be honoured verbatim, which could
+        # over-commit RAM silently. Fall through to disk/none instead and let
+        # the caller warn with the concrete numbers.
+        record["reason"] = "requested memory but the estimate exceeds the safe limit"
+    elif requested in {"auto", "memory"} and memory_fits:
+        record["mode"] = "memory"
+        record["reason"] = "estimate fits cache_memory_limit_gb and available RAM"
+        return record
+    elif requested == "memory":
+        record["reason"] = "memory request rejected"
 
     # Disk caching is slower than RAM but avoids killing hosted runtimes when
     # the dataset is too large for a safe in-memory cache. Do not select it if
@@ -528,11 +640,44 @@ def _resolve_cache_mode(
                 if required_gb <= 0 or (
                     free_gb is not None and free_gb >= required_gb * 1.25
                 ):
-                    return "disk"
+                    record["mode"] = "disk"
+                    disk_reason = f"cached to {candidate}"
+                    # Keep the memory rejection so the log explains the full decision.
+                    record["reason"] = (
+                        f"{record['reason']}; {disk_reason}"
+                        if record["reason"]
+                        else disk_reason
+                    )
+                    record["disk_path"] = candidate
+                    return record
             except OSError:
                 continue
 
-    return "none"
+    record["mode"] = "none"
+    if not record["reason"]:
+        record["reason"] = "no cache target with enough free space"
+    return record
+
+
+def _resolve_cache_mode(
+    cache_mode,
+    train_ds,
+    val_ds,
+    image_size,
+    batch_size,
+    memory_limit_gb=8.0,
+    cache_dtype="float32",
+):
+    """Return just the resolved cache mode for callers that need a string."""
+    return _resolve_cache_record(
+        cache_mode,
+        train_ds,
+        val_ds,
+        image_size,
+        batch_size,
+        memory_limit_gb=memory_limit_gb,
+        cache_dtype=cache_dtype,
+    )["mode"]
 
 
 def load_dataset(
@@ -621,7 +766,7 @@ def load_dataset(
     options.experimental_deterministic = bool(deterministic)
 
     cache_dtype = _normalize_cache_dtype(cache_dtype)
-    cache_mode = _resolve_cache_mode(
+    cache_record = _resolve_cache_record(
         cache_mode,
         train_ds,
         val_ds,
@@ -630,7 +775,21 @@ def load_dataset(
         memory_limit_gb=cache_memory_limit_gb,
         cache_dtype=cache_dtype,
     )
+    cache_mode = cache_record["mode"]
     logger = logging.getLogger(__name__)
+    if cache_record["requested"] == "memory" and cache_mode != "memory":
+        logger.warning(
+            "dataset.cache_mode=memory needs ~%s GB but cache_memory_limit_gb=%.1f; "
+            "using %s instead (%s).",
+            (
+                f"{cache_record['estimate_gb']:.1f}"
+                if cache_record["estimate_gb"]
+                else "an unknown amount of"
+            ),
+            cache_record["limit_gb"],
+            cache_mode,
+            cache_record["reason"],
+        )
 
     # Cache decoded/resized batches before augmentation so augmentation remains
     # stochastic on every epoch while image decoding happens only once. Cast
@@ -707,20 +866,28 @@ def load_dataset(
 
             def _apply_class_aware_augmentation(x, y):
                 images = tf.cast(x, tf.float32)
-                # Fast path: apply both augmentations, blend with mask.
-                # Avoids expensive tf.gather / tf.tensor_scatter_nd_update / tf.cond.
-                baseline_images = augmentation(images, training=True)
                 label_indices = tf.argmax(y, axis=-1, output_type=tf.int32)
                 is_minority = tf.reduce_any(
                     tf.equal(tf.expand_dims(label_indices, axis=-1), minority_ids),
                     axis=-1,
                 )
-                # Apply minority augmentation to all images (lightweight layers)
-                minority_images = minority_augmentation(images, training=True)
-                # Blend: where minority, use stronger augmentation, else baseline
-                # Cast mask to match images dtype (float16 under mixed precision)
-                mask = tf.reshape(tf.cast(is_minority, baseline_images.dtype), [-1, 1, 1, 1])
-                result = baseline_images * (1.0 - mask) + minority_images * mask
+                baseline_images = augmentation(images, training=True)
+
+                def _blend_minority():
+                    minority_images = minority_augmentation(images, training=True)
+                    # Cast mask to match images dtype (float16 under mixed precision)
+                    mask = tf.reshape(
+                        tf.cast(is_minority, baseline_images.dtype), [-1, 1, 1, 1]
+                    )
+                    return baseline_images * (1.0 - mask) + minority_images * mask
+
+                # The minority classes hold a handful of images out of tens of
+                # thousands, so almost every batch is pure-majority. Running the
+                # minority stack unconditionally would double augmentation work
+                # for a blend that resolves to the baseline images anyway.
+                result = tf.cond(
+                    tf.reduce_any(is_minority), _blend_minority, lambda: baseline_images
+                )
                 return result, y
 
             train_ds = train_ds.map(
@@ -748,16 +915,44 @@ def load_dataset(
     train_ds = train_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.with_options(options).prefetch(buffer_size=AUTOTUNE)
 
+    if cache_mode in {"disk", "memory"}:
+        cache_summary = f"{cache_mode} ({cache_dtype}"
+        if cache_record["estimate_gb"]:
+            cache_summary += f", est {cache_record['estimate_gb']:.1f} GB"
+            cache_summary += f", limit {cache_record['limit_gb']:.1f} GB"
+        cache_summary += ")"
+    else:
+        cache_summary = "none"
+
+    train_steps = _cardinality_int(train_ds)
+    val_steps = _cardinality_int(val_ds)
     logger.info(
-        "Dataset pipeline: batch_size=%d, train_steps=%s, val_steps=%s, "
-        "cache_mode=%s, cache_dtype=%s, shuffle_batch_buffer=%d",
+        "Dataset pipeline: batch=%d, steps train/val=%s/%s, cache=%s, "
+        "dtype=%s, shuffle buffer=%s examples",
         batch_size,
-        train_ds.cardinality(),
-        val_ds.cardinality(),
-        cache_mode,
+        train_steps if train_steps is not None else "?",
+        val_steps if val_steps is not None else "?",
+        cache_summary,
         cache_dtype if cache_mode in {"disk", "memory"} else "float32 (cache inactive)",
-        max(1, int(np.ceil(shuffle_buffer / batch_size))) if shuffle_buffer else 0,
+        int(shuffle_buffer) if shuffle_buffer else 0,
     )
+
+    # The shuffle buffer holds individual examples, so a fixed 1000-example
+    # buffer barely mixes a dataset of tens of thousands. Warn instead of
+    # silently changing the recipe.
+    if shuffle_buffer and train_steps and train_steps > 0:
+        train_examples = int(train_steps) * int(batch_size)
+        coverage = float(shuffle_buffer) / float(train_examples)
+        if coverage < 0.05:
+            logger.warning(
+                "dataset.shuffle_buffer=%d covers only %.1f%% of the ~%d training "
+                "examples; per-epoch mixing is close to sequential. Consider "
+                ">= %d.",
+                int(shuffle_buffer),
+                coverage * 100.0,
+                train_examples,
+                max(int(train_examples * 0.05), int(shuffle_buffer)),
+            )
 
     return train_ds, val_ds, class_names
 

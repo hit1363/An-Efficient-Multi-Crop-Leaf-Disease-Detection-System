@@ -143,8 +143,9 @@ export:
 # Evaluation Metrics
 metrics:
   - "accuracy"
-  - "precision"
-  - "recall"
+  # Top-1 precision/recall duplicate accuracy in a single-label multiclass fit;
+  # build_metrics drops them with a warning. Macro/per-class scores come from
+  # evaluate.py, so only add metrics that carry new information here.
   - "auc"
 
 # Reproducibility

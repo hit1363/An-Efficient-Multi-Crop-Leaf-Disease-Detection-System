@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 import logging
 import os
@@ -402,6 +403,9 @@ def test_device_prefetch_remains_enabled_for_single_replica(monkeypatch):
         "prefetch_to_device",
         lambda device: device,
     )
+    monkeypatch.setattr(
+        tf.config, "list_physical_devices", lambda device_type: [object()]
+    )
 
     result = _prefetch_to_device_for_single_replica(
         train_ds,
@@ -413,6 +417,40 @@ def test_device_prefetch_remains_enabled_for_single_replica(monkeypatch):
     assert result == (train_ds, val_ds)
     assert train_ds.applied == ["/gpu:0"]
     assert val_ds.applied == ["/gpu:0"]
+
+
+def test_device_prefetch_stays_on_host_without_a_gpu(monkeypatch, caplog):
+    """prefetch_to_device('/gpu:0') applies on CPU-only hosts and pins batches in RAM."""
+
+    class Dataset:
+        def __init__(self):
+            self.applied = []
+
+        def apply(self, transformation):
+            self.applied.append(transformation)
+            return self
+
+    train_ds = Dataset()
+    val_ds = Dataset()
+    monkeypatch.setattr(
+        tf.data.experimental,
+        "prefetch_to_device",
+        lambda device: device,
+    )
+    monkeypatch.setattr(tf.config, "list_physical_devices", lambda device_type: [])
+    caplog.set_level(logging.INFO)
+
+    result = _prefetch_to_device_for_single_replica(
+        train_ds,
+        val_ds,
+        SimpleNamespace(num_replicas_in_sync=1),
+        logging.getLogger("test_prefetch"),
+    )
+
+    assert result == (train_ds, val_ds)
+    assert train_ds.applied == []
+    assert val_ds.applied == []
+    assert "No GPU detected" in caplog.text
 
 
 def test_diagnostic_step_caps_do_not_change_full_split_counts():
@@ -1759,3 +1797,301 @@ def test_checkpoint_can_be_scoped_to_a_run_directory(tmp_path):
         tmp_path / "runs" / "run-1" / "checkpoints" / "best_model.h5"
     )
     assert weights_only is False
+
+
+def test_summary_lines_are_consolidated_instead_of_raw_dumps():
+    from training.train import _summarize_split_counts
+
+    detailed = _summarize_split_counts(
+        {
+            "train": {"total": 22382, "classes": {"a": 350, "b": 2}},
+            "val": {"total": 4801, "classes": {"a": 75}},
+            "test": {"total": 4797, "classes": {}},
+        }
+    )
+    assert detailed.startswith("Split totals: train=22382, val=4801, test=4797")
+    assert "(per-class 2-350;" in detailed
+    assert "{" not in detailed
+
+    estimated = _summarize_split_counts(
+        {
+            "train": {"total": 22382, "classes": {}},
+            "val": {"total": 4801, "classes": {"a": None}},
+            "test": {"total": None, "classes": {}},
+        },
+        estimated=True,
+    )
+    assert estimated.startswith("Split totals: train=22382, val=4801, test=?")
+    assert "estimated" in estimated
+
+
+def test_run_header_and_summary_report_the_operational_facts():
+    from training.train import _log_run_header, _log_run_summary
+
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.InputLayer((4,)),
+            tf.keras.layers.Dense(2, activation="softmax"),
+        ]
+    )
+    config = {
+        "model": {
+            "architecture": "probe_net",
+            "input_shape": [192, 192, 3],
+            "dropout_rate": 0.3,
+            "head_units": [256, 128],
+        },
+        "training": {"fine_tune_learning_rate": 2e-5},
+        "performance": {"steps_per_execution": 32, "jit_compile": False},
+        "optimizer": {"learning_rate": 3e-4},
+        "loss": {"name": "categorical_crossentropy"},
+        "dataset": {"batch_size": 128},
+        "metrics": ["accuracy", "auc"],
+    }
+    records = []
+
+    class _Recorder:
+        def info(self, message, *args, **_kwargs):
+            records.append(message % args if args else message)
+
+    _log_run_header(
+        _Recorder(),
+        config,
+        model,
+        "/models/probe_net/runs/20261107_141805",
+        {"num_replicas": 2},
+        175,
+        38,
+        22382,
+        20,
+        30,
+        class_weights={"a": 0.95, "b": 5.0},
+    )
+    header = "\n".join(records)
+    assert "Run: probe_net @ 20261107_141805" in header
+    assert "input 192x192x3" in header
+    assert "replicas=2" in header
+    assert "20 frozen + 10 fine-tune epochs" in header
+    assert "train=175, val=38" in header
+    assert "22,382 samples/epoch" in header
+    assert "applied range [0.9500, 5.0000]" in header
+
+    records.clear()
+    _log_run_summary(
+        _Recorder(),
+        {
+            "loss": [4.3, 3.65, 3.01],
+            "val_loss": [3.95, 3.28, 2.85],
+            "val_accuracy": [0.19, 0.27, 0.35],
+            "examples_per_second": [50.3, 166.5, 162.6],
+        },
+        "phase_2",
+        2.84999,
+        3725.0,
+        {"saved_model": "/models/probe_net/saved_model_x"},
+    )
+    summary = "\n".join(records)
+    assert "weights=phase_2" in summary
+    assert "best_epoch=3" in summary
+    assert "steady_throughput=164.6 img/s" in summary
+    # Epoch 1 is reported separately because it includes cache warm-up.
+    assert "first_epoch=50.3 img/s" in summary
+    assert "Artifact saved_model: /models/probe_net/saved_model_x" in summary
+
+def test_repeated_log_lines_are_collapsed_within_the_window():
+    from training.utils import _RepeatedLineFilter
+
+    record = logging.LogRecord(
+        "tensorflow", logging.INFO, __file__, 1, "Collective all_reduce tensors", None, None
+    )
+    repeat_filter = _RepeatedLineFilter(window_seconds=30.0)
+
+    assert repeat_filter.filter(record) is True
+    assert repeat_filter.filter(record) is False
+
+    other = logging.LogRecord(
+        "tensorflow", logging.INFO, __file__, 1, "Reduce to CPU then broadcast", None, None
+    )
+    assert repeat_filter.filter(other) is True
+
+    # A disabled window must never drop anything.
+    passthrough = _RepeatedLineFilter(window_seconds=0)
+    assert passthrough.filter(record) is True
+    assert passthrough.filter(record) is True
+
+
+def test_transient_load_warnings_are_unaffected_by_the_repeat_filter():
+    from training.utils import _RepeatedLineFilter
+
+    repeat_filter = _RepeatedLineFilter(window_seconds=30.0)
+    record = logging.LogRecord(
+        "training.utils", logging.WARNING, __file__, 1, "GPU prefetch unavailable", None, None
+    )
+    assert repeat_filter.filter(record) is True
+
+
+def test_inline_progress_reports_single_line_with_lr_and_throughput(tmp_path):
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.InputLayer((4,)),
+            tf.keras.layers.Dense(2, activation="softmax"),
+        ]
+    )
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=3e-4),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    dataset = tf.data.Dataset.from_tensors(
+        (np.zeros((4, 4), dtype=np.float32), np.array([[1.0, 0.0]] * 4, dtype=np.float32))
+    ).batch(4)
+    stream = io.StringIO()
+    bar = InlineProgressBar(
+        train_steps=1, validation_steps=1, min_interval=0.0, stream=stream, samples=4
+    )
+    logger = EpochThroughputLogger(samples=4, log_mode="summary", progress_style="inline")
+
+    model.fit(
+        dataset,
+        validation_data=dataset,
+        epochs=1,
+        callbacks=[bar, logger],
+        verbose=0,
+    )
+
+    output = stream.getvalue()
+    # The bar repaints in place, so only the newline-terminated records are
+    # separate log lines; exactly one must be produced for the epoch.
+    assert output.count("\n") == 1
+    assert output.endswith("\n")
+    final_line = output.rstrip("\n").split("\r")[-1]
+    assert "[====================]" in final_line
+    assert "lr: 3.000e-04" in final_line
+    assert "examples_per_second:" in final_line
+
+def test_minority_augmentation_runs_only_when_the_batch_contains_a_minority_label(
+    tmp_path,
+):
+    """A NaN-emitting minority stack makes the tf.cond gate directly observable.
+
+    If the minority stack ran on a pure-majority batch, the zero mask would
+    still multiply its NaN output into the blend (NaN * 0 == NaN), so a clean
+    batch proves the branch was skipped rather than merely masked out.
+    """
+    for class_name in ("common", "rare"):
+        (tmp_path / "train" / class_name).mkdir(parents=True)
+        (tmp_path / "val" / class_name).mkdir(parents=True)
+    image = tf.zeros((4, 4, 3), dtype=tf.uint8)
+    for split in ("train", "val"):
+        for class_name in ("common", "rare"):
+            tf.io.write_file(
+                str(tmp_path / split / class_name / "sample.png"),
+                tf.io.encode_png(image),
+            )
+
+    baseline = tf.keras.layers.Lambda(lambda x: x + 1.0)
+    minority = tf.keras.layers.Lambda(lambda x: x + 10.0)
+
+    # Minority label 0 is present in the batch, so the minority stack must run
+    # and replace only the minority image of the blend.
+    train_ds, _val_ds, class_names = load_dataset(
+        tmp_path / "train",
+        tmp_path / "val",
+        batch_size=2,
+        image_size=(4, 4),
+        augmentation=baseline,
+        minority_augmentation=minority,
+        minority_class_indices=[0],
+        shuffle_buffer=0,
+        cache_mode="memory",
+        cache_dtype="float32",
+    )
+    batch_images, batch_labels = next(iter(train_ds))
+    labels = [int(label) for label in tf.argmax(batch_labels, axis=-1).numpy()]
+    values_by_label = {
+        label: float(tf.reduce_mean(batch_images[index]).numpy())
+        for index, label in enumerate(labels)
+    }
+    assert class_names == ["common", "rare"]
+    assert values_by_label == {0: 10.0, 1: 1.0}
+
+
+def test_minority_augmentation_is_skipped_for_pure_majority_batches(tmp_path):
+    for class_name in ("common", "rare"):
+        (tmp_path / "train" / class_name).mkdir(parents=True)
+        (tmp_path / "val" / class_name).mkdir(parents=True)
+    # image_dataset_from_directory yields classes in name order, so a 4/1 split
+    # puts four "common" images first and the whole first batch is majority-only.
+    for index in range(4):
+        tf.io.write_file(
+            str(tmp_path / "train" / "common" / f"sample{index}.png"),
+            tf.io.encode_png(tf.zeros((4, 4, 3), dtype=tf.uint8)),
+        )
+    tf.io.write_file(
+        str(tmp_path / "train" / "rare" / "sample.png"),
+        tf.io.encode_png(tf.zeros((4, 4, 3), dtype=tf.uint8)),
+    )
+    for class_name in ("common", "rare"):
+        tf.io.write_file(
+            str(tmp_path / "val" / class_name / "sample.png"),
+            tf.io.encode_png(tf.zeros((4, 4, 3), dtype=tf.uint8)),
+        )
+
+    baseline = tf.keras.layers.Lambda(lambda x: x + 1.0)
+    minority = tf.keras.layers.Lambda(lambda x: x * np.nan)
+
+    train_ds, _val_ds, _class_names = load_dataset(
+        tmp_path / "train",
+        tmp_path / "val",
+        batch_size=2,
+        image_size=(4, 4),
+        augmentation=baseline,
+        minority_augmentation=minority,
+        minority_class_indices=[1],
+        shuffle_buffer=0,
+        cache_mode="memory",
+        cache_dtype="float32",
+    )
+
+    batch_images, batch_labels = next(iter(train_ds))
+    labels = [int(label) for label in tf.argmax(batch_labels, axis=-1).numpy()]
+
+    # No minority image is in this batch, so no NaN may leak into the blend.
+    assert not np.isnan(batch_images.numpy()).any()
+    assert labels == [0, 0]
+    np.testing.assert_allclose(batch_images.numpy(), 1.0, rtol=1e-6, atol=1e-6)
+
+
+def test_cache_record_explains_the_decision(monkeypatch):
+    from training.utils import _resolve_cache_record
+
+    dataset = tf.data.Dataset.from_tensors(
+        (tf.zeros((2, 4, 4, 3)), tf.zeros((2, 3)))
+    ).batch(2)
+    monkeypatch.setattr(
+        "training.utils._available_host_memory_gb", lambda: 64.0
+    )
+    monkeypatch.setattr("training.utils._available_disk_gb", lambda _path: 200.0)
+
+    record = _resolve_cache_record(
+        "auto", dataset, dataset, (4, 4), 2, memory_limit_gb=8.0, cache_dtype="float16"
+    )
+    assert record["mode"] == "memory"
+    assert record["requested"] == "auto"
+    assert record["limit_gb"] == 8.0
+    assert record["estimate_gb"] >= 0
+    assert record["reason"]
+
+    # An explicit memory request that cannot fit must degrade instead of
+    # silently claiming a cache mode the run cannot afford.
+    oversized = _resolve_cache_record(
+        "memory", dataset, dataset, (4, 4), 2, memory_limit_gb=1e-9, cache_dtype="float32"
+    )
+    assert oversized["mode"] != "memory"
+    assert "exceeds" in oversized["reason"]
+
+    disabled = _resolve_cache_record(
+        "none", dataset, dataset, (4, 4), 2, memory_limit_gb=8.0
+    )
+    assert disabled["mode"] == "none"
+    assert disabled["reason"] == "explicitly disabled"
