@@ -209,11 +209,47 @@ def load_test_dataset(
     return test_ds, class_names
 
 
+def _flip_averaged_predictions(model, images, predictions):
+    """Average the softmax of each image with the softmax of its mirror.
+
+    Horizontal flip is label-preserving for leaves, so averaging the two views
+    cancels orientation-sensitive misses. Kept as a helper so the arithmetic is
+    testable without running a full evaluation.
+    """
+    flipped = tf.image.flip_left_right(images)
+    flipped_predictions = model.predict(flipped, verbose=0)
+    if np.shape(flipped_predictions) != np.shape(predictions):
+        raise ValueError(
+            "Flip TTA changed the prediction shape: "
+            f"{np.shape(predictions)} -> {np.shape(flipped_predictions)}"
+        )
+    return (predictions + flipped_predictions) / 2.0
+
+
+def _resolve_tta_mode(tta, config):
+    """Resolve the TTA mode from an explicit argument, else ``evaluation.tta``.
+
+    An explicit argument wins over the config so a run can re-score an
+    already-exported model differently without editing the config it was
+    trained from. A config with no ``evaluation`` block (every config before
+    v3) keeps the historical behaviour of no augmentation.
+    """
+    requested = tta
+    if requested is None:
+        requested = (config.get("evaluation") or {}).get("tta", "none")
+    mode = str(requested).strip().lower()
+    if mode not in {"none", "flip"}:
+        raise ValueError(
+            f"Unsupported tta mode {requested!r}; expected 'none' or 'flip'"
+        )
+    return mode
+
+
 def evaluate_model(
     model_path,
     config_path="config.yaml",
     results_dir=None,
-    tta="none",
+    tta=None,
 ):
     """
     Evaluate trained model on test set
@@ -222,19 +258,22 @@ def evaluate_model(
         model_path: Path to trained model (.h5 or SavedModel)
         config_path: Path to configuration file
         results_dir: Directory for evaluation artifacts
-        tta: "none" (default) or "flip" — average softmax outputs of the
-            image and its horizontal mirror before argmax. Zero-cost boost
-            for fine-grained classes; recorded in metrics_summary.json.
+        tta: "none" or "flip" — average softmax outputs of the image and its
+            horizontal mirror before argmax. Zero-cost boost for fine-grained
+            classes; recorded in metrics_summary.json. None (the default) defers
+            to ``evaluation.tta`` in the config, so the notebooks and the CLI
+            both inherit the recipe without repeating a flag per call site.
     """
-    if str(tta).strip().lower() not in {"none", "flip"}:
-        raise ValueError(f"Unsupported tta mode {tta!r}; expected 'none' or 'flip'")
-    tta_mode = str(tta).strip().lower()
-
     # Load configuration
     config = load_config(config_path)
     config = resolve_config_paths(config, config_path)
     if results_dir:
         config.setdefault("evaluation", {})["results_dir"] = os.path.abspath(results_dir)
+
+    # An explicit argument wins over the config so a run can re-score an
+    # already-exported model differently without editing the config it was
+    # trained from.
+    tta_mode = _resolve_tta_mode(tta, config)
 
     # Load test dataset
     print("Loading test dataset...")
@@ -326,11 +365,7 @@ def evaluate_model(
     for images, labels in test_ds:
         predictions = model.predict(images, verbose=0)
         if tta_mode == "flip":
-            # Horizontal flip is label-preserving for leaves; averaging the
-            # two softmax views reduces orientation-sensitive misses.
-            flipped = tf.image.flip_left_right(images)
-            flipped_predictions = model.predict(flipped, verbose=0)
-            predictions = (predictions + flipped_predictions) / 2.0
+            predictions = _flip_averaged_predictions(model, images, predictions)
         if predictions.shape[-1] != len(class_names):
             raise ValueError(
                 f"Model returned {predictions.shape[-1]} outputs, but the test set "
@@ -555,11 +590,12 @@ def main():
     parser.add_argument(
         "--tta",
         type=str,
-        default="none",
+        default=None,
         choices=["none", "flip"],
         help=(
             "Test-time augmentation: 'flip' averages softmax outputs of the image "
-            "and its horizontal mirror before argmax (zero-cost accuracy boost)"
+            "and its horizontal mirror before argmax (zero-cost accuracy boost). "
+            "Omit to use evaluation.tta from the config."
         ),
     )
 

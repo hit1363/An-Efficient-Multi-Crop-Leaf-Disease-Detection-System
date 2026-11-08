@@ -92,11 +92,12 @@ def apply_runtime_profile(
                 "multi_gpu": True,
             }
         )
-        # Enable memory cache for faster I/O on Kaggle GPUs (80K images ~ 6GB uncompressed).
+        # Enable memory cache for faster I/O on Kaggle GPUs.
         dataset["cache_mode"] = "memory"
-        # At 224x224 float16 the train+val cache estimate is ~7.9 GB, which
-        # would brush the pinned 8.0 GB config limit and trigger a downgrade;
-        # Kaggle sessions have ~29 GB RAM, so 12 GB keeps 224 cached in RAM.
+        # At 224x224 float16 the train+val cache estimate is ~9.6 GB (22382 +
+        # 4801 images); the fit rule in _resolve_cache_record demands the
+        # estimate fit under this limit AND at least 1.5x headroom in RAM
+        # (~14.4 GB). Kaggle sessions have ~29 GB, so 12 GB keeps 224 cached.
         # The resolved decision (estimate vs limit) is logged by the trainer.
         dataset["cache_memory_limit_gb"] = 12.0
         # Relax duplicate enforcement for raw hosted Kaggle datasets.
@@ -174,11 +175,11 @@ def apply_runtime_profile(
         architecture = str(
             runtime_config["model"].get("architecture", "")
         ).strip().lower().replace("-", "_")
-        # efficientnet_b0 stays at its native 224x224: the 2xT4 budget still
-        # fits (~120 img/s steady at the shared batch size), and fine-grained
-        # lesions (rice hispa spots, sugarcane pustules, tomato rings) need
-        # the extra pixels — the 87.1% baseline lost most accuracy inside
-        # exactly those crops.
+        # efficientnet_b0 stays at its native 224x224: fine-grained lesions
+        # (rice hispa spots, sugarcane pustules, tomato rings) need the extra
+        # pixels — the 87.1% baseline lost most accuracy inside exactly those
+        # crops. Cost: 1.36x the per-image compute of 192x192, so the 2xT4
+        # budget needs ~1.6x the wall time of the 30-epoch/192 baseline.
         faster_resolution_architectures = {
             "mobilenetv2",
             "shufflenetv2_05",

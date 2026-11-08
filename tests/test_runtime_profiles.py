@@ -175,8 +175,8 @@ def test_full_profile_raises_kaggle_cache_limit_for_224_input():
 
     runtime = apply_runtime_profile(config, "full", platform="kaggle")
 
-    # The 224x224 float16 cache estimate (~7.9 GB) would brush a pinned 8 GB
-    # limit; the Kaggle profile raises the ceiling so 224 stays cached in RAM.
+    # The 224x224 float16 cache estimate (~9.6 GB) exceeds a pinned 8 GB limit;
+    # the Kaggle profile raises the ceiling so 224 stays cached in RAM.
     assert runtime["dataset"]["cache_memory_limit_gb"] == 12.0
     assert runtime["dataset"]["cache_mode"] == "memory"
 

@@ -338,9 +338,10 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     assert shufflenet_config["augmentation"]["vertical_flip"] is False
     assert "keras" in shufflenet_config["export"]["formats"]
 
-    # Recipe v2 (2026-11): every two-phase config runs 20 frozen epochs and
-    # then 10 fine-tune epochs; the last 15 epochs of the old 6/9 split were
-    # spent on a learning rate that had already decayed to its floor.
+    # Recipe v3 (2026-11): every two-phase config freezes the head for 20
+    # epochs. They all then fine-tune for 10 epochs except efficientnet_b0,
+    # which runs 16 — its accuracy was concentrated in fine-grained crops that
+    # need a longer adaptation of the unfrozen backbone.
     expected_unfreeze_epochs = {
         "benchmark": 20,
         "mobilenetv2": 20,

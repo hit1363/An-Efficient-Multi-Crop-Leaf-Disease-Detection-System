@@ -42,10 +42,11 @@ augmentation:
 
 training:
   # Recipe v3 (2026-11): 224x224 native input (Kaggle profile no longer caps
-  # b0 at 192), deeper fine-tune from layer 140 (~2x more trainable backbone;
-  # BatchNorm stays frozen), and a longer phase 2 (16 epochs) — the 87.1%
-  # baseline concentrated its misses in fine-grained rice/sugarcane/tomato
-  # clusters that need both resolution and backbone adaptation.
+  # b0 at 192), deeper fine-tune from layer 140 (1.26x the trainable backbone of
+  # the layer-180 baseline: 3.82M vs 3.02M params; BatchNorm stays frozen), and
+  # a longer phase 2 (16 epochs) — the 87.1% baseline concentrated its misses in
+  # fine-grained rice/sugarcane/tomato clusters that need both resolution and
+  # backbone adaptation.
   epochs: 36
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
@@ -125,6 +126,13 @@ metrics:
   # build_metrics drops them with a warning. Macro/per-class scores come from
   # evaluate.py, so only add metrics that carry new information here.
   - "auc"
+
+evaluation:
+  # Horizontal flip is label-preserving for leaves, so averaging the softmax of
+  # the image and its mirror recovers orientation-sensitive misses (the 87.1%
+  # baseline's errors clustered in rice/sugarcane/tomato lesions) at the cost of
+  # one extra forward pass. evaluate.py also accepts --tta to override this.
+  tta: "flip"
 
 seed: 42
 

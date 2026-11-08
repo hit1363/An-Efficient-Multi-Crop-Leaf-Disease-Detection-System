@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -258,6 +259,57 @@ def test_phase2_callback_factory_requests_phase2_checkpoint(monkeypatch):
         "checkpoint_name": "best_phase2_model",
         "include_throughput": False,
     }
+
+
+def test_flip_tta_averages_the_mirrored_softmax():
+    """Flip TTA must average the two views, not concatenate or pick one.
+
+    A deterministic stub stands in for the model: it returns a one-hot-like
+    vector keyed on the image's own value, so the mirrored view predicts a
+    different class and the average is arithmetically checkable.
+    """
+    import tensorflow as tf
+
+    class MirrorSensitiveModel:
+        def predict(self, images, verbose=0):
+            values = np.asarray(images).reshape(len(images), -1)[:, 0]
+            # Class 0 for negative pixels, class 1 for positive ones.
+            return np.stack([1.0 - (values > 0), values > 0], axis=-1).astype("float32")
+
+    images = np.array([[-1.0, 1.0], [1.0, -1.0]], dtype="float32").reshape(2, 1, 2, 1)
+    baseline = MirrorSensitiveModel().predict(images)
+    assert baseline.tolist() == [[1.0, 0.0], [0.0, 1.0]]
+
+    # The mirror swaps each row, so the first pixel changes sign and every
+    # image now sees the other class; the average must be a flat 0.5/0.5.
+    averaged = evaluate._flip_averaged_predictions(
+        MirrorSensitiveModel(), tf.constant(images), baseline
+    )
+    np.testing.assert_allclose(averaged, [[0.5, 0.5], [0.5, 0.5]], rtol=1e-6)
+
+
+def test_tta_mode_resolves_from_argument_then_config():
+    """The notebooks never pass ``--tta``, so the config value must drive it."""
+    config = {"evaluation": {"tta": "flip"}}
+    assert evaluate._resolve_tta_mode(None, config) == "flip"
+    assert evaluate._resolve_tta_mode("none", config) == "none"
+    assert evaluate._resolve_tta_mode("FLIP", config) == "flip"
+    # Configs without an evaluation block keep the historical no-op behaviour.
+    assert evaluate._resolve_tta_mode(None, {}) == "none"
+    with pytest.raises(ValueError, match="Unsupported tta mode"):
+        evaluate._resolve_tta_mode("bogus", config)
+
+
+def test_efficientnet_b0_config_enables_flip_tta():
+    """Guards the wiring that made the new flag dead code: no notebook passes
+    ``--tta``, so accuracy only changes if the trained config itself opts in."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    config = yaml.safe_load(
+        (root / "training" / "config_efficientnet_b0.yaml").read_text(encoding="utf-8")
+    )
+    assert config["evaluation"]["tta"] == "flip"
 
 
 def test_load_model_handles_exported_savedmodel_without_keras_metadata(tmp_path):
