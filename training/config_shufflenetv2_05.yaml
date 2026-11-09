@@ -20,7 +20,10 @@ dataset:
   batch_size: 128
   batch_size_fallbacks: [128, 64, 32, 16]
   auto_batch_fallback: true
-  shuffle_buffer: 1000
+  # Recipe v6: 1000 covered only ~4.5% of a 22.4k-image split, so directory
+  # order still leaked into long runs of class-homogeneous batches. 4096 (~18%)
+  # mixes classes per batch without a meaningful RAM cost.
+  shuffle_buffer: 4096
   cache_mode: "memory"
   cache_memory_limit_gb: 8.0
 

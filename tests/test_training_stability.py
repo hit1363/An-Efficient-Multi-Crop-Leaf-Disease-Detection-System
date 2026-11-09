@@ -10,7 +10,11 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from training.model import unfreeze_base_model
+from training.model import (
+    _attach_classifier_head,
+    unfreeze_backbone_for_scratch_training,
+    unfreeze_base_model,
+)
 from training.train import (
     _estimated_split_counts,
     _finite_dataset_steps,
@@ -319,6 +323,55 @@ def test_unfreezing_keeps_batch_normalization_frozen():
     assert base_model.get_layer("early_conv").trainable is False
     assert base_model.get_layer("batch_norm").trainable is False
     assert base_model.get_layer("late_conv").trainable is True
+
+
+def test_scratch_training_unfreezes_batch_normalization():
+    """A from-scratch backbone must learn BN moving statistics, not freeze them."""
+    base_model = tf.keras.Sequential(
+        [
+            tf.keras.layers.InputLayer((8, 8, 3)),
+            tf.keras.layers.Conv2D(4, 1, name="early_conv"),
+            tf.keras.layers.BatchNormalization(name="batch_norm"),
+            tf.keras.layers.Conv2D(4, 1, name="late_conv"),
+        ]
+    )
+    base_model.trainable = False
+
+    unfreeze_backbone_for_scratch_training(base_model)
+
+    assert base_model.trainable is True
+    for layer in base_model.layers:
+        assert layer.trainable is True, layer.name
+
+
+def test_classifier_head_propagates_backbone_training_mode():
+    """Pretrained backbones infer; scratch backbones must train their BN layers."""
+    base_model = tf.keras.Sequential(
+        [
+            tf.keras.layers.InputLayer((8, 8, 3)),
+            tf.keras.layers.Conv2D(4, 1, name="conv"),
+            tf.keras.layers.BatchNormalization(name="batch_norm"),
+        ]
+    )
+    moving_mean = base_model.get_layer("batch_norm").moving_mean
+    initial_mean = tf.identity(moving_mean)
+
+    frozen_model = _attach_classifier_head(
+        base_model, (8, 8, 3), num_classes=3, backbone_training=False
+    )
+    frozen_model(tf.ones((4, 8, 8, 3)), training=True)
+    np.testing.assert_allclose(moving_mean.numpy(), initial_mean.numpy())
+
+    scratch_model = _attach_classifier_head(
+        base_model, (8, 8, 3), num_classes=3, backbone_training=None
+    )
+    scratch_model(tf.ones((4, 8, 8, 3)) * 3.0, training=True)
+
+    assert not np.allclose(moving_mean.numpy(), initial_mean.numpy())
+    # Propagation means inference mode no longer updates the moving statistics.
+    ref = tf.identity(moving_mean)
+    scratch_model(tf.ones((4, 8, 8, 3)) * 3.0, training=False)
+    np.testing.assert_allclose(moving_mean.numpy(), ref.numpy())
 
 
 def test_gradient_clipping_is_applied_in_both_training_phases():
@@ -2060,6 +2113,56 @@ def test_minority_augmentation_is_skipped_for_pure_majority_batches(tmp_path):
     assert not np.isnan(batch_images.numpy()).any()
     assert labels == [0, 0]
     np.testing.assert_allclose(batch_images.numpy(), 1.0, rtol=1e-6, atol=1e-6)
+
+
+def test_cache_record_counts_examples_for_unbatched_datasets(monkeypatch):
+    """The cache is resolved before batching, so cardinality already counts examples.
+
+    ``load_dataset`` calls ``_resolve_cache_record`` while its datasets are still
+    unbatched (``image_dataset_from_directory(batch_size=None)``). Multiplying
+    that cardinality by ``batch_size`` again inflated a 7 GB estimate into
+    897 GB and silently disabled the RAM cache for a run that fit the limit.
+    """
+    from training.utils import _resolve_cache_record
+
+    unbatched = tf.data.Dataset.from_tensor_slices(
+        (tf.zeros((8, 4, 4, 3)), tf.zeros((8, 3)))
+    )
+
+    monkeypatch.setattr("training.utils._available_host_memory_gb", lambda: 64.0)
+    monkeypatch.setattr("training.utils._available_disk_gb", lambda _path: 200.0)
+
+    record = _resolve_cache_record(
+        "memory",
+        unbatched,
+        unbatched,
+        (4, 4),
+        128,
+        memory_limit_gb=8.0,
+        cache_dtype="float16",
+    )
+
+    # 16 examples * (4*4*3*2 + 3*4) bytes * 1.25 headroom is far below 8 MB.
+    assert record["estimate_gb"] <= 0.01
+    assert record["mode"] == "memory", record["reason"]
+
+
+def test_cache_record_still_multiplies_for_batched_datasets(monkeypatch):
+    """A batched dataset reports batch cardinality, so it must be multiplied."""
+    from training.utils import _example_count
+
+    batched = tf.data.Dataset.from_tensor_slices(
+        (tf.zeros((8, 4, 4, 3)), tf.zeros((8, 3)))
+    ).batch(4)
+    unbatched = tf.data.Dataset.from_tensor_slices(
+        (tf.zeros((8, 4, 4, 3)), tf.zeros((8, 3)))
+    )
+
+    batched_cardinality = tf.data.experimental.cardinality(batched)
+    unbatched_cardinality = tf.data.experimental.cardinality(unbatched)
+
+    assert _example_count(batched, batched_cardinality, 4) == 8
+    assert _example_count(unbatched, unbatched_cardinality, 4) == 8
 
 
 def test_cache_record_explains_the_decision(monkeypatch):

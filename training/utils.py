@@ -551,6 +551,39 @@ def _cardinality_int(dataset):
         return None
 
 
+def _example_count(dataset, cardinality, batch_size):
+    """Return an example count from a possibly-unbatched dataset cardinality.
+
+    ``load_dataset`` resolves the cache before batching, so the cardinality of
+    the training dataset is already the number of examples. Batched callers
+    (e.g. tests, or any future cache placement after ``.batch()``) still need
+    the multiply. The element spec rank distinguishes the two cases: an NHWC
+    image tensor has rank 4 when batched and rank 3 when it is a single image.
+
+    Returns ``-1`` when the cardinality is unknown/infinite so the caller can
+    skip the estimate instead of guessing.
+    """
+    count = int(cardinality.numpy())
+    if count < 0:
+        # tf.data.experimental.INFINITE_CARDINALITY (-1) and UNKNOWN_CARDINALITY
+        # (-2) both mean "not countable", not "zero examples".
+        return -1
+
+    rank = None
+    spec = getattr(dataset, "element_spec", None)
+    if isinstance(spec, (tuple, list)) and spec:
+        image_spec = spec[0]
+        if hasattr(image_spec, "shape"):
+            rank = image_spec.shape.rank
+
+    if rank == 3:
+        # Unbatched single image: the cardinality already counts examples.
+        return count
+    # Rank 4 (batched) or an unknown rank: keep the conservative upper bound,
+    # which over-estimates only the final partial batch.
+    return count * int(batch_size)
+
+
 def _resolve_cache_record(
     cache_mode,
     train_ds,
@@ -582,11 +615,13 @@ def _resolve_cache_record(
     train_cardinality = tf.data.experimental.cardinality(train_ds)
     val_cardinality = tf.data.experimental.cardinality(val_ds)
     try:
-        # Cardinality is measured in batches because the source datasets are
-        # batched. This is intentionally an upper-bound estimate for the last
-        # partial batch, which keeps the memory decision conservative.
-        train_count = int(train_cardinality.numpy()) * int(batch_size)
-        val_count = int(val_cardinality.numpy()) * int(batch_size)
+        # Cardinality counts whatever the dataset yields per step: batches when
+        # the dataset is already batched, examples when it is not. load_dataset
+        # resolves the cache BEFORE batching (image_dataset_from_directory uses
+        # batch_size=None), so multiplying unconditionally inflated the example
+        # count by a factor of batch_size and rejected feasible caches.
+        train_count = _example_count(train_ds, train_cardinality, batch_size)
+        val_count = _example_count(val_ds, val_cardinality, batch_size)
     except (AttributeError, TypeError, ValueError):
         train_count = val_count = -1
 

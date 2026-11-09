@@ -349,10 +349,26 @@ def _attach_classifier_head(
     dropout_rate=0.35,
     classifier_units=256,
     model_name="classifier",
+    backbone_training=False,
 ):
-    """Attach the shared lightweight classifier head to a feature backbone."""
+    """Attach the shared lightweight classifier head to a feature backbone.
+
+    ``backbone_training`` controls how the backbone's ``training`` flag is set:
+
+    * ``False`` (default) — the backbone always runs in inference mode. This is
+      correct for pretrained backbones whose BatchNorm moving statistics are
+      already meaningful and whose layers are frozen during fine-tuning.
+    * ``None`` — the caller's ``training`` flag propagates into the backbone.
+      Required for backbones trained from scratch: their BatchNorm layers
+      initialize with mean 0 / variance 1, so an inference-mode-only backbone is
+      an effectively unnormalized network and cannot converge. Propagating
+      keeps the exported inference model on the learned moving statistics too.
+    """
     inputs = tf.keras.Input(shape=input_shape, name="image")
-    x = base_model(inputs, training=False)
+    if backbone_training is None:
+        x = base_model(inputs)
+    else:
+        x = base_model(inputs, training=backbone_training)
     if len(x.shape) == 4:
         x = tf.keras.layers.GlobalAveragePooling2D(
             name="global_average_pooling"
@@ -545,6 +561,14 @@ def create_shufflenetv2_05_model(
 
     This implementation intentionally trains from scratch because the project
     does not add a third-party or PyTorch weight-conversion dependency.
+
+    Because the backbone has no pretrained statistics, its BatchNormalization
+    layers must run with live batch statistics during training and update their
+    moving averages. ``backbone_training=None`` makes the head propagate the
+    caller's ``training`` flag into the backbone, so training updates the BN
+    statistics while inference uses the learned moving averages. Train the
+    backbone with :func:`unfreeze_backbone_for_scratch_training` so those BN
+    layers stay trainable as well.
     """
     if weights not in (None, "none"):
         raise ValueError(
@@ -577,6 +601,7 @@ def create_shufflenetv2_05_model(
         dropout_rate=dropout_rate,
         classifier_units=classifier_units,
         model_name="shufflenetv2_05_disease_detector",
+        backbone_training=None,
     )
     return model, base_model
 
@@ -708,6 +733,26 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
         f"Total trainable layers: {sum([layer.trainable for layer in base_model.layers])}"
     )
 
+
+def unfreeze_backbone_for_scratch_training(base_model):
+    """Unfreeze a from-scratch backbone including its BatchNormalization layers.
+
+    :func:`unfreeze_base_model` deliberately keeps BatchNormalization frozen,
+    which is the right behaviour when fine-tuning an ImageNet backbone whose
+    moving statistics are already meaningful. A backbone trained from scratch
+    has no such statistics: its BN layers start at mean 0 / variance 1, so
+    freezing them leaves the network effectively unnormalized. This helper
+    unfreezes every layer, BatchNormalization included, so the moving averages
+    are learned alongside the weights.
+    """
+    base_model.trainable = True
+    for layer in base_model.layers:
+        layer.trainable = True
+
+    print(f"Unfroze all {len(base_model.layers)} backbone layers (scratch training)")
+    print(
+        f"Total trainable layers: {sum([layer.trainable for layer in base_model.layers])}"
+    )
 
 
 def print_model_summary(model):

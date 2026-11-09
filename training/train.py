@@ -24,7 +24,12 @@ from datetime import datetime
 
 try:
     # Support module execution: python -m training.train
-    from .model import get_model, unfreeze_base_model, print_model_summary
+    from .model import (
+        get_model,
+        unfreeze_base_model,
+        unfreeze_backbone_for_scratch_training,
+        print_model_summary,
+    )
     from .export import make_float32_inference_model
     from .utils import (
         load_dataset,
@@ -45,7 +50,12 @@ try:
     )
 except ImportError:
     # Fallback for script execution: python training/train.py
-    from model import get_model, unfreeze_base_model, print_model_summary
+    from model import (
+        get_model,
+        unfreeze_base_model,
+        unfreeze_backbone_for_scratch_training,
+        print_model_summary,
+    )
     from export import make_float32_inference_model
     from utils import (
         load_dataset,
@@ -1895,7 +1905,18 @@ def train_model(config_path="config.yaml"):
 
     if not freeze_base:
         logger.info("freeze_base is False: training backbone from the first epoch")
-        unfreeze_base_model(base_model, unfreeze_from_layer=0)
+        # A randomly initialized backbone has BatchNorm statistics at their
+        # initialization (mean 0 / variance 1), so freezing those layers leaves
+        # the network effectively unnormalized and it cannot converge. Keep the
+        # frozen-BN policy only for backbones that start from pretrained weights.
+        if config["model"].get("weights") is None and hasattr(base_model, "layers"):
+            logger.info(
+                "Randomly initialized backbone: unfreezing BatchNormalization "
+                "so moving statistics are learned during training"
+            )
+            unfreeze_backbone_for_scratch_training(base_model)
+        else:
+            unfreeze_base_model(base_model, unfreeze_from_layer=0)
 
     print_model_summary(model)
 
