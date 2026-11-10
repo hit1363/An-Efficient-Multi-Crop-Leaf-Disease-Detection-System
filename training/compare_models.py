@@ -31,6 +31,30 @@ ARCHITECTURES = (
 )
 
 
+def _apply_architecture_overrides(config, architecture, repo_root):
+    """Copy the per-architecture values the shared template cannot express.
+
+    ``config_benchmark.yaml`` is the single source of truth for the recipe,
+    but two settings are properties of the backbone rather than of the
+    recipe: ``training.unfreeze_from_layer`` indexes that backbone's own
+    layer list (100 is a valid slice for MobileNetV2's 154 layers and an
+    empty one for MobileNet V1's 86), and NASNetMobile needs batch 64 to fit
+    a T4. Without this overlay the generated config asks phase 2 to
+    fine-tune nothing, which the depth guard now rejects outright.
+    """
+    config_path = repo_root / "training" / f"config_{architecture}.yaml"
+    if not config_path.exists():
+        return config
+    source = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    for key in ("unfreeze_from_layer",):
+        if key in source.get("training", {}):
+            config["training"][key] = source["training"][key]
+    for key in ("batch_size", "batch_size_fallbacks"):
+        if key in source.get("dataset", {}):
+            config["dataset"][key] = source["dataset"][key]
+    return config
+
+
 def _latest_saved_model(model_dir: Path):
     candidates = sorted(
         (path for path in model_dir.glob("saved_model_*") if path.is_dir()),
@@ -110,6 +134,7 @@ def compare_models(
         config = json.loads(json.dumps(template))
         config["model"]["architecture"] = architecture
         config["model"]["num_classes"] = len(class_names)
+        config = _apply_architecture_overrides(config, architecture, repo_root)
         config["dataset"].update(
             {
                 "data_dir": str(data_dir),

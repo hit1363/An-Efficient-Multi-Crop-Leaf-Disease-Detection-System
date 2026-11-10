@@ -103,6 +103,14 @@ def _configure_qat_trainability(model, config):
 
     nested_models = [layer for layer in model.layers if isinstance(layer, keras.Model)]
     for base_model in nested_models:
+        depth = len(base_model.layers)
+        if unfreeze_from >= depth:
+            raise ValueError(
+                f"unfreeze_from_layer={unfreeze_from} is at or beyond the "
+                f"backbone depth ({depth} layers); QAT would fine-tune no "
+                "backbone layers. Fix training.unfreeze_from_layer in the "
+                "config used for quantization."
+            )
         base_model.trainable = True
         for index, layer in enumerate(base_model.layers):
             layer.trainable = index >= unfreeze_from

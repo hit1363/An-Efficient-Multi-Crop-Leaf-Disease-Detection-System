@@ -70,8 +70,28 @@ def apply_runtime_profile(
     # their XLA setting for compatible environments.
     if normalized_platform == "kaggle":
         dataset = runtime_config["dataset"]
-        dataset["batch_size"] = 128
-        dataset["batch_size_fallbacks"] = [128, 64, 32, 16]
+        # NASNetMobile's 769-layer graph allocates far more activation memory
+        # per example than the other backbones: a global batch of 128 OOMs the
+        # dual-T4 session before the first epoch. Cap it here as well as in the
+        # config, because this profile overwrites batch_size unconditionally.
+        architecture = (
+            str(runtime_config["model"].get("architecture", ""))
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        kaggle_batch_size = (
+            64 if architecture == "nasnet_mobile" else 128
+        )
+        dataset["batch_size"] = kaggle_batch_size
+        dataset["batch_size_fallbacks"] = sorted(
+            {
+                size
+                for size in (kaggle_batch_size, kaggle_batch_size // 2, 32, 16)
+                if size <= kaggle_batch_size
+            },
+            reverse=True,
+        )
         dataset["auto_batch_fallback"] = True
         configured_execution = runtime_config["performance"].get(
             "kaggle_steps_per_execution", 32

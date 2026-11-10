@@ -720,6 +720,24 @@ def unfreeze_base_model(base_model, unfreeze_from_layer=100):
         return
 
     # Standard Keras Model: freeze initial layers, unfreeze later layers
+    try:
+        depth = len(base_model.layers)
+    except AttributeError:  # Defensive: not a Keras model, nothing to slice.
+        depth = None
+    if depth is not None:
+        index = int(unfreeze_from_layer)
+        if index < 0:
+            raise ValueError(
+                "unfreeze_from_layer must be a non-negative layer index, got "
+                f"{index} for a {depth}-layer backbone."
+            )
+        if index >= depth:
+            raise ValueError(
+                f"unfreeze_from_layer={index} is at or beyond the backbone "
+                f"depth ({depth} layers), so phase 2 would silently fine-tune "
+                "no backbone layers. Lower training.unfreeze_from_layer to an "
+                "index below the depth (e.g. 60% of it)."
+            )
     base_model.trainable = True
 
     for layer in base_model.layers[:unfreeze_from_layer]:

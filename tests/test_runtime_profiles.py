@@ -260,6 +260,51 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
         assert runtime["dataset"]["cache_mode"] == "memory"
 
 
+@pytest.mark.parametrize("mode", ["smoke", "full"])
+def test_kaggle_profile_caps_nasnet_mobile_batch_size(mode):
+    """NASNetMobile OOMs a T4 at a global batch of 128.
+
+    The Kaggle profile rewrites dataset.batch_size unconditionally, so the
+    architecture-specific cap in the config file alone would be discarded on
+    Kaggle; apply_runtime_profile must apply the cap itself.
+    """
+    config = {
+        "model": {"architecture": "nasnet_mobile", "input_shape": [224, 224, 3]},
+        "dataset": {
+            "batch_size": 64,
+            "batch_size_fallbacks": [64, 32, 16],
+            "cache_mode": "memory",
+        },
+        "training": {
+            "epochs": 36,
+            "freeze_base": True,
+            "fine_tuning": {"enabled": True},
+            "unfreeze_epoch": 20,
+        },
+    }
+
+    runtime = apply_runtime_profile(config, mode, platform="kaggle")
+
+    assert runtime["dataset"]["batch_size"] == 64
+    assert runtime["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
+    assert runtime["dataset"]["auto_batch_fallback"] is True
+    assert choose_batch_size(runtime, {"num_replicas": 2, "has_gpu": True}) == 64
+    assert config["dataset"]["batch_size"] == 64
+
+    # The hyphenated spelling must hit the same cap.
+    hyphenated = apply_runtime_profile(
+        {"model": {"architecture": "nasnet-mobile"}}, mode, platform="kaggle"
+    )
+    assert hyphenated["dataset"]["batch_size"] == 64
+
+    # Every other architecture keeps the 128 global batch.
+    efficientnet = apply_runtime_profile(
+        {"model": {"architecture": "efficientnet_b0"}}, mode, platform="kaggle"
+    )
+    assert efficientnet["dataset"]["batch_size"] == 128
+    assert efficientnet["dataset"]["batch_size_fallbacks"] == [128, 64, 32, 16]
+
+
 def test_kaggle_profile_preserves_explicit_steps_per_execution_override():
     runtime = apply_runtime_profile(
         {"dataset": {"batch_size": 128}},

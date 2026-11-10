@@ -1,4 +1,16 @@
-# Shared settings for controlled architecture comparison on the harmonized set.
+# Template for controlled architecture comparison on the harmonized set.
+#
+# Recipe v4 (2026-11): this file is the single source of truth for the shared
+# recipe. compare_models.py clones it per architecture (swapping only
+# model.architecture and the output paths) and config_<architecture>.yaml
+# mirrors it, so a change here must be mirrored in the per-architecture files
+# (pinned by tests/test_project_contracts.py). The only deliberate per-arch
+# difference is training.unfreeze_from_layer, which is an index into that
+# backbone's own layer list.
+#
+# What changed from v2: batch 64 -> 128, cache auto -> memory, plateau schedule
+# -> cosine, +label smoothing 0.1, +vertical flip, +AUC metric, +flip TTA, and
+# 20 frozen + 16 fine-tune epochs (36 total) instead of 20 + 10.
 model:
   architecture: "mobilenetv2"
   input_shape: [224, 224, 3]
@@ -14,19 +26,22 @@ dataset:
   train_dir: "../dataset/processed/train"
   val_dir: "../dataset/processed/val"
   test_dir: "../dataset/processed/test"
-  batch_size: 64
-  batch_size_fallbacks: [64, 32, 16]
+  batch_size: 128
+  batch_size_fallbacks: [128, 64, 32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
-  cache_mode: "auto"
+  # Keep the decoded train/val images in RAM. The float16 estimate for the
+  # cap-500 benchmark fits the Kaggle profile (12 GB ceiling); elsewhere the
+  # resolver falls back to streaming and logs the estimate.
+  cache_mode: "memory"
   cache_memory_limit_gb: 8.0
 
 augmentation:
-  rotation_range: 15
-  zoom_range: [0.95, 1.05]
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
-  vertical_flip: false
-  brightness_range: [0.95, 1.05]
+  vertical_flip: true
+  brightness_range: [0.9, 1.1]
   class_aware:
     enabled: true
     # The cap-500 benchmark tops out at 350 training images per class, so a
@@ -43,11 +58,17 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  # Shared recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at 2e-5.
-  # compare_models.py can still pass --epochs for quick proxy runs.
-  epochs: 30
+  # 20 frozen-head epochs complete the cosine anneal; 16 fine-tune epochs at a
+  # real 2e-5 give the head time to recover the frozen-phase tail. Phase 2 is
+  # skipped when --epochs is shortened below unfreeze_epoch (quick proxy runs).
+  epochs: 36
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
+  # Placeholder only: compare_models.py keeps the template value, and every
+  # per-architecture config overrides it with its own calibrated index
+  # (mobilenet_v1 49, mobilenetv3_small 100, mobilenet_v3_large 149,
+  # nasnet_mobile 454, efficientnet_v2_b0 150). A value at or beyond the
+  # backbone depth now raises in model.unfreeze_base_model.
   unfreeze_from_layer: 100
   unfreeze_epoch: 20
   fine_tune_learning_rate: 2.0e-05
@@ -55,21 +76,29 @@ training:
 optimizer:
   name: "adam"
   learning_rate: 0.0003
+  beta_1: 0.9
+  beta_2: 0.999
+  epsilon: 1.0e-7
   clipnorm: 1.0
   decay: 0.0
 
-loss:
-  name: "categorical_crossentropy"
-
 lr_schedule:
-  type: "reduce_on_plateau"
-  monitor: "val_loss"
-  factor: 0.5
-  patience: 3
-  min_lr: 0.000001
+  # Full cosine over the frozen-head phase; phase 2 restarts its own curve from
+  # fine_tune_learning_rate, so a plateau schedule would only add a second knob.
+  type: "cosine_decay"
+  decay_epochs: 20
+  alpha: 0.01
+
+loss:
+  # The capped benchmark is class-balanced, so cross-entropy plus label
+  # smoothing beats focal loss (which suppressed gradients without correcting
+  # any imbalance).
+  name: "categorical_crossentropy"
+  label_smoothing: 0.1
 
 class_weights:
   enabled: true
+  auto_compute: true
   max_weight: 5.0
   normalize: true
 
@@ -89,10 +118,11 @@ callbacks:
     restore_best_weights: true
     mode: "min"
   fine_tuning_early_stopping:
+    enabled: true
     monitor: "val_loss"
     patience: 6
-    mode: "min"
     restore_best_weights: true
+    mode: "min"
   tensorboard:
     enabled: false
   csv_logger:
@@ -100,17 +130,34 @@ callbacks:
     append: false
 
 export:
+  # compare_models.py rewrites this to <output_dir>/models before training.
   save_dir: "../models/benchmark"
   formats: ["saved_model"]
   sync_flutter_labels: false
 
-metrics: ["accuracy"]
+metrics:
+  - "accuracy"
+  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
+  # (build_metrics drops them with a warning); macro/per-class scores come from
+  # evaluate.py, so AUC is the only extra training signal worth logging.
+  - "auc"
+
+evaluation:
+  # Horizontal flip is label-preserving for leaves, so averaging the softmax of
+  # the image and its mirror recovers orientation-sensitive misses at the cost
+  # of one extra forward pass.
+  tta: flip
+
 seed: 42
+
 performance:
   validate_dataset_splits: true
   mixed_precision: true
+  steps_per_execution: 32
   jit_compile: true
-  deterministic: true
+  # Deterministic kernels disable fused/cuDNN fast paths on the T4s; the
+  # benchmark compares architectures, each with its own seed.
+  deterministic: false
   distribution: auto
   finite_batch_check: true
   terminate_on_nan: true

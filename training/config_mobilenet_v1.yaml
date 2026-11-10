@@ -1,4 +1,12 @@
 # Shared benchmark training recipe for this architecture.
+#
+# Recipe v4 (2026-11) unifies this architecture onto the recipe that produced
+# the project's best run (EfficientNetB0, 87.1%): Adam at 3e-4 with clipnorm 1.0,
+# a full cosine anneal over the 20 frozen-head epochs, cross-entropy with label
+# smoothing 0.1, vertical-flip augmentation, an in-memory cache, and a 16-epoch
+# fine-tune phase (36 epochs total). The previous v2 recipe ran batch 32 with no
+# cache, annealed with reduce_on_plateau, and fine-tuned for only 10 epochs.
+
 model:
   architecture: mobilenet_v1
   input_shape: [224, 224, 3]
@@ -7,29 +15,28 @@ model:
   dropout_rate: 0.35
   classifier_units: 256
   include_preprocessing: true
+
 dataset:
   data_dir: ../dataset/processed
   train_dir: ../dataset/processed/train
   val_dir: ../dataset/processed/val
   test_dir: ../dataset/processed/test
-  batch_size: 32
-  batch_size_fallbacks:
-  - 32
-  - 16
+  batch_size: 128
+  batch_size_fallbacks: [128, 64, 32, 16]
   auto_batch_fallback: true
   shuffle_buffer: 1000
-  cache_mode: none
+  # Keep the decoded train/val images in RAM. The float16 estimate for the
+  # cap-500 benchmark fits the Kaggle profile (12 GB ceiling); elsewhere the
+  # resolver falls back to streaming and logs the estimate.
+  cache_mode: memory
   cache_memory_limit_gb: 8.0
+
 augmentation:
-  rotation_range: 15
-  zoom_range:
-  - 0.95
-  - 1.05
+  rotation_range: 25
+  zoom_range: [0.9, 1.1]
   horizontal_flip: true
-  vertical_flip: false
-  brightness_range:
-  - 0.95
-  - 1.05
+  vertical_flip: true
+  brightness_range: [0.9, 1.1]
   class_aware:
     enabled: true
     # The cap-500 benchmark tops out at 350 training images per class, so a
@@ -37,46 +44,60 @@ augmentation:
     # augmentation. 100 reserves the strong policy for the true Guava classes.
     max_train_samples: 100
     rotation_range: 20
-    zoom_range:
-    - 0.9
-    - 1.1
+    zoom_range: [0.9, 1.1]
     horizontal_flip: true
     vertical_flip: true
     contrast_range: 0.15
-    brightness_range:
-    - 0.85
-    - 1.15
+    brightness_range: [0.85, 1.15]
+
 training:
   fine_tuning:
     enabled: true
-  # Recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at 2e-5
-  # (previously total 20 with fine-tuning starting after only 5 epochs).
-  # Recipe v2.1: unfreeze_from_layer 100 exceeded the 86-layer MobileNetV1
-  # backbone, so layers[100:] was empty and phase 2 silently fine-tuned no
-  # backbone at all. Unfreeze the top half (43+) instead.
-  epochs: 30
+  epochs: 36
   log_mode: progress
   freeze_base: true
-  unfreeze_from_layer: 43
+  # Read the calibration note below before changing this index.
+  # MobileNetV1's backbone is only 86 layers deep; the inherited value of 100
+  # selected layers[100:], which is empty, so phase 2 silently fine-tuned no
+  # backbone at all. 49 is the parity point with the proven EfficientNetB0
+  # index (140/237 = 59% of the depth): 49 freezes the first 49 layers,
+  # unfreezes the last 37 (25 of them trainable once BatchNorm stays frozen),
+  # and leaves 99% of the backbone's parameters trainable.
+  # model.unfreeze_base_model now raises instead of silently freezing
+  # everything.
+  unfreeze_from_layer: 49
   unfreeze_epoch: 20
   fine_tune_learning_rate: 2.0e-05
+
 optimizer:
   name: adam
   learning_rate: 0.0003
+  beta_1: 0.9
+  beta_2: 0.999
+  epsilon: 1.0e-7
   clipnorm: 1.0
   decay: 0.0
-loss:
-  name: categorical_crossentropy
+
 lr_schedule:
-  type: reduce_on_plateau
-  monitor: val_loss
-  factor: 0.5
-  patience: 3
-  min_lr: 1.0e-06
+  # Full cosine over the frozen-head phase; phase 2 restarts its own curve from
+  # fine_tune_learning_rate, so a plateau schedule would only add a second knob.
+  type: cosine_decay
+  decay_epochs: 20
+  alpha: 0.01
+
+loss:
+  # The capped benchmark is class-balanced, so cross-entropy plus label
+  # smoothing beats focal loss (which suppressed gradients without correcting
+  # any imbalance).
+  name: categorical_crossentropy
+  label_smoothing: 0.1
+
 class_weights:
   enabled: true
+  auto_compute: true
   max_weight: 5.0
   normalize: true
+
 callbacks:
   checkpoint:
     run_scoped: true
@@ -93,34 +114,53 @@ callbacks:
     restore_best_weights: true
     mode: min
   fine_tuning_early_stopping:
+    enabled: true
     monitor: val_loss
     patience: 6
-    mode: min
     restore_best_weights: true
+    mode: min
   tensorboard:
     enabled: false
   csv_logger:
     enabled: true
     append: false
     filename: ../results/training_log_mobilenet_v1.csv
+
 export:
   save_dir: ../models
   formats:
   - saved_model
   - tflite
   sync_flutter_labels: false
+
 metrics:
-- accuracy
+  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
+  # (build_metrics drops them with a warning); macro/per-class scores come from
+  # evaluate.py. AUC is the only extra training signal worth logging.
+  - accuracy
+  - auc
+
+evaluation:
+  # Horizontal flip is label-preserving for leaves, so averaging the softmax of
+  # the image and its mirror recovers orientation-sensitive misses at the cost
+  # of one extra forward pass.
+  tta: flip
+
 seed: 42
+
 performance:
   validate_dataset_splits: true
   mixed_precision: true
+  steps_per_execution: 32
   jit_compile: true
-  deterministic: true
+  # Deterministic kernels disable fused/cuDNN fast paths on the T4s; the
+  # benchmark compares architectures, each with its own seed.
+  deterministic: false
   distribution: auto
   finite_batch_check: true
   terminate_on_nan: true
   log_throughput: true
+
 logging:
   level: INFO
   save_to_file: true

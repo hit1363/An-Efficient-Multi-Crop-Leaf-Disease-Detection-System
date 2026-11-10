@@ -44,12 +44,10 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  # Recipe v2 (2026-11): the class-balanced cap-500 benchmark reached
-  # val_acc ~0.77 in 15 epochs while val_loss was still improving at the
-  # cutoff, and the previous fine-tune LR (5e-6, pre-decayed to 5e-8) moved
-  # val_loss by <1% relative. 20 frozen epochs complete the cosine anneal
-  # and 10 fine-tune epochs now start at a real 2e-5.
-  epochs: 30
+  # Recipe v4 (2026-11): 20 frozen epochs complete the cosine anneal, and 16
+  # fine-tune epochs at a real 2e-5 replace the previous 10 (the cap-500
+  # benchmark was still improving when the shorter tail cut it off).
+  epochs: 36
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100
@@ -123,6 +121,16 @@ export:
 
 metrics:
   - "accuracy"
+  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
+  # (build_metrics drops them with a warning); macro/per-class scores come from
+  # evaluate.py, so AUC is the only extra training signal worth logging.
+  - "auc"
+
+evaluation:
+  # Horizontal flip is label-preserving for leaves, so averaging the softmax of
+  # the image and its mirror recovers orientation-sensitive misses at the cost
+  # of one extra forward pass.
+  tta: flip
 
 performance:
   validate_dataset_splits: true

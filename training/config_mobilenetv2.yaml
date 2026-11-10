@@ -46,9 +46,10 @@ augmentation:
 
 # Training Settings
 training:
-  # Recipe v2 (2026-11): 20 frozen epochs + 10 fine-tune epochs at a real
-  # 2e-5 (previously 6/9 with a pre-decayed 5e-6 that floored at 5e-8).
-  epochs: 30
+  # Recipe v4 (2026-11): 20 frozen epochs + 16 fine-tune epochs at a real
+  # 2e-5. The extra six fine-tune epochs buy the same tail the EfficientNetB0
+  # baseline needed to clear 87%.
+  epochs: 36
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 130 # Keep early generic features frozen
@@ -141,6 +142,16 @@ export:
 # Evaluation Metrics
 metrics:
   - "accuracy"
+  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
+  # (build_metrics drops them with a warning); macro/per-class scores come from
+  # evaluate.py, so AUC is the only extra training signal worth logging.
+  - "auc"
+
+evaluation:
+  # Horizontal flip is label-preserving for leaves, so averaging the softmax of
+  # the image and its mirror recovers orientation-sensitive misses at the cost
+  # of one extra forward pass.
+  tta: flip
 
 # Runtime performance. Mixed precision and batched execution are especially
 # effective for MobileNetV2 on Kaggle GPUs. Set mixed_precision to false for CPU.

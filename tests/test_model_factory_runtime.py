@@ -137,3 +137,36 @@ def test_config_unfreeze_from_layer_is_within_backbone_depth():
         assert trainable > 0, (
             f"{architecture}: phase 2 left zero trainable backbone layers"
         )
+
+
+def test_unfreeze_base_model_rejects_an_out_of_range_index():
+    """An index at or beyond the depth must raise, not freeze everything.
+
+    Recipe v4 added this guard: mobilenet_v1 shipped ``unfreeze_from_layer:
+    100`` against an 86-layer backbone, so phase 2 enabled no backbone layer
+    and the run quietly trained only the classification head.
+    """
+    from tensorflow import keras
+
+    base_model = keras.Sequential(
+        [
+            keras.layers.Input(shape=(8,)),
+            keras.layers.Dense(4, name="dense_a"),
+            keras.layers.Dense(4, name="dense_b"),
+        ],
+        name="tiny_backbone",
+    )
+    depth = len(base_model.layers)
+
+    with pytest.raises(ValueError, match="at or beyond the backbone"):
+        unfreeze_base_model(base_model, unfreeze_from_layer=depth)
+
+    with pytest.raises(ValueError, match=r"at or beyond the backbone"):
+        unfreeze_base_model(base_model, unfreeze_from_layer=depth + 50)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        unfreeze_base_model(base_model, unfreeze_from_layer=-1)
+
+    # The last real index still works and unfreezes the final layer.
+    unfreeze_base_model(base_model, unfreeze_from_layer=depth - 1)
+    assert base_model.layers[-1].trainable is True

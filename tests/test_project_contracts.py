@@ -111,11 +111,122 @@ def test_new_architecture_configs_share_the_benchmark_recipe():
         ):
             assert config[section] == benchmark[section]
         assert config["dataset"]["data_dir"] == benchmark["dataset"]["data_dir"]
-        assert config["dataset"]["cache_mode"] == "none"
+        # Recipe v4 (2026-11): the four laggards moved from batch 32 with no
+        # cache to the shared in-memory cache, so every pretrained config now
+        # matches the template's dataset recipe. nasnet_mobile is the sole
+        # exception: its 769-layer graph OOMs a T4 at a global batch of 128.
+        if architecture == "nasnet_mobile":
+            assert config["dataset"]["batch_size"] == 64
+            assert config["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
+        else:
+            assert config["dataset"]["batch_size"] == benchmark["dataset"]["batch_size"]
+            assert (
+                config["dataset"]["batch_size_fallbacks"]
+                == benchmark["dataset"]["batch_size_fallbacks"]
+            )
+        assert config["dataset"]["cache_mode"] == benchmark["dataset"]["cache_mode"]
         assert config["export"]["save_dir"] == "../models"
         assert config["callbacks"]["csv_logger"]["filename"].endswith(
             f"{architecture}.csv"
         )
+
+
+def test_pretrained_configs_share_the_recipe_v4_core():
+    """Every ImageNet config trains under one recipe, differing only where the
+    backbone forces it (unfreeze index, class-weight cap, NASNet batch size).
+
+    This is the guard for the v4 unification: before it, the four laggard
+    configs silently kept batch 32, no decoding cache, a plateau LR schedule,
+    no label smoothing, and a 10-epoch fine-tune tail while the four
+    "modernized" ones used the recipe that produced the 87% baseline.
+    """
+    pretrained = (
+        "mobilenet_v1",
+        "mobilenetv2",
+        "mobilenetv3_small",
+        "mobilenet_v3_large",
+        "nasnet_mobile",
+        "efficientnet_b0",
+        "efficientnet_v2_b0",
+        "efficientnet_lite0",
+    )
+    for architecture in pretrained:
+        config = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        training = config["training"]
+        assert training["freeze_base"] is True
+        assert training["epochs"] == 36
+        assert training["unfreeze_epoch"] == 20
+        assert float(training["fine_tune_learning_rate"]) == 2e-5
+        assert training["fine_tuning"]["enabled"] is True
+        optimizer = config["optimizer"]
+        assert optimizer["name"] == "adam"
+        assert float(optimizer["learning_rate"]) == 3e-4
+        assert float(optimizer["clipnorm"]) == 1.0
+        schedule = config["lr_schedule"]
+        assert schedule["type"] == "cosine_decay"
+        assert schedule["decay_epochs"] == 20
+        assert float(schedule["alpha"]) == 0.01
+        assert config["loss"]["name"] == "categorical_crossentropy"
+        assert float(config["loss"]["label_smoothing"]) == 0.1
+        assert config["augmentation"]["vertical_flip"] is True
+        assert config["augmentation"]["rotation_range"] == 25
+        assert config["dataset"]["cache_mode"] == "memory"
+        assert config["dataset"]["cache_memory_limit_gb"] == 8.0
+        assert config["performance"]["deterministic"] is False
+        metrics = config["metrics"]
+        assert "accuracy" in metrics and "auc" in metrics
+        assert config["evaluation"]["tta"] == "flip"
+        if architecture == "nasnet_mobile":
+            assert config["dataset"]["batch_size"] == 64
+        else:
+            assert config["dataset"]["batch_size"] == 128
+
+
+def test_comparison_overlay_keeps_architecture_specific_settings():
+    """compare_models must not hand an architecture another's unfreeze index.
+
+    The comparison run clones config_benchmark.yaml. Its unfreeze placeholder
+    is MobileNetV2's 100, which is a valid slice for MobileNetV2's 154-layer
+    backbone but an empty one for MobileNet V1's 86 layers. The overlay pulls
+    the calibrated index and batch size from the matching per-architecture
+    config so the generated config trains what the pinned configs train.
+    """
+    from training.compare_models import (
+        ARCHITECTURES,
+        _apply_architecture_overrides,
+    )
+
+    template = yaml.safe_load(
+        (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
+    )
+    for architecture in ARCHITECTURES:
+        source = yaml.safe_load(
+            (ROOT / "training" / f"config_{architecture}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        config = _apply_architecture_overrides(
+            json.loads(json.dumps(template)), architecture, ROOT
+        )
+        assert config["training"]["unfreeze_from_layer"] == (
+            source["training"]["unfreeze_from_layer"]
+        ), architecture
+        assert config["dataset"]["batch_size"] == source["dataset"]["batch_size"]
+        assert config["dataset"]["batch_size_fallbacks"] == (
+            source["dataset"]["batch_size_fallbacks"]
+        )
+
+    # The template still carries its documented placeholder for unknown names.
+    untouched = _apply_architecture_overrides(
+        json.loads(json.dumps(template)), "not_a_real_architecture", ROOT
+    )
+    assert untouched["training"]["unfreeze_from_layer"] == (
+        template["training"]["unfreeze_from_layer"]
+    )
 
 
 def test_pillow_constraints_match_project_metadata():
@@ -153,10 +264,13 @@ def test_optimized_runtime_defaults_are_present():
         "shufflenetv2_05": (5.0, 128, [128, 64, 32, 16], "memory"),
         "efficientnet_b0": (5.0, 128, [128, 64, 32, 16], "memory"),
         "efficientnet_lite0": (5.0, 128, [128, 64, 32, 16], "memory"),
-        "mobilenet_v1": (5.0, 32, [32, 16], "none"),
-        "mobilenet_v3_large": (5.0, 32, [32, 16], "none"),
-        "nasnet_mobile": (5.0, 32, [32, 16], "none"),
-        "efficientnet_v2_b0": (5.0, 32, [32, 16], "none"),
+        # Recipe v4 (2026-11): the four laggards join the shared batch/cache
+        # recipe. nasnet_mobile stays at 64 because its 769-layer graph OOMs a
+        # T4 at 128 (runtime_profiles.py caps it there too).
+        "mobilenet_v1": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "mobilenet_v3_large": (5.0, 128, [128, 64, 32, 16], "memory"),
+        "nasnet_mobile": (5.0, 64, [64, 32, 16], "memory"),
+        "efficientnet_v2_b0": (5.0, 128, [128, 64, 32, 16], "memory"),
     }
     for architecture, (max_weight, batch_size, fallbacks, cache_mode) in expected_defaults.items():
         config = yaml.safe_load(
@@ -177,9 +291,10 @@ def test_optimized_runtime_defaults_are_present():
     benchmark = yaml.safe_load(
         (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
     )
-    assert benchmark["dataset"]["batch_size"] == 64
-    assert benchmark["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
-    assert benchmark["dataset"]["cache_mode"] == "auto"
+    assert benchmark["dataset"]["batch_size"] == 128
+    assert benchmark["dataset"]["batch_size_fallbacks"] == [128, 64, 32, 16]
+    assert benchmark["dataset"]["cache_mode"] == "memory"
+    assert benchmark["dataset"]["cache_memory_limit_gb"] == 8.0
     assert benchmark["performance"]["validate_dataset_splits"] is True
 
     utils_text = (ROOT / "training" / "utils.py").read_text(encoding="utf-8")
@@ -279,14 +394,9 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         assert config["class_weights"]["normalize"] is True
         assert config["performance"]["mixed_precision"] is True
         assert config["performance"]["jit_compile"] is True
-        expected_cache_mode = (
-            "auto" if architecture == "benchmark"
-            else "none" if architecture in {
-                "mobilenet_v1", "mobilenet_v3_large", "nasnet_mobile", "efficientnet_v2_b0"
-            }
-            else "memory"
-        )
-        assert config["dataset"]["cache_mode"] == expected_cache_mode
+        # Recipe v4 (2026-11): every pretrained config caches in memory now
+        # that the four laggards left their batch-32/no-cache regime behind.
+        assert config["dataset"]["cache_mode"] == "memory"
         assert config["dataset"]["cache_memory_limit_gb"] == 8.0
 
         # The cutoff must leave the baseline policy in charge of the bulk of
@@ -338,10 +448,9 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     assert shufflenet_config["augmentation"]["vertical_flip"] is False
     assert "keras" in shufflenet_config["export"]["formats"]
 
-    # Recipe v3 (2026-11): every two-phase config freezes the head for 20
-    # epochs. They all then fine-tune for 10 epochs except efficientnet_b0,
-    # which runs 16 — its accuracy was concentrated in fine-grained crops that
-    # need a longer adaptation of the unfrozen backbone.
+    # Recipe v4 (2026-11): every two-phase config freezes the head for 20
+    # epochs and then fine-tunes for 16 (36 total), matching the EfficientNetB0
+    # run whose accuracy kept climbing through the long fine-tune tail.
     expected_unfreeze_epochs = {
         "benchmark": 20,
         "mobilenetv2": 20,
@@ -361,6 +470,10 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         )
         assert config["training"]["freeze_base"] is True
         assert config["training"]["unfreeze_epoch"] == unfreeze_epoch
+        assert config["training"]["epochs"] == 36
+        # The fine-tune phase must be at least as long as the frozen phase was
+        # in v2 (10 epochs); v4 doubles the tail rather than shortening it.
+        assert config["training"]["epochs"] - unfreeze_epoch == 16
 
 
 def test_all_model_configs_use_live_progress_logging():
