@@ -796,6 +796,21 @@ def create_fine_tune_optimizer(config):
     )
 
 
+# Short labels for the per-epoch summary line. Keras reports some metrics under
+# decorated names, so each label lists the keys it may arrive as.
+_EPOCH_SUMMARY_METRICS = (
+    ("loss", ("loss",)),
+    (
+        "accuracy",
+        ("accuracy", "categorical_accuracy", "sparse_categorical_accuracy"),
+    ),
+    ("precision", ("precision",)),
+    ("recall", ("recall",)),
+    ("auc", ("auc",)),
+    ("top5_acc", ("top_k_categorical_accuracy", "top_k_categorical_accuracy_1")),
+)
+
+
 class EpochThroughputLogger(keras.callbacks.Callback):
     """Record throughput and optionally emit a compact per-epoch summary."""
 
@@ -847,28 +862,23 @@ class EpochThroughputLogger(keras.callbacks.Callback):
             metrics = logs or {}
             total_epochs = self.params.get("epochs", epoch + 1)
             fields = [f"Epoch {epoch + 1}/{total_epochs}"]
-            for label, candidates in (
-                ("loss", ("loss",)),
-                (
-                    "accuracy",
-                    ("accuracy", "categorical_accuracy", "sparse_categorical_accuracy"),
-                ),
-                ("val_loss", ("val_loss",)),
-                (
-                    "val_accuracy",
-                    (
-                        "val_accuracy",
-                        "val_categorical_accuracy",
-                        "val_sparse_categorical_accuracy",
-                    ),
-                ),
-            ):
-                value = next(
-                    (metrics[key] for key in candidates if key in metrics), None
-                )
-                if value is not None:
+            # Train metrics first, then the validation set, in the order the
+            # config lists them. Every configured metric must reach this line:
+            # on hosted runs it is the only per-epoch metric output.
+            for prefix in ("", "val_"):
+                for label, candidates in _EPOCH_SUMMARY_METRICS:
+                    value = next(
+                        (
+                            metrics[prefix + key]
+                            for key in candidates
+                            if prefix + key in metrics
+                        ),
+                        None,
+                    )
+                    if value is None:
+                        continue
                     try:
-                        fields.append(f"{label}: {float(value):.4f}")
+                        fields.append(f"{prefix}{label}: {float(value):.4f}")
                     except (TypeError, ValueError):
                         continue
             if self.epoch_learning_rate is not None:

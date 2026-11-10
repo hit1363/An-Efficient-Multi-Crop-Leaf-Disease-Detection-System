@@ -708,6 +708,48 @@ def test_synthetic_weighted_fit_runs_both_warmup_and_fine_tune_phases(capsys):
     assert summary_lines[1].startswith("Epoch 2/2 - loss:")
 
 
+def test_epoch_summary_line_reports_every_configured_metric(capsys):
+    """Hosted runs pipe stdout, so this line is their only per-epoch metrics."""
+    logger = EpochThroughputLogger(samples=4, log_mode="summary")
+    logger.set_params({"epochs": 3})
+    logger.on_epoch_begin(0)
+    logger.on_epoch_end(
+        0,
+        {
+            "loss": 3.1,
+            "accuracy": 0.2,
+            "precision": 0.25,
+            "recall": 0.3,
+            "auc": 0.8,
+            "top_k_categorical_accuracy": 0.6,
+            "val_loss": 3.3,
+            "val_accuracy": 0.15,
+            "val_precision": 0.22,
+            "val_recall": 0.28,
+            "val_auc": 0.77,
+            "val_top_k_categorical_accuracy": 0.55,
+        },
+    )
+    line = [
+        row for row in capsys.readouterr().out.splitlines() if " - loss:" in row
+    ][0]
+    for field in (
+        "accuracy: 0.2000",
+        "precision: 0.2500",
+        "recall: 0.3000",
+        "auc: 0.8000",
+        "top5_acc: 0.6000",
+        "val_accuracy: 0.1500",
+        "val_precision: 0.2200",
+        "val_recall: 0.2800",
+        "val_auc: 0.7700",
+        "val_top5_acc: 0.5500",
+    ):
+        assert field in line
+    # Train fields precede validation fields.
+    assert line.index(" - auc:") < line.index("val_loss:")
+
+
 def test_cache_size_estimate_uses_cache_and_label_dtypes():
     float32_gb = _estimate_dataset_cache_gb(
         100,
