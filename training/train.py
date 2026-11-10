@@ -143,9 +143,10 @@ class _MacroConfusionMetric(keras.metrics.Metric):
     macro average that evaluate.py already reports.
 
     Classes nobody predicted (precision) or that never occur (recall) are left
-    out of the mean instead of scoring zero, so a single batch that covers only
-    part of the label space does not read as a collapse. evaluate.py does score
-    those classes zero, so the two agree once every class appears.
+    out of the mean instead of scoring zero. The matrix accumulates over the
+    epoch, so this only matters for classes the model has not predicted yet
+    (early epochs). evaluate.py scores those classes zero, so the logged
+    precision can read higher until the model predicts every class.
     """
 
     def __init__(self, num_classes, kind, name=None, **kwargs):
