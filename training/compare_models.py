@@ -38,17 +38,18 @@ def _apply_architecture_overrides(config, architecture, repo_root):
     but two settings are properties of the backbone rather than of the
     recipe: ``training.unfreeze_from_layer`` indexes that backbone's own
     layer list (100 is a valid slice for MobileNetV2's 154 layers and an
-    empty one for MobileNet V1's 86), and NASNetMobile needs batch 64 to fit
-    a T4. Without this overlay the generated config asks phase 2 to
+    empty one for MobileNet V1's 86), and NASNetMobile runs at batch 64 as
+    an out-of-memory precaution. Without this overlay the generated config asks phase 2 to
     fine-tune nothing, which the depth guard now rejects outright.
     """
     config_path = repo_root / "training" / f"config_{architecture}.yaml"
     if not config_path.exists():
         return config
     source = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    for key in ("unfreeze_from_layer",):
-        if key in source.get("training", {}):
-            config["training"][key] = source["training"][key]
+    if "unfreeze_from_layer" in source.get("training", {}):
+        config["training"]["unfreeze_from_layer"] = source["training"][
+            "unfreeze_from_layer"
+        ]
     for key in ("batch_size", "batch_size_fallbacks"):
         if key in source.get("dataset", {}):
             config["dataset"][key] = source["dataset"][key]

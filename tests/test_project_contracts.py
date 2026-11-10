@@ -114,7 +114,7 @@ def test_new_architecture_configs_share_the_benchmark_recipe():
         # Recipe v4 (2026-11): the four laggards moved from batch 32 with no
         # cache to the shared in-memory cache, so every pretrained config now
         # matches the template's dataset recipe. nasnet_mobile is the sole
-        # exception: its 769-layer graph OOMs a T4 at a global batch of 128.
+        # exception: its 769-layer graph is the deepest, so it runs at 64 as an OOM precaution.
         if architecture == "nasnet_mobile":
             assert config["dataset"]["batch_size"] == 64
             assert config["dataset"]["batch_size_fallbacks"] == [64, 32, 16]
@@ -265,8 +265,8 @@ def test_optimized_runtime_defaults_are_present():
         "efficientnet_b0": (5.0, 128, [128, 64, 32, 16], "memory"),
         "efficientnet_lite0": (5.0, 128, [128, 64, 32, 16], "memory"),
         # Recipe v4 (2026-11): the four laggards join the shared batch/cache
-        # recipe. nasnet_mobile stays at 64 because its 769-layer graph OOMs a
-        # T4 at 128 (runtime_profiles.py caps it there too).
+        # recipe. nasnet_mobile stays at 64 as an OOM precaution for its
+        # 769-layer graph (runtime_profiles.py caps it there too).
         "mobilenet_v1": (5.0, 128, [128, 64, 32, 16], "memory"),
         "mobilenet_v3_large": (5.0, 128, [128, 64, 32, 16], "memory"),
         "nasnet_mobile": (5.0, 64, [64, 32, 16], "memory"),

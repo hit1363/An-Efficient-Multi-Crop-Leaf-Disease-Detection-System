@@ -70,10 +70,10 @@ def apply_runtime_profile(
     # their XLA setting for compatible environments.
     if normalized_platform == "kaggle":
         dataset = runtime_config["dataset"]
-        # NASNetMobile's 769-layer graph allocates far more activation memory
-        # per example than the other backbones: a global batch of 128 OOMs the
-        # dual-T4 session before the first epoch. Cap it here as well as in the
-        # config, because this profile overwrites batch_size unconditionally.
+        # NASNetMobile's 769-layer graph is the deepest backbone, so batch 64 is
+        # a precaution against out-of-memory on the dual-T4 session (not a
+        # measured limit). Cap it here as well as in the config, because this
+        # profile overwrites batch_size unconditionally.
         architecture = (
             str(runtime_config["model"].get("architecture", ""))
             .strip()

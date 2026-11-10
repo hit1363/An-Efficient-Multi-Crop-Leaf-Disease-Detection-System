@@ -7,11 +7,12 @@
 # fine-tune phase (36 epochs total). The previous v2 recipe ran batch 32 with no
 # cache, annealed with reduce_on_plateau, and fine-tuned for only 10 epochs.
 #
-# Batch size 64 (not 128): NASNetMobile's 769-layer graph allocates far more
-# activation memory per example than the other backbones, so the dual-T4 Kaggle
-# profile would OOM at 128. runtime_profiles.apply_runtime_profile caps this
-# architecture at 64 as well, so the hosted notebook cannot silently restore
-# the OOM-prone size.
+# Batch size 64 (not 128), as a precaution rather than a measured limit:
+# NASNetMobile's 769-layer graph is the deepest backbone here (the others have
+# 86-270 layers), so it likely needs the most activation memory per example.
+# This was not profiled on the dual-T4 Kaggle session. If 128 turns out to fit,
+# raise it here and in runtime_profiles.apply_runtime_profile, which caps this
+# architecture at 64 as well so the hosted profile does not override the config.
 
 model:
   architecture: nasnet_mobile

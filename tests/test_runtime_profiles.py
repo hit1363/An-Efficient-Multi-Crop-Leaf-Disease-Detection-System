@@ -262,7 +262,7 @@ def test_kaggle_profile_uses_all_visible_gpus_without_xla(mode):
 
 @pytest.mark.parametrize("mode", ["smoke", "full"])
 def test_kaggle_profile_caps_nasnet_mobile_batch_size(mode):
-    """NASNetMobile OOMs a T4 at a global batch of 128.
+    """NASNetMobile keeps the batch-64 precaution under the Kaggle profile.
 
     The Kaggle profile rewrites dataset.batch_size unconditionally, so the
     architecture-specific cap in the config file alone would be discarded on
