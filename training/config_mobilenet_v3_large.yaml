@@ -131,10 +131,11 @@ export:
   sync_flutter_labels: false
 
 metrics:
-  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
-  # (build_metrics drops them with a warning); macro/per-class scores come from
-  # evaluate.py. AUC is the only extra training signal worth logging.
+  # Macro precision/recall are computed from a running confusion matrix, so they
+  # report the same average evaluate.py prints rather than repeating accuracy.
   - accuracy
+  - precision
+  - recall
   - auc
 
 evaluation:
@@ -160,5 +161,6 @@ performance:
 
 logging:
   level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   save_to_file: true
   log_file: ../logs/training_mobilenet_v3_large.log

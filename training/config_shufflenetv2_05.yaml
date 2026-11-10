@@ -158,6 +158,13 @@ export:
 
 metrics:
   - "accuracy"
+  # Macro precision/recall are computed from a running confusion matrix, so they
+  # report the same average evaluate.py prints rather than repeating accuracy.
+  - "precision"
+  - "recall"
+  - "auc"
+  # The from-scratch run keeps top-5: its early epochs are near the uniform
+  # prior, where top-1 alone cannot show progress.
   - "top_k_categorical_accuracy"
 
 performance:

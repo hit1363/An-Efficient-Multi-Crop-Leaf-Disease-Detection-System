@@ -179,6 +179,12 @@ def test_pretrained_configs_share_the_recipe_v4_core():
         assert config["performance"]["deterministic"] is False
         metrics = config["metrics"]
         assert "accuracy" in metrics and "auc" in metrics
+        # Precision/recall are macro-averaged from a confusion matrix, so they
+        # carry information the micro default (== accuracy) would not.
+        assert "precision" in metrics and "recall" in metrics
+        assert yaml.safe_load(
+            (ROOT / "training" / "config_benchmark.yaml").read_text(encoding="utf-8")
+        )["metrics"] == metrics
         assert config["evaluation"]["tta"] == "flip"
         if architecture == "nasnet_mobile":
             assert config["dataset"]["batch_size"] == 64
@@ -422,7 +428,13 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     assert shufflenet_config["lr_schedule"]["warmup_epochs"] == 3
     assert shufflenet_config["lr_schedule"]["warmup_start_lr"] == 0.0001
     assert shufflenet_config["lr_schedule"]["decay_epochs"] == 40
-    assert "top_k_categorical_accuracy" in shufflenet_config["metrics"]
+    # Recipe v6 (2026-11): the from-scratch run reports the same macro
+    # precision/recall/AUC pair as every ImageNet config, and keeps top-5 for
+    # the near-prior early epochs.
+    shufflenet_metrics = shufflenet_config["metrics"]
+    assert "top_k_categorical_accuracy" in shufflenet_metrics
+    for metric_name in ("accuracy", "precision", "recall", "auc"):
+        assert metric_name in shufflenet_metrics
 
     # Recipe v4 (2026-11): the v3 peak LR of 1e-3 destabilized the from-scratch
     # backbone (train accuracy peaked ~14% at epoch 9 then declined while

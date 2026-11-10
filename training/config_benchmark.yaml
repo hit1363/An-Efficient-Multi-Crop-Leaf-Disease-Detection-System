@@ -137,9 +137,10 @@ export:
 
 metrics:
   - "accuracy"
-  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
-  # (build_metrics drops them with a warning); macro/per-class scores come from
-  # evaluate.py, so AUC is the only extra training signal worth logging.
+  # Macro precision/recall are computed from a running confusion matrix, so they
+  # report the same average evaluate.py prints rather than repeating accuracy.
+  - "precision"
+  - "recall"
   - "auc"
 
 evaluation:
@@ -165,4 +166,9 @@ performance:
 
 logging:
   level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   save_to_file: true
+  # compare_models.py overwrites this with one file per architecture; a direct
+  # "train.py --config config_benchmark.yaml" run lands here instead of the
+  # default training.log in the current directory.
+  log_file: "../logs/training_benchmark.log"

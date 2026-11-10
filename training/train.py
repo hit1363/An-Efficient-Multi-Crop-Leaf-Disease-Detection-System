@@ -133,6 +133,86 @@ def resolve_config_paths(config, config_path):
     return config
 
 
+@keras.saving.register_keras_serializable(package="leaf")
+class _MacroConfusionMetric(keras.metrics.Metric):
+    """Macro-averaged precision or recall from a running confusion matrix.
+
+    tf_keras Precision/Recall take thresholds, top_k or class_id but no
+    "average" argument, so for single-label multiclass their default micro
+    average is just accuracy again. Accumulating the confusion matrix gives the
+    macro average that evaluate.py already reports.
+
+    Classes nobody predicted (precision) or that never occur (recall) are left
+    out of the mean instead of scoring zero, so a single batch that covers only
+    part of the label space does not read as a collapse. evaluate.py does score
+    those classes zero, so the two agree once every class appears.
+    """
+
+    def __init__(self, num_classes, kind, name=None, **kwargs):
+        super().__init__(name=name or kind, **kwargs)
+        if kind not in {"precision", "recall"}:
+            raise ValueError(
+                "kind must be either precision or recall, got " + repr(kind)
+            )
+        self.num_classes = int(num_classes)
+        self.kind = kind
+        self.confusion = self.add_weight(
+            name="confusion",
+            shape=(self.num_classes, self.num_classes),
+            initializer="zeros",
+            dtype=tf.float32,
+        )
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = tf.cast(tf.convert_to_tensor(y_true), tf.float32)
+        y_pred = tf.cast(tf.convert_to_tensor(y_pred), tf.float32)
+        # The loss is categorical cross-entropy, so labels arrive one-hot; a
+        # class-index tensor is accepted too. Only a statically unknown rank
+        # falls back to argmax.
+        if y_true.shape.rank == 1:
+            true_ids = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+        else:
+            true_ids = tf.argmax(y_true, axis=-1, output_type=tf.int32)
+        pred_ids = tf.argmax(y_pred, axis=-1, output_type=tf.int32)
+        counts = tf.one_hot(
+            true_ids * self.num_classes + pred_ids,
+            self.num_classes ** 2,
+            dtype=tf.float32,
+        )
+        if sample_weight is not None:
+            # Class weights reach metrics as per-example weights, so the counts
+            # stay weighted exactly like the accuracy in the same log line.
+            counts *= tf.reshape(tf.cast(sample_weight, tf.float32), [-1, 1])
+        self.confusion.assign_add(
+            tf.reshape(
+                tf.reduce_sum(counts, axis=0),
+                (self.num_classes, self.num_classes),
+            )
+        )
+
+    def result(self):
+        true_positives = tf.linalg.diag_part(self.confusion)
+        if self.kind == "precision":
+            denominator = tf.reduce_sum(self.confusion, axis=0)
+        else:
+            denominator = tf.reduce_sum(self.confusion, axis=1)
+        present = tf.cast(denominator > 0, tf.float32)
+        scores = tf.math.divide_no_nan(true_positives, denominator)
+        return tf.math.divide_no_nan(
+            tf.reduce_sum(scores * present), tf.reduce_sum(present)
+        )
+
+    def reset_state(self):
+        self.confusion.assign(tf.zeros_like(self.confusion))
+
+    def get_config(self):
+        # Without this the saved .keras artifact cannot be reloaded for
+        # quantization or evaluation.
+        config = super().get_config()
+        config.update({"num_classes": self.num_classes, "kind": self.kind})
+        return config
+
+
 def build_metrics(metric_names, num_classes):
     """Build Keras metrics for multiclass classification."""
     built_metrics = []
@@ -146,16 +226,13 @@ def build_metrics(metric_names, num_classes):
         if metric_key == "accuracy":
             built_metrics.append(keras.metrics.CategoricalAccuracy(name="accuracy"))
         elif metric_key in {"precision", "recall"}:
-            # For a single-label multiclass problem, top-k precision/recall
-            # collapse to accuracy. Per-class metrics are computed by evaluate.py.
-            import warnings
-
-            warnings.warn(
-                f"Ignoring training metric '{metric_key}': top-1 multiclass "
-                "precision/recall duplicates accuracy. Use the evaluator for "
-                "macro and per-class metrics.",
-                UserWarning,
-                stacklevel=2,
+            # Macro-averaged, matching evaluate.py. The built-in metrics have no
+            # "average" option here, so their micro average would just repeat
+            # accuracy.
+            built_metrics.append(
+                _MacroConfusionMetric(
+                    num_classes=num_classes, kind=metric_key, name=metric_key
+                )
             )
         elif metric_key == "auc":
             # Single-label softmax classifier: macro AUC over the 1-hot labels.

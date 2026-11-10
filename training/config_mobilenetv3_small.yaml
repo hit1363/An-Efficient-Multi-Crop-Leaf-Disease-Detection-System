@@ -121,9 +121,10 @@ export:
 
 metrics:
   - "accuracy"
-  # Top-1 precision/recall duplicate accuracy for a single-label multiclass fit
-  # (build_metrics drops them with a warning); macro/per-class scores come from
-  # evaluate.py, so AUC is the only extra training signal worth logging.
+  # Macro precision/recall are computed from a running confusion matrix, so they
+  # report the same average evaluate.py prints rather than repeating accuracy.
+  - "precision"
+  - "recall"
   - "auc"
 
 evaluation:

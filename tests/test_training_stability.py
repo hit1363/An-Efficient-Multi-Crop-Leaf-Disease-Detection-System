@@ -1496,11 +1496,45 @@ def test_run_metadata_records_null_weight_ranges_when_weighting_is_disabled(tmp_
     assert metadata["class_weights"]["applied_range"] is None
 
 
-def test_training_precision_recall_are_skipped_as_duplicate_of_accuracy():
-    with pytest.warns(UserWarning, match="duplicates accuracy"):
-        metrics = build_metrics(["accuracy", "precision", "recall"], 3)
+def test_training_precision_recall_are_macro_averaged():
+    """precision/recall must be macro, not the micro average that equals accuracy.
 
-    assert [metric.name for metric in metrics] == ["accuracy"]
+    tf_keras's Precision/Recall have no "average" argument, so the defaults
+    collapse to accuracy on a single-label multiclass fit. The custom metric
+    averages over classes that were actually predicted or supported, which is
+    what evaluate.py reports.
+    """
+    metrics = build_metrics(["accuracy", "precision", "recall"], 3)
+
+    assert [metric.name for metric in metrics] == ["accuracy", "precision", "recall"]
+
+    precision, recall = metrics[1], metrics[2]
+    # Three samples: 0->0 (right), 1->0 (wrong), 2->2 (right).
+    # Precision: class 0 is predicted twice and right once -> 0.5; class 1 is
+    # never predicted so it drops out of the mean; class 2 is right once -> 1.0.
+    # Macro precision is (0.5 + 1.0) / 2 = 0.75, where the micro average is the
+    # 2/3 accuracy of this batch.
+    precision.update_state(
+        tf.constant([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        tf.constant([[0.9, 0.1, 0.0], [0.9, 0.1, 0.0], [0.0, 0.1, 0.9]]),
+    )
+    assert float(precision.result()) == pytest.approx(0.75)
+    assert float(precision.result()) != pytest.approx(2 / 3)
+
+    # Recall counts by support: 1/1, 0/1, 1/1 -> 2/3 for all three classes.
+    recall.update_state(
+        tf.constant([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        tf.constant([[0.9, 0.1, 0.0], [0.9, 0.1, 0.0], [0.0, 0.1, 0.9]]),
+    )
+    assert float(recall.result()) == pytest.approx(2 / 3)
+
+    precision.reset_state()
+    assert float(precision.result()) == 0.0
+
+    # The metric is saved inside the .keras/.h5 artifacts, so it must round-trip
+    # through get_config; an unregistered class makes load_model fail afterwards.
+    clone = precision.__class__.from_config(precision.get_config())
+    assert (clone.num_classes, clone.kind, clone.name) == (3, "precision", "precision")
 
 
 def test_explicit_steps_and_estimated_counts_use_finite_dataset_cardinality():
