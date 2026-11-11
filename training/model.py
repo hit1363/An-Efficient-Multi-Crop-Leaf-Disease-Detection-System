@@ -44,6 +44,33 @@ def _get_tfhub_module():
         ) from exc
 
 
+# Substrings that identify a dtype mismatch between the tensor fed into a
+# TF1-format Hub SavedModel and the float32 signature baked into that module.
+# Re-downloading cannot fix these, so they must never trigger a cache wipe.
+_TFHUB_DTYPE_ERROR_TOKENS = (
+    "expected to be a float tensor but is a half tensor",
+    "expected to be a half tensor but is a float tensor",
+    "expected to be a double tensor but is a float tensor",
+    "expected to be a float tensor but is a double tensor",
+    "half tensor",
+)
+
+
+def _is_tfhub_dtype_error(exc):
+    """Detect a float16/float32 mismatch against a SavedModel's fixed signature.
+
+    Legacy TF1 Hub modules (EfficientNet-Lite0) fix their input dtype at save
+    time, so mixed_float16 autocasting makes the forward pass fail with a
+    "expected to be a float tensor but is a half tensor" error. The module is
+    intact in that case: clearing the cache and re-downloading is pointless.
+    """
+    message = str(exc).lower()
+    if any(token in message for token in _TFHUB_DTYPE_ERROR_TOKENS):
+        return True
+    # Graph-inference failures sometimes report only the node name.
+    return "cannot compute" in message and "dtype" in message
+
+
 def _is_tfhub_cache_error(exc):
     """Heuristics to detect corrupted TF Hub downloads and transient load failures.
 
@@ -51,6 +78,9 @@ def _is_tfhub_cache_error(exc):
     a network/resolver issue, or a server-side error is worth clearing the
     cache and retrying once before giving up.
     """
+    if _is_tfhub_dtype_error(exc):
+        return False
+
     message = str(exc).lower()
     tokens = [
         # Corrupt / invalid module
@@ -214,20 +244,34 @@ def _create_tfhub_layer(hub_url, hub_cache_dir, input_shape):
 
     Tries the handle directly first (works if hub can resolve it online),
     then a locally-resolved handle. Returns the ``hub.KerasLayer``.
+
+    The layer is always pinned to a float32 dtype policy. A TF1-format module
+    fixes its input dtype at save time, and Keras' documented behaviour is that
+    "the data types used by a saved model have been fixed at saving time. Using
+    keras.mixed_precision etc. has no effect on the saved model that gets
+    loaded by a hub.KerasLayer." Without the explicit dtype the layer inherits
+    the global mixed_float16 policy and autocasts its input to float16, which
+    fails inside the module with "expected to be a float tensor but is a half
+    tensor". Pinning float32 keeps the backbone inputs in float32 while the
+    trainable head below still runs under the mixed-precision policy.
     """
     hub = _get_tfhub_module()
 
     # Preferred path: resolve to a local/GCS-downloaded module handle.
     handle, is_local = _resolve_module_handle(hub_url, hub_cache_dir)
     try:
-        layer = hub.KerasLayer(handle, input_shape=input_shape, trainable=False)
+        layer = hub.KerasLayer(
+            handle, input_shape=input_shape, trainable=False, dtype="float32"
+        )
         return layer
     except Exception:
         # If local resolution already happened and still failed, nothing more
         # to try. Otherwise fall back to the raw hub URL as a last resort.
         if is_local:
             raise
-        return hub.KerasLayer(hub_url, input_shape=input_shape, trainable=False)
+        return hub.KerasLayer(
+            hub_url, input_shape=input_shape, trainable=False, dtype="float32"
+        )
 
 
 def _sanity_check_layer(layer, input_shape):
@@ -237,9 +281,17 @@ def _sanity_check_layer(layer, input_shape):
     fail in seconds rather than partway through ``model.fit()``.
     """
     try:
-        dummy = tf.random.normal((1,) + tuple(input_shape))
+        dummy = tf.random.normal((1,) + tuple(input_shape), dtype=tf.float32)
         _ = layer(dummy, training=False)
     except Exception as exc:
+        if _is_tfhub_dtype_error(exc):
+            raise RuntimeError(
+                "EfficientNet-Lite0 backbone rejected a float32 input "
+                "because it was autocast to another dtype before reaching "
+                "the TF Hub module. The module's signature is fixed at "
+                "float32, so the Keras layer must keep dtype='float32' even "
+                f"when the global policy is mixed_float16. Error: {exc}"
+            ) from exc
         raise RuntimeError(
             "EfficientNet-Lite0 backbone failed its forward-pass sanity check. "
             "The downloaded module may be corrupt. Clear the TF Hub cache "
@@ -657,6 +709,18 @@ def create_efficientnet_model(
             _sanity_check_layer(base_model, input_shape)
             break
         except Exception as exc:
+            # A dtype mismatch is a build-time bug, not a download problem:
+            # retrying and wiping the cache would only re-download 3 times
+            # before failing with the same error.
+            if _is_tfhub_dtype_error(exc):
+                raise RuntimeError(
+                    "The TF Hub EfficientNet-Lite0 module was loaded but "
+                    "rejected a float32 input, so the input reached the "
+                    f"module with another dtype. Hub URL: {hub_url!r}. "
+                    f"Cache: {cache_dir!r}. The module signature is fixed "
+                    "at float32; the Keras layer must keep dtype='float32' "
+                    f"under a mixed_float16 policy. Error: {exc}"
+                ) from exc
             if attempt >= attempts:
                 print(
                     f"[model] TF Hub Lite0 module failed after {attempts} attempt(s): {exc}"
@@ -687,7 +751,10 @@ def create_efficientnet_model(
     # Classification head
     # Note: Hub feature-vector endpoint outputs (batch, 1280), already aggregated
     # So we do NOT use GlobalAveragePooling2D (expects 4D input, we have 1D)
-    inputs = tf.keras.Input(shape=input_shape)
+    # The float32 input dtype matches the backbone: under mixed_float16 the
+    # Keras Input layer would otherwise be created as float16 and the hub layer
+    # (pinned to float32) would cast it straight back, costing a round trip.
+    inputs = tf.keras.Input(shape=input_shape, dtype="float32")
     x = base_model(inputs, training=False)  # Output: (batch, 1280)
     x = tf.keras.layers.Dense(512, activation="relu")(
         x
@@ -695,7 +762,11 @@ def create_efficientnet_model(
     x = tf.keras.layers.Dropout(dropout_rate)(x)
     x = tf.keras.layers.Dense(256, activation="relu")(x)
     x = tf.keras.layers.Dropout(dropout_rate * 0.6)(x)
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+    # Softmax in float32 for numerically stable probabilities (same convention
+    # as create_efficientnet_b0_model).
+    outputs = tf.keras.layers.Dense(
+        num_classes, activation="softmax", dtype="float32"
+    )(x)
 
     model = tf.keras.Model(inputs, outputs, name="efficientnet_lite0_disease_detector")
 
