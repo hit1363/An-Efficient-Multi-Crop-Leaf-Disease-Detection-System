@@ -65,7 +65,7 @@ def infer_architecture_from_path(model_path):
     if "mobilenetv2" in lower or "mobilenet_v2" in lower:
         return "mobilenetv2"
     if "efficientnet" in lower:
-        return "efficientnet_lite0"
+        return "efficientnet_b0"
     if "mobilenet" in lower:
         return "mobilenetv2"
     return "mobilenetv2"
@@ -140,10 +140,6 @@ def _build_model_from_config(
         "num_classes": num_classes,
         "dropout_rate": dropout_rate,
         "weights": weights,
-        "hub_url": model_cfg.get("hub_url"),
-        "hub_cache_dir": model_cfg.get("hub_cache_dir"),
-        "hub_download_retries": model_cfg.get("hub_download_retries", 1),
-        "hub_download_delay_sec": model_cfg.get("hub_download_delay_sec", 5),
     }
     # train.py passes these for the two architectures that own a configurable
     # dense head; omitting them rebuilds a differently shaped model whose
@@ -789,7 +785,7 @@ def main():
         "--arch",
         type=str,
         default=None,
-        help="Model architecture for preprocessing (mobilenetv2, efficientnet_b0, or efficientnet_lite0)",
+        help="Model architecture for preprocessing (e.g. mobilenetv2, efficientnet_b0)",
     )
     parser.set_defaults(quantize=True)
 

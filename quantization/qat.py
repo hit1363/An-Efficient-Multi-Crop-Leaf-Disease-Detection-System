@@ -63,10 +63,6 @@ def _build_model(config):
         num_classes=int(model_config["num_classes"]),
         dropout_rate=float(model_config.get("dropout_rate", 0.5)),
         weights=model_config.get("weights", "imagenet"),
-        hub_url=model_config.get("hub_url"),
-        hub_cache_dir=model_config.get("hub_cache_dir"),
-        hub_download_retries=model_config.get("hub_download_retries", 1),
-        hub_download_delay_sec=model_config.get("hub_download_delay_sec", 5),
     )[0]
 
 

@@ -1,8 +1,4 @@
-"""TensorFlow smoke tests for the offline-capable model factories.
-
-The EfficientNet-Lite0 model is intentionally excluded because it requires a
-TensorFlow Hub download. Run that model's notebook in Colab/Kaggle separately.
-"""
+"""TensorFlow smoke tests for the offline-capable model factories."""
 
 import pytest
 

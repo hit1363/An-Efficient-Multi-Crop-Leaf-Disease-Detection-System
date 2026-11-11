@@ -194,23 +194,6 @@ def test_full_profile_uses_192_input_for_mobilenetv3_small_no_cap_224():
     assert runtime["training"]["epochs"] == 10
 
 
-def test_full_profile_keeps_efficientnet_lite0_input_size():
-    runtime = apply_runtime_profile(
-        {
-            "model": {
-                "architecture": "efficientnet_lite0",
-                "input_shape": [224, 224, 3],
-            },
-            "training": {"epochs": 10},
-        },
-        "full",
-        platform="kaggle",
-    )
-
-    assert runtime["model"]["input_shape"] == [224, 224, 3]
-    assert runtime["training"]["epochs"] == 10
-
-
 def test_runtime_profile_preserves_explicit_progress_logging():
     runtime = apply_runtime_profile(
         {"training": {"epochs": 10, "log_mode": "progress"}},

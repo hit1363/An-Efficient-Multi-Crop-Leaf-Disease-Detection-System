@@ -40,7 +40,6 @@ ARCHITECTURES = (
     "nasnet_mobile",
     "efficientnet_b0",
     "efficientnet_v2_b0",
-    "efficientnet_lite0",
 )
 PREFERRED_VARIANTS = ("int8", "dynamic", "float")
 

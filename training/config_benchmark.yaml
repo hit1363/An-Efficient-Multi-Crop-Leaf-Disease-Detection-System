@@ -19,7 +19,6 @@ model:
   dropout_rate: 0.35
   classifier_units: 256
   include_preprocessing: true
-  hub_url: "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
 
 dataset:
   data_dir: "../dataset/processed"

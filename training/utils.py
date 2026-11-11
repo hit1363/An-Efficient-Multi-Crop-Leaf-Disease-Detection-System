@@ -452,8 +452,6 @@ def get_preprocess_fn(architecture):
         return tf.keras.applications.mobilenet_v2.preprocess_input
     if arch == "efficientnet_b0":
         return tf.keras.applications.efficientnet.preprocess_input
-    if arch in {"efficientnet", "efficientnet_lite0"}:
-        return lambda x: tf.cast(x, tf.float32) / 255.0
     return None
 
 
@@ -1513,13 +1511,7 @@ def choose_batch_size(config, runtime, logger=None):
 def get_checkpoint_path(config, checkpoint_name="best_model"):
     """Return the canonical checkpoint path and its serialization mode."""
     checkpoint_config = config.get("callbacks", {}).get("checkpoint", {})
-    architecture = config.get("model", {}).get("architecture", "").lower()
-    is_lite0_arch = architecture in ["efficientnet", "efficientnet_lite0"]
-
     save_weights_only = checkpoint_config.get("save_weights_only", False)
-    if is_lite0_arch and not save_weights_only:
-        # TF Hub-backed models are more reliable with weights-only checkpoints.
-        save_weights_only = True
 
     extension = ".weights.h5" if save_weights_only else ".h5"
     checkpoint_dir = checkpoint_config.get("directory") or os.path.join(

@@ -43,7 +43,6 @@ tensorboard/
 *.pth
 *.weights
 models/mobilenetv2/*.h5
-models/efficientnet_lite0/*.h5
 models/exported_tflite/*.tflite
 
 # Dataset (DO NOT commit large datasets)
@@ -119,7 +118,6 @@ temp/
 !dataset/raw/.gitkeep
 !dataset/processed/.gitkeep
 !models/mobilenetv2/.gitkeep
-!models/efficientnet_lite0/.gitkeep
 !models/exported_tflite/.gitkeep
 docs/~$development_progress_presentation.pptx
 docs/~$lti_crop_leaf_disease_development_progress_report.docx

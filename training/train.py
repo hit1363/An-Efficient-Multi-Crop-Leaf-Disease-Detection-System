@@ -1,6 +1,6 @@
 """
 Training Script for Multi-Crop Leaf Disease Detection
-Uses transfer learning with MobileNetV2 or EfficientNet-Lite0
+Uses transfer learning with MobileNetV2 or other supported backbones
 """
 
 import os
@@ -1970,10 +1970,6 @@ def train_model(config_path="config.yaml"):
             "num_classes": config["model"]["num_classes"],
             "dropout_rate": config["model"]["dropout_rate"],
             "weights": config["model"]["weights"],
-            "hub_url": config["model"].get("hub_url"),
-            "hub_cache_dir": config["model"].get("hub_cache_dir"),
-            "hub_download_retries": config["model"].get("hub_download_retries", 1),
-            "hub_download_delay_sec": config["model"].get("hub_download_delay_sec", 5),
         }
         architecture = config["model"]["architecture"].lower()
         if architecture in {"mobilenetv2", "efficientnet_b0"}:
@@ -2216,7 +2212,6 @@ def train_model(config_path="config.yaml"):
     artifacts = {}
 
     # Save in multiple formats
-    is_lite0_arch = model_name.lower() in ["efficientnet", "efficientnet_lite0"]
 
     if "keras" in config["export"]["formats"]:
         # Native Keras format: no HDF5 legacy warning and no config loss.
@@ -2227,17 +2222,11 @@ def train_model(config_path="config.yaml"):
             artifacts["keras"] = keras_path
 
     if "h5" in config["export"]["formats"]:
-        if is_lite0_arch:
-            logger.warning(
-                "Skipping H5 export for %s because TF Hub-backed models are best saved as SavedModel/TFLite.",
-                model_name,
-            )
-        else:
-            h5_path = os.path.join(save_dir, model_name, f"{model_name}_{timestamp}.h5")
-            os.makedirs(os.path.dirname(h5_path), exist_ok=True)
-            model.save(h5_path)
-            logger.info(f"Saved H5 model: {h5_path}")
-            artifacts["h5"] = h5_path
+        h5_path = os.path.join(save_dir, model_name, f"{model_name}_{timestamp}.h5")
+        os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+        model.save(h5_path)
+        logger.info(f"Saved H5 model: {h5_path}")
+        artifacts["h5"] = h5_path
 
     if "saved_model" in config["export"]["formats"]:
         sm_path = os.path.join(save_dir, model_name, f"saved_model_{timestamp}")

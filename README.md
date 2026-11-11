@@ -5,7 +5,7 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 ## Overview
 
 - 72 canonical classes (including the explicit `Invalid` class) across 15+ crops
-- MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, EfficientNetB0/EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference
+- MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, and EfficientNetB0/EfficientNetV2-B0
 - Post-training quantization (dynamic range and full INT8)
 - Flutter app with camera/gallery input and offline inference
 
@@ -52,7 +52,6 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 │   ├── config_nasnet_mobile.yaml
 │   ├── config_efficientnet_b0.yaml
 │   ├── config_efficientnet_v2_b0.yaml
-│   ├── config_efficientnet_lite0.yaml
 │   └── config_shufflenetv2_05.yaml
 ├── quantization/
 │   └── post_training_quant.py
@@ -103,13 +102,12 @@ python training/train.py --config training/config_mobilenet_v3_large.yaml
 python training/train.py --config training/config_nasnet_mobile.yaml
 python training/train.py --config training/config_efficientnet_b0.yaml
 python training/train.py --config training/config_efficientnet_v2_b0.yaml
-python training/train.py --config training/config_efficientnet_lite0.yaml
 python training/train.py --config training/config_shufflenetv2_05.yaml
 ```
 
 **Recipe v4 (November 2026).** Every ImageNet config now trains the single recipe that produced the project's best run (EfficientNetB0, 87.1%), and `training/config_benchmark.yaml` is its single source of truth (`compare_models.py` clones it per architecture). The head is frozen for 20 epochs under a full cosine decay (`lr_schedule.decay_epochs: 20`, `alpha: 0.01`), then the tail of the backbone is unfrozen for 16 fine-tuning epochs at `fine_tune_learning_rate: 2e-5` (36 epochs total). Adam runs at 3e-4 with `clipnorm: 1.0`; the loss is categorical cross-entropy with label smoothing 0.1 (the capped benchmark is class-balanced, so focal loss only suppressed true-positive gradients); the dataset is cached in memory (`cache_mode: memory`); batch is 128 with `[128, 64, 32, 16]` fallbacks; augmentation adds vertical flips; the epoch log carries accuracy, macro precision, macro recall and AUC; and evaluation applies flip TTA. Every config also shares one logging block — `level: INFO`, the `"%(asctime)s - %(name)s - %(levelname)s - %(message)s"` format, `save_to_file: true`, and a per-architecture `log_file` under `../logs/` (the benchmark template's default is overwritten per architecture by `compare_models.py`). Recipe v3 and earlier left the four later additions (MobileNet V1, MobileNet V3-Large, NASNetMobile, EfficientNetV2-B0) on batch 32, no cache, a plateau schedule, no label smoothing, and a 10-epoch tail, which is why they trailed the baseline.
 
-**Unfreeze index is architecture-specific.** `training.unfreeze_from_layer` indexes that backbone's own layer list, so the same number means different things on different depths; the EfficientNetB0 reference is 140 of 237 layers (59.1% of the depth, 77 trainable layers). Recipe v4 calibrated the four laggards to that fraction: MobileNet V1 49 of 86 (57.0%), MobileNet V3 Large 149 of 263 (56.7%), EfficientNetV2-B0 150 of 270 (55.6%), NASNetMobile 454 of 769 (59.0% — its inherited 100 unfroze 87% of the layers, i.e. a near-full fine-tune rather than a head-and-tail adaptation). MobileNetV2 (130 of 154) and MobileNet V3 Small (100 of 229) keep the indices their own runs were tuned with; EfficientNet-Lite0 is all-or-nothing through its TF Hub layer. `model.unfreeze_base_model` and `qat._configure_qat_trainability` now raise `ValueError` when an index is at or beyond the depth instead of silently freezing the whole backbone — the failure that made an earlier MobileNet V1 run fine-tune nothing at all. The indices are pinned by `tests/test_project_contracts.py` and `tests/test_model_factory_runtime.py`.
+**Unfreeze index is architecture-specific.** `training.unfreeze_from_layer` indexes that backbone's own layer list, so the same number means different things on different depths; the EfficientNetB0 reference is 140 of 237 layers (59.1% of the depth, 77 trainable layers). Recipe v4 calibrated the four laggards to that fraction: MobileNet V1 49 of 86 (57.0%), MobileNet V3 Large 149 of 263 (56.7%), EfficientNetV2-B0 150 of 270 (55.6%), NASNetMobile 454 of 769 (59.0% — its inherited 100 unfroze 87% of the layers, i.e. a near-full fine-tune rather than a head-and-tail adaptation). MobileNetV2 (130 of 154) and MobileNet V3 Small (100 of 229) keep the indices their own runs were tuned with;. `model.unfreeze_base_model` and `qat._configure_qat_trainability` now raise `ValueError` when an index is at or beyond the depth instead of silently freezing the whole backbone — the failure that made an earlier MobileNet V1 run fine-tune nothing at all. The indices are pinned by `tests/test_project_contracts.py` and `tests/test_model_factory_runtime.py`.
 
 **Macro precision and recall are logged every epoch.** `tf_keras` `Precision`/`Recall` accept `thresholds`, `top_k` or `class_id` but no `average` argument, so on a single-label multiclass fit their default micro average is accuracy again — which is why `build_metrics` used to drop the names with a warning. `training/train.py` now logs a `_MacroConfusionMetric` instead: it accumulates a `num_classes × num_classes` confusion matrix and averages precision over predicted classes and recall over supported classes, matching the macro figures `training/evaluate.py` prints from sklearn. The matrix accumulates over the whole epoch and resets at each epoch start. Precision leaves out any class the model has not predicted yet, and recall any class with no samples, instead of scoring them zero; `evaluate.py` scores them zero. Recall therefore matches `evaluate.py` whenever every class has validation samples, and precision matches it once the model predicts every class at least once. Early in training with 72 classes, the logged precision can read higher than the evaluator's.
 
@@ -131,7 +129,7 @@ python training/compare_models.py --data-dir dataset/processed --output-dir resu
 ```
 
 The comparison covers MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile,
-EfficientNetB0, EfficientNetV2-B0, and the UT EfficientNet-Lite0 reference. It
+EfficientNetB0, and EfficientNetV2-B0. It
 reports float and full INT8 classification metrics, TFLite size, single-thread
 CPU latency, and the Pareto frontier. CPU timing is a proxy; validate
 finalists on the target Android device. Do not compare runs produced from
@@ -185,7 +183,6 @@ Use a model-specific notebook to train one candidate, evaluate it, export dynami
 | NASNetMobile | [Train](notebooks/colab_nasnet_mobile_training.ipynb) | [Train](notebooks/kaggle_nasnet_mobile_training.ipynb) |
 | EfficientNetB0 | [Train](notebooks/colab_efficientnet_b0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_b0_training.ipynb) |
 | EfficientNetV2-B0 | [Train](notebooks/colab_efficientnet_v2_b0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_v2_b0_training.ipynb) |
-| EfficientNet-Lite0 | [Train](notebooks/colab_efficientnet_lite0_training.ipynb) | [Train](notebooks/kaggle_efficientnet_lite0_training.ipynb) |
 
 For artifact evaluation and ranking, use the [Colab comparison notebook](notebooks/colab_model_comparison.ipynb) or [Kaggle comparison notebook](notebooks/kaggle_model_comparison.ipynb). To rebuild and train the harmonized benchmark on Kaggle, use the [harmonized comparison notebook](notebooks/kaggle_harmonized_comparison.ipynb).
 
@@ -239,8 +236,7 @@ os.environ["TRAINING_RUN_MODE"] = "full"  # or "smoke"
 ```
 
 For a balanced workflow, run `smoke` first and then rerun the notebook from
-the configuration cell with `full`. EfficientNet-Lite0 benefits from a
-persistent TensorFlow Hub cache; ShuffleNetV2 0.5x is randomly initialized in
+the configuration cell with `full`. ShuffleNetV2 0.5x is randomly initialized in
 this project and therefore requires its own full-training schedule rather than
 the transfer-learning assumptions used by the ImageNet-backed models.
 
@@ -252,11 +248,10 @@ Training and quantization use TensorFlow preprocess_input for the selected archi
 - MobileNetV3-Small: input range [-1, 1]
 - ShuffleNetV2 0.5x: input range [-1, 1]
 - EfficientNetB0: raw input range [0, 255] (the Keras model includes rescaling)
-- EfficientNet-Lite0: input range [0, 1]
 
 Set the deployment client's preprocessing mode to match the selected model:
 MobileNet-family models use `mobilenet_v2`-style `[-1, 1]` input, while
-EfficientNetB0 uses raw `[0, 255]` input and EfficientNet-Lite0 uses `[0, 1]`.
+EfficientNetB0 uses raw `[0, 255]` input.
 The checked-in repository does not currently include the Flutter client, so
 the client-side setting must be applied in the deployment project.
 

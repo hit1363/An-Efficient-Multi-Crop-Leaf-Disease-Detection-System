@@ -48,7 +48,7 @@ def infer_architecture_from_path(model_path):
     if "mobilenetv2" in lower_path or "mobilenet_v2" in lower_path:
         return "mobilenetv2"
     if "efficientnet" in lower_path:
-        return "efficientnet_lite0"
+        return "efficientnet_b0"
     if "mobilenet" in lower_path:
         return "mobilenetv2"
     raise ValueError("Pass --arch when the model filename does not identify its architecture.")
@@ -264,7 +264,7 @@ def main():
     parser.add_argument(
         "--arch",
         default=None,
-        help="mobilenetv2, efficientnet_b0, or efficientnet_lite0",
+        help="mobilenetv2, efficientnet_b0, efficientnet_v2_b0, ...",
     )
     parser.add_argument(
         "--max-samples", type=int, default=None, help="Optional limit for faster checks"

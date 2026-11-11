@@ -58,7 +58,6 @@ def test_all_model_configs_exist():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
         "shufflenetv2_05",
     ]
     for architecture in architectures:
@@ -148,7 +147,6 @@ def test_pretrained_configs_share_the_recipe_v4_core():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
     )
     for architecture in pretrained:
         config = yaml.safe_load(
@@ -242,34 +240,12 @@ def test_pillow_constraints_match_project_metadata():
     assert '"pillow>=12.3.0"' in pyproject_text
 
 
-def test_efficientnet_lite0_uses_the_valid_tfhub_endpoint():
-    endpoint = "https://tfhub.dev/tensorflow/efficientnet/lite0/feature-vector/2"
-    stale_endpoint = "https://tfhub.dev/google/efficientnet/lite0/feature-vector/2"
-    config_text = (
-        ROOT / "training" / "config_efficientnet_lite0.yaml"
-    ).read_text(encoding="utf-8")
-    model_text = (ROOT / "training" / "model.py").read_text(encoding="utf-8")
-
-    assert endpoint in config_text
-    assert endpoint in model_text
-    assert stale_endpoint not in config_text
-    assert stale_endpoint not in model_text
-
-
-def test_tfhub_gcs_download_uses_the_tarball_suffix():
-    model_text = (ROOT / "training" / "model.py").read_text(encoding="utf-8")
-    assert "archive_url" in model_text
-    assert 'f"{gcs_url}.tar.gz"' in model_text
-    assert 'origin=archive_url' in model_text
-
-
 def test_optimized_runtime_defaults_are_present():
     expected_defaults = {
         "mobilenetv2": (3.0, 128, [128, 64, 32, 16], "memory"),
         "mobilenetv3_small": (5.0, 128, [128, 64, 32, 16], "memory"),
         "shufflenetv2_05": (5.0, 128, [128, 64, 32, 16], "memory"),
         "efficientnet_b0": (5.0, 128, [128, 64, 32, 16], "memory"),
-        "efficientnet_lite0": (5.0, 128, [128, 64, 32, 16], "memory"),
         # Recipe v4 (2026-11): the four laggards join the shared batch/cache
         # recipe. nasnet_mobile stays at 64 as an OOM precaution for its
         # 769-layer graph (runtime_profiles.py caps it there too).
@@ -321,7 +297,6 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "mobilenetv3_small",
         "shufflenetv2_05",
         "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenet_v1",
         "mobilenet_v3_large",
         "nasnet_mobile",
@@ -468,7 +443,6 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "mobilenetv2": 20,
         "mobilenetv3_small": 20,
         "efficientnet_b0": 20,
-        "efficientnet_lite0": 20,
         "mobilenet_v1": 20,
         "mobilenet_v3_large": 20,
         "nasnet_mobile": 20,
@@ -499,7 +473,6 @@ def test_all_model_configs_use_live_progress_logging():
         "efficientnet_v2_b0",
         "shufflenetv2_05",
         "efficientnet_b0",
-        "efficientnet_lite0",
     )
     for architecture in architectures:
         config = yaml.safe_load(
@@ -515,7 +488,6 @@ def test_colab_training_notebooks_stream_live_keras_progress():
         "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
         "mobilenet_v3_large",
         "nasnet_mobile",
@@ -565,9 +537,8 @@ def test_colab_training_notebooks_stream_live_keras_progress():
         for cell in generic_notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert generic_code.count('cfg["training"]["log_mode"] = "progress"') == 2
+    assert generic_code.count('cfg["training"]["log_mode"] = "progress"') == 1
     assert "!python -u train.py --config config_mobilenetv2.yaml" in generic_code
-    assert "!python -u train.py --config config_efficientnet_lite0.yaml" in generic_code
 
 
 def test_kaggle_training_notebooks_stream_live_keras_progress():
@@ -575,7 +546,6 @@ def test_kaggle_training_notebooks_stream_live_keras_progress():
         "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
         "mobilenet_v3_large",
         "nasnet_mobile",
@@ -634,9 +604,6 @@ def test_colab_efficientnet_b0_notebook_pins_b0_architecture():
     compile(training_cell, f"{path}:training", "exec")
     assert 'ARCH = "efficientnet_b0"' in config_cell
     assert 'cfg["model"]["architecture"] = ARCH' in config_cell
-    assert 'cfg["model"].pop("hub_url", None)' in config_cell
-    assert 'cfg["model"].pop("hub_cache_dir", None)' in config_cell
-    assert "efficientnet_lite0" not in config_cell
     assert "cfg_path" in training_cell
 
 
@@ -658,7 +625,6 @@ def test_standalone_notebooks_have_valid_code_and_platform_paths():
         "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
         "mobilenet_v3_large",
         "nasnet_mobile",
@@ -760,8 +726,7 @@ def test_standalone_notebooks_separate_clone_and_dependency_install_cells():
             "mobilenet_v1",
             "mobilenetv2",
             "efficientnet_b0",
-            "efficientnet_lite0",
-            "mobilenetv3_small",
+                "mobilenetv3_small",
             "mobilenet_v3_large",
             "nasnet_mobile",
             "efficientnet_v2_b0",
@@ -794,7 +759,6 @@ def test_all_colab_notebooks_include_kaggle_dataset_setup():
         "mobilenet_v1",
         "mobilenetv2",
         "efficientnet_b0",
-        "efficientnet_lite0",
         "mobilenetv3_small",
         "mobilenet_v3_large",
         "nasnet_mobile",
@@ -829,7 +793,6 @@ def test_comparison_notebooks_and_common_runner_contract():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
     )
     common_path = ROOT / "notebooks" / "model_comparison_common.py"
     common_tree = ast.parse(
@@ -889,7 +852,6 @@ def test_kaggle_notebooks_auto_select_dedup_benchmark_and_quantize_metrics():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
         "shufflenetv2_05",
     ):
         path = ROOT / "notebooks" / f"kaggle_{architecture}_training.ipynb"
@@ -926,7 +888,6 @@ def test_colab_notebooks_guard_manifest_less_split_validation():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
         "shufflenetv2_05",
     ):
         path = ROOT / "notebooks" / f"colab_{architecture}_training.ipynb"
@@ -979,7 +940,6 @@ def test_kaggle_notebooks_expose_a_filelink_download_cell():
         "nasnet_mobile",
         "efficientnet_b0",
         "efficientnet_v2_b0",
-        "efficientnet_lite0",
         "shufflenetv2_05",
     ]
     shell = InteractiveShell()
