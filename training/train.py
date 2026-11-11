@@ -1644,9 +1644,6 @@ def _configure_phase2_early_stopping(callbacks, config, log_mode):
     return callbacks
 
 
-_HUB_BACKBONE_ARCHITECTURES = frozenset({"efficientnet", "efficientnet_lite0"})
-
-
 def configure_runtime(config, logger):
     """Enable optional mixed precision and mirrored multi-GPU training."""
     runtime_config = dict(config.get("performance", {}))
@@ -1664,20 +1661,6 @@ def configure_runtime(config, logger):
     multi_gpu = runtime_config.get(
         "multi_gpu", distribution in {"auto", "mirrored", "multi_gpu"}
     )
-    architecture = str(config.get("model", {}).get("architecture", "")).lower()
-    hub_backbone = architecture in _HUB_BACKBONE_ARCHITECTURES
-    if hub_backbone and multi_gpu and len(physical_gpus) > 1:
-        # A TF1-format Hub module loads its variables as UninitializedVariable
-        # objects that cannot be mirrored, so Model.compile() would reject them
-        # ("was not created in the distribution strategy scope"). Train the
-        # Hub-based backbone on a single device instead.
-        logger.info(
-            "%s uses a TF Hub backbone whose variables cannot be mirrored; "
-            "using a single device instead of MirroredStrategy",
-            architecture,
-        )
-        multi_gpu = False
-        physical_gpus = physical_gpus[:1]
     if multi_gpu and len(physical_gpus) > 1:
         strategy = tf.distribute.MirroredStrategy()
     else:

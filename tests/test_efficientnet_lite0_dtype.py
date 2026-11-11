@@ -11,8 +11,6 @@ These tests build the real model factory against a fake hub module so they run
 offline while still exercising the dtype plumbing.
 """
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -32,12 +30,7 @@ class _FixedFloat32SignatureLayer(tf.keras.layers.Layer):
     """Stand-in for a TF1 Hub module whose input dtype is frozen at float32."""
 
     def __init__(
-        self,
-        handle,
-        input_shape=None,
-        trainable=False,
-        dtype=None,
-        **kwargs,
+        self, handle, input_shape=None, trainable=False, dtype=None, **kwargs
     ):
         super().__init__(trainable=trainable, dtype=dtype, **kwargs)
         self.handle = handle
@@ -172,51 +165,3 @@ def test_dtype_error_fails_fast_without_wiping_the_cache(monkeypatch):
         )
 
     assert cleared == []
-
-
-def _fake_two_gpus(monkeypatch):
-    monkeypatch.setattr(
-        tf.config, "list_physical_devices", lambda kind: [object(), object()]
-    )
-    policy = tf.keras.mixed_precision
-    monkeypatch.setattr(policy, "set_global_policy", lambda _: None)
-    created = []
-
-    def fake_mirrored(*args, **kwargs):
-        created.append(True)
-        return tf.distribute.get_strategy()
-
-    monkeypatch.setattr(tf.distribute, "MirroredStrategy", fake_mirrored)
-    return created
-
-
-HUB_ARCHITECTURES = ["efficientnet_lite0", "efficientnet"]
-
-
-@pytest.mark.parametrize("architecture", HUB_ARCHITECTURES)
-def test_hub_backbone_avoids_mirrored_strategy(monkeypatch, architecture):
-    # Hub SavedModel variables cannot be mirrored: compile() rejects them with
-    # "was not created in the distribution strategy scope".
-    from training.train import configure_runtime
-
-    created = _fake_two_gpus(monkeypatch)
-    logger = SimpleNamespace(info=lambda *a: None, warning=lambda *a: None)
-
-    configure_runtime(
-        {"model": {"architecture": architecture}, "performance": {}}, logger
-    )
-
-    assert created == []
-
-
-def test_non_hub_backbone_still_uses_mirrored_strategy(monkeypatch):
-    from training.train import configure_runtime
-
-    created = _fake_two_gpus(monkeypatch)
-    logger = SimpleNamespace(info=lambda *a: None, warning=lambda *a: None)
-
-    configure_runtime(
-        {"model": {"architecture": "mobilenetv2"}, "performance": {}}, logger
-    )
-
-    assert created == [True]
