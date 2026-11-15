@@ -110,6 +110,12 @@ Thumbs.db
 tmp/
 temp/
 
+# Local scratch / pip leftovers
+.probe_tmp/
+pip-build-tracker-*/
+pip-ephem-wheel-cache-*/
+pip-install-*/
+
 # Exclude large research documents (use cloud storage)
 # docs/proposal.pdf
 # docs/thesis_draft.pdf
