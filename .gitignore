@@ -45,6 +45,11 @@ tensorboard/
 models/mobilenetv2/*.h5
 models/exported_tflite/*.tflite
 
+# Per-architecture training artifacts (weight shards, checkpoints, metric
+# copies and 72x72 confusion plots). Regenerate with the Kaggle notebooks;
+# curated numbers live in results/ and docs/.
+models/*_outputs/
+
 # Dataset (DO NOT commit large datasets)
 dataset/raw/**/*.jpg
 dataset/raw/**/*.jpeg

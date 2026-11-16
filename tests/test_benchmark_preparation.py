@@ -76,7 +76,7 @@ def test_prepare_benchmark_is_reproducible_rgb_224_and_disjoint(tmp_path):
     assert first_rows == second_rows
 
 
-def test_exact_duplicate_is_removed_and_cross_label_duplicate_is_rejected(tmp_path):
+def test_exact_duplicate_is_kept_and_cross_label_duplicate_is_rejected(tmp_path):
     source = tmp_path / "source"
     _make_source_tree(source)
     duplicate_class = source / CANONICAL_CLASSES[0]
@@ -85,8 +85,9 @@ def test_exact_duplicate_is_removed_and_cross_label_duplicate_is_rejected(tmp_pa
     )
     output = tmp_path / "deduplicated"
     result = prepare_benchmark(source, output)
-    assert result["removed_exact_duplicates"] == 1
-    assert sum(part["total"] for part in result["counts"].values()) == 216
+    assert result["exact_duplicates_kept"] == 1
+    assert sum(part["total"] for part in result["counts"].values()) == 217
+    assert result["counts"]["train"]["classes"][CANONICAL_CLASSES[0]] == 2
 
     conflict_source = tmp_path / "conflict_source"
     _make_source_tree(conflict_source)
@@ -101,7 +102,7 @@ def test_exact_duplicate_is_removed_and_cross_label_duplicate_is_rejected(tmp_pa
     assert report["cross_label_duplicate_conflicts"]
 
 
-def test_split_tree_duplicates_are_removed_before_reassignment(tmp_path):
+def test_split_tree_duplicates_are_kept_and_reuse_is_disclosed(tmp_path):
     source = tmp_path / "split_source"
     for split_index, split in enumerate(("train", "val", "test")):
         for class_index, class_name in enumerate(CANONICAL_CLASSES):
@@ -121,12 +122,63 @@ def test_split_tree_duplicates_are_removed_before_reassignment(tmp_path):
 
     result = prepare_benchmark(source, tmp_path / "deduplicated")
 
-    assert result["removed_exact_duplicates"] == 1
+    assert result["exact_duplicates_kept"] == 1
     with (tmp_path / "deduplicated" / "split_manifest.csv").open(
         newline="", encoding="utf-8"
     ) as handle:
         manifest = list(csv.DictReader(handle))
-    assert len({row["source_sha256"] for row in manifest}) == len(manifest)
+    assert len(manifest) == 217
+    assert len({row["source_sha256"] for row in manifest}) == 216
+    # Mirror the split validator's tolerance rule: a digest may only appear
+    # in several splits when its class is registered in degenerate_classes.
+    registry = set(result["degenerate_classes"])
+    digest_splits = {}
+    digest_labels = {}
+    for row in manifest:
+        digest_splits.setdefault(row["source_sha256"], set()).add(row["split"])
+        digest_labels.setdefault(row["source_sha256"], set()).add(
+            row["canonical_label"]
+        )
+    for digest, splits in digest_splits.items():
+        if len(splits) > 1:
+            assert digest_labels[digest] <= registry
+
+
+def test_duplicate_heavy_class_stays_balanced(tmp_path):
+    """The Guava scenario: thousands of copies of a few photos must not
+    collapse the class to its unique-image count."""
+    source = tmp_path / "source"
+    _make_source_tree(source, images_per_class=3)
+    target = source / CANONICAL_CLASSES[5]
+    base_images = sorted(target.glob("*.png"))
+    for copy_index in range(60):
+        shutil.copy(
+            base_images[copy_index % len(base_images)],
+            target / f"copy_{copy_index:03d}.png",
+        )
+
+    output = tmp_path / "balanced"
+    first = prepare_benchmark(source, output)
+
+    # 63 files: prepare_data.split_selected -> 44 / 9 / 10, not 3 unique.
+    assert first["counts"]["train"]["classes"][CANONICAL_CLASSES[5]] == 44
+    assert first["counts"]["val"]["classes"][CANONICAL_CLASSES[5]] == 9
+    assert first["counts"]["test"]["classes"][CANONICAL_CLASSES[5]] == 10
+    assert first["degenerate_classes"] == {CANONICAL_CLASSES[5]: 3}
+    # All-unique classes keep the non-empty fallback split (1/1/1).
+    assert first["counts"]["train"]["classes"][CANONICAL_CLASSES[6]] == 1
+
+    info = json.loads((output / "dataset_info.json").read_text())
+    assert info["degenerate_classes"] == {CANONICAL_CLASSES[5]: 3}
+    assert info["exact_duplicates_kept"] == 60
+
+    second_output = tmp_path / "balanced_second"
+    second = prepare_benchmark(source, second_output)
+    assert first["counts"] == second["counts"]
+    assert (
+        (output / "split_manifest.csv").read_text(encoding="utf-8")
+        == (second_output / "split_manifest.csv").read_text(encoding="utf-8")
+    )
 
 
 def test_unknown_labels_write_a_validation_report(tmp_path):

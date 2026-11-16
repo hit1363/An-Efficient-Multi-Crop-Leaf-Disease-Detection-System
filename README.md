@@ -88,7 +88,7 @@ Build the canonical 72-class benchmark from raw class folders. An existing `trai
 python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed --seed 42
 ```
 
-The builder applies the explicit taxonomy, retains `Invalid` as class 72, removes exact duplicates, converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
+The builder applies the explicit taxonomy, retains `Invalid` as class 72, keeps exact duplicate source files (selection, splitting, and preprocessing reuse `prepare_data.py`), converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. Classes whose copies cross splits are disclosed in `dataset_info.json` under `degenerate_classes` so split validation tolerates them. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
 
 **Per-class cap.** `--max-per-class` (default `500`) bounds every class before splitting so no crop dominates training. With seed 42 the cap-500 benchmark yields ≈24.8k train / ≈5.3k val / ≈5.3k test images (≈350 train images per class for classes with ≥500 raw images). The earlier cap-300 processed tree kept only ≈15k train images and under-trained every model, so recipe v2 (below) is tuned for the cap-500 rebuild. Upload the rebuilt directory (with its `split_manifest.csv`) to Kaggle as the training dataset; notebooks detect the manifest automatically and validate splits without re-hashing. Never rebuild from an already-capped tree — that only re-caps the survivors and cannot recover discarded images. Note that the new deterministic selection and split assignment differ from the cap-300 build, so older test-set numbers are not directly comparable; re-evaluate models on the same benchmark manifest when comparing.
 
@@ -278,7 +278,7 @@ Place your deployed model and labels here:
 - Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
 - Classes: 72
 - Split: 70% train, 15% val, 15% test
-- Per-class cap: 500 (exact-deduplicated before selection; the earlier cap-300 build with 15,102 train images under-trained all models and is retired)
+- Per-class cap: 500 (duplicate source files are kept, so duplicate-heavy classes such as Guava retain counts comparable to the other classes; the earlier cap-300 build with 15,102 train images under-trained all models and is retired)
 
 ## License
 

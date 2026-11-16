@@ -1,4 +1,11 @@
-"""Build a deterministic, canonical 72-class leaf disease benchmark."""
+"""Build a deterministic, canonical 72-class leaf disease benchmark.
+
+Selection, splitting, and image processing reuse ``prepare_data.py`` and
+duplicate source files are kept, so classes whose raw folders are inflated
+by byte-identical copies (the Guava classes ship thousands of copies of a
+handful of photos) retain counts comparable to the other classes instead of
+collapsing to 2-9 images after exact de-duplication.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +13,8 @@ import argparse
 import csv
 import hashlib
 import json
-import random
 import shutil
 from pathlib import Path
-
-from PIL import Image, ImageOps
 
 try:
     from .taxonomy import (
@@ -27,6 +31,19 @@ except ImportError:
         taxonomy_document,
     )
 
+try:
+    from .prepare_data import (
+        process_and_save_image,
+        select_images,
+        split_selected,
+    )
+except ImportError:
+    from prepare_data import (
+        process_and_save_image,
+        select_images,
+        split_selected,
+    )
+
 
 IMAGE_EXTENSIONS = {
     ".avif", ".bmp", ".gif", ".ico", ".jfif", ".jpe", ".jpeg", ".jpg",
@@ -36,6 +53,7 @@ SPLITS = ("train", "val", "test")
 DEFAULT_RATIOS = (0.70, 0.15, 0.15)
 PROGRESS_INTERVAL = 2000
 MIN_IMAGES_PER_CLASS = 3
+IMAGE_TARGET_SIZE = 224
 
 
 def _sha256(path: Path) -> str:
@@ -97,28 +115,27 @@ def _write_validation_report(output_dir: Path, report: dict):
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _prepare_image(source: Path, destination: Path, size=(224, 224)):
-    with Image.open(source) as image:
-        converted = ImageOps.fit(image.convert("RGB"), size, method=Image.Resampling.LANCZOS)
-        converted.save(destination, format="JPEG", quality=95)
-
-
 def prepare_benchmark(
     data_dir,
     output_dir,
     seed=42,
-    max_per_class=500,
+    max_per_class=400,
     ratios=DEFAULT_RATIOS,
 ):
-    """Validate, deduplicate, and write a reproducible train/val/test tree.
+    """Validate and write a reproducible train/val/test tree.
 
-    Classes left with fewer than :data:`MIN_IMAGES_PER_CLASS` unique images
-    after exact de-duplication (a handful of PlantVillage classes are two or
-    three near-identical photos duplicated hundreds of times) are not fatal:
-    every unique image stays in train and one representative copy is placed
-    in val and test so all 72 classes remain scorable. Those classes are
-    disclosed in ``dataset_info.json`` under ``degenerate_classes`` and the
-    split validator treats their registered copies as intentional reuse.
+    Every source image is hashed for taxonomy conflict detection, but
+    byte-identical copies are kept (the ``prepare_data.py`` behaviour) so a
+    class is represented by its real file count, not by its handful of
+    unique photos. Capping, splitting, and resizing reuse
+    ``prepare_data.select_images``, ``prepare_data.split_selected``, and
+    ``prepare_data.process_and_save_image``; a non-empty fallback split
+    preserves the guarantee that every class is scorable in all three
+    splits. Classes left with fewer than :data:`MIN_IMAGES_PER_CLASS` files,
+    and classes whose exact source images are reused across splits because
+    of kept duplicates, are disclosed in ``dataset_info.json`` under
+    ``degenerate_classes`` and the split validator treats their registered
+    copies as intentional reuse.
     """
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
@@ -134,7 +151,7 @@ def prepare_benchmark(
     report = {
         "unknown_source_labels": [],
         "cross_label_duplicate_conflicts": [],
-        "removed_exact_duplicates": 0,
+        "exact_duplicates_kept": 0,
         "degenerate_classes": {},
     }
     by_class = {name: [] for name in CANONICAL_CLASSES}
@@ -156,20 +173,19 @@ def prepare_benchmark(
                         flush=True,
                     )
                 previous = digest_owner.get(digest)
-                if previous is not None:
-                    if previous != canonical_label:
-                        report["cross_label_duplicate_conflicts"].append(
-                            {
-                                "sha256": digest,
-                                "first_label": previous,
-                                "conflicting_label": canonical_label,
-                                "path": str(path),
-                            }
-                        )
-                    else:
-                        report["removed_exact_duplicates"] += 1
-                    continue
-                digest_owner[digest] = canonical_label
+                if previous is None:
+                    digest_owner[digest] = canonical_label
+                elif previous != canonical_label:
+                    report["cross_label_duplicate_conflicts"].append(
+                        {
+                            "sha256": digest,
+                            "first_label": previous,
+                            "conflicting_label": canonical_label,
+                            "path": str(path),
+                        }
+                    )
+                else:
+                    report["exact_duplicates_kept"] += 1
                 by_class[canonical_label].append((path, digest))
 
         if report["unknown_source_labels"] or report["cross_label_duplicate_conflicts"]:
@@ -188,32 +204,19 @@ def prepare_benchmark(
             _write_validation_report(output_dir, report)
             raise ValueError(f"Classes have no source images: {empty}")
 
-        degenerate = {
-            name: len(items)
-            for name, items in sorted(by_class.items())
-            if 0 < len(items) < MIN_IMAGES_PER_CLASS
-        }
-        report["degenerate_classes"] = degenerate
-        for name, unique_count in degenerate.items():
-            print(
-                f"[prepare_benchmark] degenerate class {name}: "
-                f"{unique_count} unique image(s); keeping all in train and "
-                "placing one disclosed copy in val/test",
-                flush=True,
-            )
-
         output_dir.mkdir(parents=True)
         for split in SPLITS:
             (output_dir / split).mkdir()
 
         manifest_rows = []
         counts = {split: {"total": 0, "classes": {}} for split in SPLITS}
-        rng = random.Random(seed)
+        degenerate = {}
+        failures = []
         written = 0
         for class_name in CANONICAL_CLASSES:
-            selected = list(by_class[class_name])
-            rng.shuffle(selected)
-            selected = selected[:max_per_class]
+            items = by_class[class_name]
+            unique_count = len({digest for _, digest in items})
+            selected = select_images(items, max_per_class, seed, class_name)
             if len(selected) < MIN_IMAGES_PER_CLASS:
                 split_selection = {
                     "train": selected,
@@ -221,23 +224,60 @@ def prepare_benchmark(
                     "test": selected[-1:],
                 }
             else:
-                split_counts = _split_counts(len(selected), ratios)
-                split_selection = {}
-                offset = 0
-                for split in SPLITS:
-                    split_selection[split] = selected[
-                        offset : offset + split_counts[split]
-                    ]
-                    offset += split_counts[split]
+                train_items, val_items, test_items = split_selected(
+                    selected, ratios[0], ratios[1]
+                )
+                if train_items and val_items and test_items:
+                    split_selection = {
+                        "train": train_items,
+                        "val": val_items,
+                        "test": test_items,
+                    }
+                else:
+                    split_counts = _split_counts(len(selected), ratios)
+                    split_selection = {}
+                    offset = 0
+                    for split in SPLITS:
+                        split_selection[split] = selected[
+                            offset : offset + split_counts[split]
+                        ]
+                        offset += split_counts[split]
+            digest_splits = {}
+            for split, part in split_selection.items():
+                for _, digest in part:
+                    digest_splits.setdefault(digest, set()).add(split)
+            reused_across_splits = any(
+                len(splits) > 1 for splits in digest_splits.values()
+            )
+            if len(selected) < MIN_IMAGES_PER_CLASS:
+                degenerate[class_name] = unique_count
+                print(
+                    f"[prepare_benchmark] degenerate class {class_name}: "
+                    f"{unique_count} unique image(s); keeping all in train and "
+                    "placing one disclosed copy in val/test",
+                    flush=True,
+                )
+            elif reused_across_splits:
+                degenerate[class_name] = unique_count
+                print(
+                    f"[prepare_benchmark] duplicate-heavy class {class_name}: "
+                    f"{unique_count} unique image(s) kept as {len(selected)} "
+                    "files; identical copies cross splits and are disclosed "
+                    "in dataset_info.json",
+                    flush=True,
+                )
             for split in SPLITS:
                 class_output = output_dir / split / class_name
                 class_output.mkdir(parents=True)
-                items = split_selection[split]
-                counts[split]["classes"][class_name] = len(items)
-                counts[split]["total"] += len(items)
-                for index, (source, digest) in enumerate(items):
+                part = split_selection[split]
+                counts[split]["classes"][class_name] = len(part)
+                counts[split]["total"] += len(part)
+                for index, (source, digest) in enumerate(part):
                     destination = class_output / f"{index:05d}_{source.stem}.jpg"
-                    _prepare_image(source, destination)
+                    if not process_and_save_image(
+                        source, destination, target_size=IMAGE_TARGET_SIZE
+                    ):
+                        failures.append(str(source))
                     manifest_rows.append(
                         {
                             "split": split,
@@ -252,6 +292,12 @@ def prepare_benchmark(
                             f"[prepare_benchmark] wrote {written} images",
                             flush=True,
                         )
+
+        if failures:
+            raise ValueError(
+                f"{len(failures)} source images failed to process; first: {failures[0]}"
+            )
+        report["degenerate_classes"] = degenerate
 
         with (output_dir / "split_manifest.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
@@ -275,8 +321,12 @@ def prepare_benchmark(
                     "seed": seed,
                     "max_per_class": max_per_class,
                     "counts": counts,
-                    "removed_exact_duplicates": report["removed_exact_duplicates"],
+                    "exact_duplicates_kept": report["exact_duplicates_kept"],
+                    "unique_source_images": len(digest_owner),
                     "degenerate_classes": degenerate,
+                    "selection": "prepare_data.select_images (class-seeded shuffle, capped)",
+                    "split": "prepare_data.split_selected with non-empty fallback",
+                    "preprocessing": "prepare_data.process_and_save_image (RGB, 224, JPEG q95)",
                 },
                 indent=2,
             ),
@@ -290,7 +340,7 @@ def prepare_benchmark(
             "classes": EXPECTED_CLASS_COUNT,
             "seed": seed,
             "counts": counts,
-            "removed_exact_duplicates": report["removed_exact_duplicates"],
+            "exact_duplicates_kept": report["exact_duplicates_kept"],
             "degenerate_classes": degenerate,
         }
     except Exception:

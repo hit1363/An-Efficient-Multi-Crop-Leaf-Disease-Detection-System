@@ -1,8 +1,12 @@
 """
 Data Preparation Script - Split raw dataset, resize (center-crop), and save.
+Optionally writes the benchmark manifest files (class_names.json,
+split_manifest.csv, taxonomy.json, near_duplicate_audit.json) alongside the
+split tree so downstream validators and comparison runners work unchanged.
 """
 
 import argparse
+import csv
 import hashlib
 import json
 import random
@@ -11,6 +15,11 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+try:
+    from .taxonomy import CANONICAL_CLASSES, canonicalize_label, taxonomy_document
+except ImportError:
+    from taxonomy import CANONICAL_CLASSES, canonicalize_label, taxonomy_document
+
 # Ensure compatibility with older and newer Pillow versions
 try:
     RESAMPLE_METHOD = Image.Resampling.LANCZOS
@@ -18,6 +27,7 @@ except AttributeError:
     RESAMPLE_METHOD = Image.LANCZOS
 
 DEFAULT_MAX_PER_CLASS = 300
+MANIFEST_FIELDS = ["split", "canonical_label", "output_path", "source_sha256"]
 
 
 def select_images(images, max_per_class, seed, class_name):
@@ -46,6 +56,42 @@ def get_image_files(directory: Path):
         for f in directory.iterdir()
         if f.is_file() and f.suffix.lower() in valid_extensions
     )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_manifest_files(output_dir, manifest_rows, class_names):
+    """Write the benchmark manifest files next to the split tree.
+
+    Shapes mirror ``prepare_benchmark.prepare_benchmark`` so consumers
+    (training.utils.validate_dataset_splits, load_benchmark_class_names,
+    compare_models) treat both trees identically.
+    """
+    output_dir = Path(output_dir)
+    with (output_dir / "split_manifest.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
+        writer.writeheader()
+        writer.writerows(manifest_rows)
+    (output_dir / "class_names.json").write_text(
+        json.dumps(list(class_names), indent=2), encoding="utf-8"
+    )
+    (output_dir / "taxonomy.json").write_text(
+        json.dumps(taxonomy_document(), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    (output_dir / "near_duplicate_audit.json").write_text(
+        json.dumps(
+            {"status": "not_run", "reason": "exact duplicate audit only"},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"Manifest files written to: {output_dir}")
 
 
 def process_and_save_image(src_path: Path, dst_path: Path, target_size=224):
@@ -85,8 +131,14 @@ def prepare_dataset(
     seed=42,
     target_size=224,
     max_per_class=DEFAULT_MAX_PER_CLASS,
+    write_manifest=True,
 ):
-    """Select up to max_per_class per class, split, and resize/crop images."""
+    """Select up to max_per_class per class, split, and resize/crop images.
+
+    With ``write_manifest=True`` (default) the four benchmark manifest files
+    (class_names.json, split_manifest.csv, taxonomy.json,
+    near_duplicate_audit.json) are written alongside the split tree.
+    """
     if not raw_data_dir.exists():
         raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
 
@@ -143,8 +195,14 @@ def prepare_dataset(
     print(f"Maximum images per class: {max_per_class}")
     print(f"Target size: {target_size}x{target_size} pixels.\n")
 
+    manifest_rows = []
+
     for disease_folder in disease_folders:
         folder_name = disease_folder.name
+        try:
+            canonical_label = canonicalize_label(folder_name)
+        except ValueError:
+            canonical_label = folder_name
         images = get_image_files(disease_folder)
 
         if not images:
@@ -190,6 +248,14 @@ def prepare_dataset(
                     stats[split]["classes"][folder_name] += 1
                     class_stats[split] += 1
                     stats["processed_total"] += 1
+                    manifest_rows.append(
+                        {
+                            "split": split,
+                            "canonical_label": canonical_label,
+                            "output_path": str(dst.relative_to(output_dir)),
+                            "source_sha256": _sha256(src),
+                        }
+                    )
 
         print(
             f"{folder_name:30} | Raw: {len(images):5} | Selected: {len(selected):5} "
@@ -198,6 +264,13 @@ def prepare_dataset(
         )
 
     stats["failed_total"] = stats["selected_total"] - stats["processed_total"]
+
+    if write_manifest:
+        # Canonical order (Invalid last, per dataset.taxonomy.CANONICAL_CLASSES)
+        # so the manifest matches the order training/compare_models consume.
+        class_names = list(CANONICAL_CLASSES)
+        _write_manifest_files(output_dir, manifest_rows, class_names)
+
     return stats
 
 
@@ -301,6 +374,12 @@ def main():
         default=224,
         help="Target image size (e.g., 224 for 224x224)",
     )
+    parser.add_argument(
+        "--no-manifest",
+        action="store_true",
+        help="Skip writing class_names.json, split_manifest.csv, taxonomy.json, "
+        "and near_duplicate_audit.json next to the split tree",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -322,6 +401,7 @@ def main():
         seed=args.seed,
         target_size=args.target_size,
         max_per_class=args.max_per_class,
+        write_manifest=not args.no_manifest,
     )
     print_statistics(stats)
     save_dataset_info(stats, output_dir, args.seed)
