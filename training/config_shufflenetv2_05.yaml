@@ -3,12 +3,12 @@
 model:
   architecture: "shufflenetv2_05"
   input_shape: [224, 224, 3]
-  num_classes: 72
+  num_classes: 67
   # Native project implementation; ImageNet weights are intentionally unavailable.
   weights: null
   # Recipe v5: 0.25 was too weak for a 0.6M-parameter from-scratch model,
   # whose train loss fell to 2.77 by epoch 5 while val loss climbed past the
-  # ln(72) uniform floor (confidently wrong predictions).
+  # ln(67) uniform floor (confidently wrong predictions).
   dropout_rate: 0.35
   classifier_units: 256
 
@@ -40,7 +40,7 @@ augmentation:
   class_aware:
     enabled: true
     # Recipe v3: the cap-500 benchmark tops out at 350 training images, so the
-    # old cutoff of 500 marked *all* 72 classes as minority and replaced the
+    # old cutoff of 500 marked *all* 67 classes as minority and replaced the
     # baseline policy everywhere. 100 leaves only the true Guava minorities.
     max_train_samples: 100
     rotation_range: 20
@@ -60,7 +60,7 @@ training:
   # from-scratch backbone with three warmup epochs.
   # Recipe v4 (2026-11): v3's peak LR of 1e-3 destabilized the from-scratch
   # backbone — train accuracy peaked at ~14% around epoch 9 then declined
-  # while val_accuracy hovered at random (ln(72) uniform-prior floor). The
+  # while val_accuracy hovered at random (ln(67) uniform-prior floor). The
   # peak drops to 3e-4 with a small Adam weight decay, and early stopping's
   # min_delta shrinks so real sub-0.5pp gains still reset the patience.
   # Recipe v5 (2026-11): the smoke run reproduced the same divergence (val
@@ -93,7 +93,7 @@ lr_schedule:
   decay_epochs: 40 # Single training phase (backbone trains from epoch one)
   alpha: 0.01
   # Recipe v3: full LR from step zero made val_loss exceed the uniform-prior
-  # ln(72) ~= 4.28; ramp 1e-4 -> the peak over three epochs before the cosine.
+  # ln(67) ~= 4.20; ramp 1e-4 -> the peak over three epochs before the cosine.
   # Recipe v4 keeps the 3-epoch ramp (1e-4 -> 3e-4) and the 40-epoch cosine.
   # Recipe v5 ramps 1e-4 -> 2e-4 to match the lower peak.
   warmup_epochs: 3

@@ -4,7 +4,7 @@
 model:
   architecture: "mobilenetv2" # Options: mobilenetv2, efficientnet_b0, efficientnet_v2_b0, mobilenetv3_small, shufflenetv2_05
   input_shape: [224, 224, 3]
-  num_classes: 72
+  num_classes: 67
   weights: "imagenet" # Use ImageNet pre-trained weights
   dropout_rate: 0.5
   classifier_units: 256

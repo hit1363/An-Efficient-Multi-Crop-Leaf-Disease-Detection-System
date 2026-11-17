@@ -1,10 +1,10 @@
 # Multi-Crop Leaf Disease Detection System
 
-Lightweight, offline-capable multi-crop leaf disease classification optimized for mobile deployment. The benchmark harmonizes 72 labels and compares Keras mobile classifiers using TensorFlow Lite export and CPU proxy measurements.
+Lightweight, offline-capable multi-crop leaf disease classification optimized for mobile deployment. The benchmark harmonizes 67 labels and compares Keras mobile classifiers using TensorFlow Lite export and CPU proxy measurements.
 
 ## Overview
 
-- 72 canonical classes (including the explicit `Invalid` class) across 15+ crops
+- 67 canonical classes (including the explicit `Invalid` class) across 15+ crops
 - MobileNet V1/V2/V3 Small/V3 Large, NASNetMobile, and EfficientNetB0/EfficientNetV2-B0
 - Post-training quantization (dynamic range and full INT8)
 - Flutter app with camera/gallery input and offline inference
@@ -82,13 +82,13 @@ pip install -r requirements.txt
 
 ### Dataset Preparation
 
-Build the canonical 72-class benchmark from raw class folders. An existing `train/val/test` tree is also accepted, but its old boundaries are discarded and regenerated:
+Build the canonical 67-class benchmark from raw class folders. An existing `train/val/test` tree is also accepted, but its old boundaries are discarded and regenerated:
 
 ```bash
 python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed --seed 42
 ```
 
-The builder applies the explicit taxonomy, retains `Invalid` as class 72, keeps exact duplicate source files (selection, splitting, and preprocessing reuse `prepare_data.py`), converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. Classes whose copies cross splits are disclosed in `dataset_info.json` under `degenerate_classes` so split validation tolerates them. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
+The builder applies the explicit taxonomy, retains `Invalid` as the last class, keeps exact duplicate source files (selection, splitting, and preprocessing reuse `prepare_data.py`), converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. Classes whose copies cross splits are disclosed in `dataset_info.json` under `degenerate_classes` so split validation tolerates them. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
 
 **Per-class cap.** `--max-per-class` (default `500`) bounds every class before splitting so no crop dominates training. With seed 42 the cap-500 benchmark yields ≈24.8k train / ≈5.3k val / ≈5.3k test images (≈350 train images per class for classes with ≥500 raw images). The earlier cap-300 processed tree kept only ≈15k train images and under-trained every model, so recipe v2 (below) is tuned for the cap-500 rebuild. Upload the rebuilt directory (with its `split_manifest.csv`) to Kaggle as the training dataset; notebooks detect the manifest automatically and validate splits without re-hashing. Never rebuild from an already-capped tree — that only re-caps the survivors and cannot recover discarded images. Note that the new deterministic selection and split assignment differ from the cap-300 build, so older test-set numbers are not directly comparable; re-evaluate models on the same benchmark manifest when comparing.
 
@@ -109,7 +109,7 @@ python training/train.py --config training/config_shufflenetv2_05.yaml
 
 **Unfreeze index is architecture-specific.** `training.unfreeze_from_layer` indexes that backbone's own layer list, so the same number means different things on different depths; the EfficientNetB0 reference is 140 of 237 layers (59.1% of the depth, 77 trainable layers). Recipe v4 calibrated the four laggards to that fraction: MobileNet V1 49 of 86 (57.0%), MobileNet V3 Large 149 of 263 (56.7%), EfficientNetV2-B0 150 of 270 (55.6%), NASNetMobile 454 of 769 (59.0% — its inherited 100 unfroze 87% of the layers, i.e. a near-full fine-tune rather than a head-and-tail adaptation). MobileNetV2 (130 of 154) and MobileNet V3 Small (100 of 229) keep the indices their own runs were tuned with;. `model.unfreeze_base_model` and `qat._configure_qat_trainability` now raise `ValueError` when an index is at or beyond the depth instead of silently freezing the whole backbone — the failure that made an earlier MobileNet V1 run fine-tune nothing at all. The indices are pinned by `tests/test_project_contracts.py` and `tests/test_model_factory_runtime.py`.
 
-**Macro precision and recall are logged every epoch.** `tf_keras` `Precision`/`Recall` accept `thresholds`, `top_k` or `class_id` but no `average` argument, so on a single-label multiclass fit their default micro average is accuracy again — which is why `build_metrics` used to drop the names with a warning. `training/train.py` now logs a `_MacroConfusionMetric` instead: it accumulates a `num_classes × num_classes` confusion matrix and averages precision over predicted classes and recall over supported classes, matching the macro figures `training/evaluate.py` prints from sklearn. The matrix accumulates over the whole epoch and resets at each epoch start. Precision leaves out any class the model has not predicted yet, and recall any class with no samples, instead of scoring them zero; `evaluate.py` scores them zero. Recall therefore matches `evaluate.py` whenever every class has validation samples, and precision matches it once the model predicts every class at least once. Early in training with 72 classes, the logged precision can read higher than the evaluator's.
+**Macro precision and recall are logged every epoch.** `tf_keras` `Precision`/`Recall` accept `thresholds`, `top_k` or `class_id` but no `average` argument, so on a single-label multiclass fit their default micro average is accuracy again — which is why `build_metrics` used to drop the names with a warning. `training/train.py` now logs a `_MacroConfusionMetric` instead: it accumulates a `num_classes × num_classes` confusion matrix and averages precision over predicted classes and recall over supported classes, matching the macro figures `training/evaluate.py` prints from sklearn. The matrix accumulates over the whole epoch and resets at each epoch start. Precision leaves out any class the model has not predicted yet, and recall any class with no samples, instead of scoring them zero; `evaluate.py` scores them zero. Recall therefore matches `evaluate.py` whenever every class has validation samples, and precision matches it once the model predicts every class at least once. Early in training with 67 classes, the logged precision can read higher than the evaluator's.
 
 NASNetMobile is the one deliberate deviation: its 769-layer graph is the deepest backbone here, so as an out-of-memory precaution (not a measured limit) it runs at batch 64 with `[64, 32, 16]` fallbacks, and `runtime_profiles.apply_runtime_profile` caps it at 64 for Kaggle so the hosted profile does not override that. Raise it if a Kaggle run shows 128 fits. `shufflenetv2_05` stays outside this recipe entirely: it trains from scratch (no pretrained weights, no frozen phase) at 192×192 with a warmup and `val_accuracy` monitoring. It logs the same macro precision, macro recall and AUC as the ImageNet configs, plus top-5 accuracy for its near-prior early epochs; only its optimizer, schedule and augmentation stay its own.
 
@@ -274,11 +274,12 @@ Place your deployed model and labels here:
 
 ## Dataset Summary
 
-- Total images: 115,382 (from the checked-in dataset metadata)
+- Total source images: 95,006 across 67 raw class folders (the five Guava folders were removed from `dataset/raw`)
 - Crops: 15+ (Tomato, Potato, Corn, Rice, Wheat, Apple, Grape, etc.)
-- Classes: 72
+- Classes: 67
+- Processed images: 20,075 (14,052 train / 3,011 validation / 3,012 test)
 - Split: 70% train, 15% val, 15% test
-- Per-class cap: 500 (duplicate source files are kept, so duplicate-heavy classes such as Guava retain counts comparable to the other classes; the earlier cap-300 build with 15,102 train images under-trained all models and is retired)
+- Per-class cap: 300 for the checked-in tree (`dataset/processed`). Rebuild with `--max-per-class 500` for the final training benchmark; duplicate source files are kept, and classes with fewer than 300 usable images (Apple___Cedar_apple_rust 275, Peach___healthy 360, Tomato___Tomato_mosaic_virus 373) are used in full
 
 ## License
 

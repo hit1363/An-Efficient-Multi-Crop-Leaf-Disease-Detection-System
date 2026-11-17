@@ -328,7 +328,7 @@ def test_load_model_handles_exported_savedmodel_without_keras_metadata(tmp_path)
         [
             keras.Input(shape=(224, 224, 3)),
             keras.layers.Flatten(),
-            keras.layers.Dense(72, activation="softmax"),
+            keras.layers.Dense(67, activation="softmax"),
         ]
     )
     model.compile(optimizer="adam", loss="categorical_crossentropy")
@@ -340,7 +340,7 @@ def test_load_model_handles_exported_savedmodel_without_keras_metadata(tmp_path)
     loaded = evaluate._load_model(str(saved_dir), (224, 224, 3))
     assert hasattr(loaded, "predict")
     outputs = loaded.predict(tf.zeros((1, 224, 224, 3), dtype=tf.float32), verbose=0)
-    assert np.asarray(outputs).shape == (1, 72)
+    assert np.asarray(outputs).shape == (1, 67)
 
 
 def test_find_run_checkpoint_maps_savedmodel_to_run_scoped_artifacts(tmp_path):

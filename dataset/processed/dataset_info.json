@@ -1,6 +1,6 @@
 {
     "dataset_name": "LeafDisease",
-    "classes": 72,
+    "classes": 67,
     "class_names": [
         "Apple___Apple_scab",
         "Apple___Black_rot",
@@ -20,11 +20,6 @@
         "Grape___Esca_(Black_Measles)",
         "Grape___Healthy",
         "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
-        "Guava___Anthracnose",
-        "Guava___Healthy",
-        "Guava___Insect_bite",
-        "Guava___Scorch",
-        "Guava___Yellowing",
         "Invalid",
         "Jackfruit___Algal_Leaf_Spot",
         "Jackfruit___Black_Spot",
@@ -78,11 +73,11 @@
     "selection": {
         "max_per_class": 300,
         "method": "deterministic class-specific shuffle, keep first max_per_class images",
-        "classes_capped": 71
+        "classes_capped": 66
     },
-    "original_images": 115382,
-    "selected_images": 21575,
-    "processed_images": 21575,
+    "original_images": 95006,
+    "selected_images": 20075,
+    "processed_images": 20075,
     "failed_images": 0,
     "target_size": 224,
     "color_mode": "RGB",
@@ -214,41 +209,6 @@
         },
         "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": {
             "raw": 1076,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Guava___Anthracnose": {
-            "raw": 4416,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Guava___Healthy": {
-            "raw": 2160,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Guava___Insect_bite": {
-            "raw": 5000,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Guava___Scorch": {
-            "raw": 3800,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Guava___Yellowing": {
-            "raw": 5000,
             "selected": 300,
             "train": 210,
             "val": 45,
@@ -605,5 +565,17 @@
             0.5,
             0.5
         ]
+    },
+    "degenerate_classes": {
+        "Banana___Cordana": 1,
+        "Banana___healthy": 1,
+        "Mango___Anthracnose": 4,
+        "Mango___Die_Back": 2,
+        "Potato___Early_Blight": 3,
+        "Potato___Late_Blight": 10,
+        "Potato___healthy": 1,
+        "Rice___Leaf_Blast": 3,
+        "Sugarcane___Mosaic": 3,
+        "Sugarcane___healthy": 3
     }
 }

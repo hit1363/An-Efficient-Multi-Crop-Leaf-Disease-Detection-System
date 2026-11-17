@@ -10,7 +10,7 @@
 model:
   architecture: efficientnet_v2_b0
   input_shape: [224, 224, 3]
-  num_classes: 72
+  num_classes: 67
   weights: imagenet
   dropout_rate: 0.35
   classifier_units: 256

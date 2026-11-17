@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 from IPython.core.interactiveshell import InteractiveShell
 
+from dataset.taxonomy import EXPECTED_CLASS_COUNT
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,11 +16,11 @@ def _benchmark_like_class_counts():
     """Per-class training counts shaped like the shipped cap-500 benchmark.
 
     Mirrors the observed distribution: most classes sit near the 350 cap and a
-    handful of Guava classes are true minorities. This keeps the contract test
+    few classes are true minorities. This keeps the contract test
     dependency-light (``training.utils`` imports TensorFlow) while still
     exercising the degenerate-cutoff condition.
     """
-    counts = [350] * 67
+    counts = [350] * (EXPECTED_CLASS_COUNT - 7)
     counts[0] = 193
     counts[1] = 252
     counts[2] = 261
@@ -83,7 +84,7 @@ def test_new_architecture_configs_share_the_benchmark_recipe():
             )
         )
         assert config["model"]["architecture"] == architecture
-        assert config["model"]["num_classes"] == 72
+        assert config["model"]["num_classes"] == EXPECTED_CLASS_COUNT
         # unfreeze_from_layer is a layer index into a specific backbone, so it
         # is deliberately architecture-specific: mobilenet_v1's 86-layer
         # backbone cannot share mobilenetv2's index 100 (which would freeze
@@ -304,7 +305,7 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     )
     # Recipe v3 (2026-11): the minority cutoff is 100 for every architecture.
     # The benchmark caps classes at 350 training images, so the old cutoff of
-    # 500 selected all 72 classes and disabled the baseline augmentation.
+    # 500 selected all classes and disabled the baseline augmentation.
     # shufflenetv2_05 additionally trains from scratch, so its monitoring
     # differs from the pretrained baselines.
     expected_monitoring = {
@@ -879,7 +880,7 @@ def test_colab_notebooks_guard_manifest_less_split_validation():
     """Colab notebooks download the Kaggle archive at runtime, so they cannot
     assume split_manifest.csv exists. Without the guard, train.py falls back
     to silently hashing every image for 10-25 minutes and then aborts on the
-    disclosed degenerate Guava copies."""
+    disclosed degenerate duplicate copies."""
     for architecture in (
         "mobilenet_v1",
         "mobilenetv2",

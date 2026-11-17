@@ -119,7 +119,7 @@ def prepare_benchmark(
     data_dir,
     output_dir,
     seed=42,
-    max_per_class=400,
+    max_per_class=500,
     ratios=DEFAULT_RATIOS,
 ):
     """Validate and write a reproducible train/val/test tree.

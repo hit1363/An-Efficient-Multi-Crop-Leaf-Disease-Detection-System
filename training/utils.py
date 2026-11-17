@@ -1003,7 +1003,7 @@ def load_benchmark_class_names(data_dir):
         class_names = metadata.get("class_names")
     else:
         # Kaggle input mounts are read-only. Use the repository taxonomy in memory
-        # when a mounted 72-class dataset does not ship its own manifest.
+        # when a mounted dataset does not ship its own manifest.
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
@@ -1016,8 +1016,9 @@ def load_benchmark_class_names(data_dir):
             ) from exc
         logging.getLogger(__name__).warning(
             "Canonical class manifest is missing at %s; using the repository taxonomy. "
-            "Dataset splits must contain exactly the canonical 72 classes.",
+            "Dataset splits must contain exactly the canonical %d classes.",
             manifest_path,
+            len(CANONICAL_CLASSES),
         )
         return list(CANONICAL_CLASSES)
 

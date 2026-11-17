@@ -3,7 +3,7 @@
 model:
   architecture: "efficientnet_b0"
   input_shape: [224, 224, 3]
-  num_classes: 72
+  num_classes: 67
   weights: "imagenet"
   dropout_rate: 0.5
   head_units: [256, 128]

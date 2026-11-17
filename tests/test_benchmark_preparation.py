@@ -25,8 +25,8 @@ def _make_source_tree(root, images_per_class=3):
             image.save(class_dir / f"sample_{image_index}.png")
 
 
-def test_taxonomy_is_72_classes_and_known_aliases_are_explicit():
-    assert len(CANONICAL_CLASSES) == EXPECTED_CLASS_COUNT == 72
+def test_taxonomy_class_count_matches_declared_expected_count():
+    assert len(CANONICAL_CLASSES) == EXPECTED_CLASS_COUNT == 67
     assert CANONICAL_CLASSES[-1] == "Invalid"
     assert canonicalize_label("Mango__Anthracnose") == "Mango___Anthracnose"
     assert canonicalize_label("Potato___Healthy") == "Potato___healthy"
@@ -48,17 +48,17 @@ def test_prepare_benchmark_is_reproducible_rgb_224_and_disjoint(tmp_path):
     _make_source_tree(source)
 
     first = prepare_benchmark(source, output)
-    assert first["classes"] == 72
+    assert first["classes"] == EXPECTED_CLASS_COUNT
     assert first["seed"] == 42
-    assert first["counts"]["train"]["total"] == 72
-    assert first["counts"]["val"]["total"] == 72
-    assert first["counts"]["test"]["total"] == 72
+    assert first["counts"]["train"]["total"] == EXPECTED_CLASS_COUNT
+    assert first["counts"]["val"]["total"] == EXPECTED_CLASS_COUNT
+    assert first["counts"]["test"]["total"] == EXPECTED_CLASS_COUNT
 
     class_names = json.loads((output / "class_names.json").read_text())
     assert class_names == list(CANONICAL_CLASSES)
     with (output / "split_manifest.csv").open(newline="", encoding="utf-8") as handle:
         manifest = list(csv.DictReader(handle))
-    assert len(manifest) == 216
+    assert len(manifest) == 3 * EXPECTED_CLASS_COUNT
     assert len({row["source_sha256"] for row in manifest}) == len(manifest)
 
     for split in ("train", "val", "test"):
@@ -86,7 +86,10 @@ def test_exact_duplicate_is_kept_and_cross_label_duplicate_is_rejected(tmp_path)
     output = tmp_path / "deduplicated"
     result = prepare_benchmark(source, output)
     assert result["exact_duplicates_kept"] == 1
-    assert sum(part["total"] for part in result["counts"].values()) == 217
+    assert (
+        sum(part["total"] for part in result["counts"].values())
+        == 3 * EXPECTED_CLASS_COUNT + 1
+    )
     assert result["counts"]["train"]["classes"][CANONICAL_CLASSES[0]] == 2
 
     conflict_source = tmp_path / "conflict_source"
@@ -127,8 +130,8 @@ def test_split_tree_duplicates_are_kept_and_reuse_is_disclosed(tmp_path):
         newline="", encoding="utf-8"
     ) as handle:
         manifest = list(csv.DictReader(handle))
-    assert len(manifest) == 217
-    assert len({row["source_sha256"] for row in manifest}) == 216
+    assert len(manifest) == 3 * EXPECTED_CLASS_COUNT + 1
+    assert len({row["source_sha256"] for row in manifest}) == 3 * EXPECTED_CLASS_COUNT
     # Mirror the split validator's tolerance rule: a digest may only appear
     # in several splits when its class is registered in degenerate_classes.
     registry = set(result["degenerate_classes"])
@@ -145,8 +148,8 @@ def test_split_tree_duplicates_are_kept_and_reuse_is_disclosed(tmp_path):
 
 
 def test_duplicate_heavy_class_stays_balanced(tmp_path):
-    """The Guava scenario: thousands of copies of a few photos must not
-    collapse the class to its unique-image count."""
+    """The degenerate-class scenario: thousands of copies of a few photos
+    must not collapse the class to its unique-image count."""
     source = tmp_path / "source"
     _make_source_tree(source, images_per_class=3)
     target = source / CANONICAL_CLASSES[5]

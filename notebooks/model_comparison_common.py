@@ -31,6 +31,11 @@ from training.utils import (
     validate_dataset_splits,
 )
 
+try:
+    from dataset.taxonomy import EXPECTED_CLASS_COUNT
+except ImportError:  # Notebook execution outside the repo root.
+    from taxonomy import EXPECTED_CLASS_COUNT
+
 
 ARCHITECTURES = (
     "mobilenet_v1",
@@ -476,9 +481,10 @@ def run_comparison(
     (output_dir / "confusion_matrices").mkdir(exist_ok=True)
 
     class_names = load_benchmark_class_names(str(dataset_base))
-    if len(class_names) != 72:
+    if len(class_names) != EXPECTED_CLASS_COUNT:
         raise ValueError(
-            f"Canonical benchmark must contain 72 classes, found {len(class_names)}"
+            f"Canonical benchmark must contain {EXPECTED_CLASS_COUNT} classes, "
+            f"found {len(class_names)}"
         )
     train_dir = dataset_base / "train"
     val_dir = dataset_base / "val"

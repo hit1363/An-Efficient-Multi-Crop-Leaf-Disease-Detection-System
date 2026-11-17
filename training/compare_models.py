@@ -18,6 +18,11 @@ try:
 except ImportError:  # Script execution from the training directory.
     from runtime_profiles import apply_runtime_profile
 
+try:
+    from dataset.taxonomy import EXPECTED_CLASS_COUNT
+except ImportError:  # Script execution outside the repo root.
+    from taxonomy import EXPECTED_CLASS_COUNT
+
 
 ARCHITECTURES = (
     "mobilenet_v1",
@@ -112,8 +117,10 @@ def compare_models(
     template = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     class_names_path = data_dir / "class_names.json"
     class_names = json.loads(class_names_path.read_text(encoding="utf-8"))
-    if len(class_names) != 72:
-        raise ValueError(f"Expected 72 canonical classes, found {len(class_names)}")
+    if len(class_names) != EXPECTED_CLASS_COUNT:
+        raise ValueError(
+            f"Expected {EXPECTED_CLASS_COUNT} canonical classes, found {len(class_names)}"
+        )
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Comparison output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)

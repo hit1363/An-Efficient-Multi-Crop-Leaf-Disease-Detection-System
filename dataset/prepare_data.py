@@ -178,6 +178,7 @@ def prepare_dataset(
         "per_class": {},
         "classes_count": 0,
         "target_size": target_size,
+        "degenerate_classes": {},
         "ratios": (train_ratio, val_ratio, test_ratio),
     }
 
@@ -227,6 +228,27 @@ def prepare_dataset(
             selected, train_ratio, val_ratio
         )
 
+        # Source digests let the manifest disclose classes whose identical
+        # copies end up on both sides of a split; training's split validator
+        # tolerates reuse only for labels registered as degenerate.
+        digests = {img: _sha256(disease_folder / img) for img in selected}
+        digest_splits = {}
+        for split, img_list in (
+            ("train", train_imgs),
+            ("val", val_imgs),
+            ("test", test_imgs),
+        ):
+            for img in img_list:
+                digest_splits.setdefault(digests[img], set()).add(split)
+        if any(len(splits) > 1 for splits in digest_splits.values()):
+            unique_count = len(set(digests.values()))
+            stats["degenerate_classes"][canonical_label] = unique_count
+            print(
+                f"[prepare_data] duplicate-heavy class {canonical_label}: "
+                f"{unique_count} unique image(s) kept as {len(selected)} files; "
+                "identical copies cross splits and are disclosed in dataset_info.json"
+            )
+
         for split, img_list in [
             ("train", train_imgs),
             ("val", val_imgs),
@@ -253,7 +275,7 @@ def prepare_dataset(
                             "split": split,
                             "canonical_label": canonical_label,
                             "output_path": str(dst.relative_to(output_dir)),
-                            "source_sha256": _sha256(src),
+                            "source_sha256": digests[img],
                         }
                     )
 
@@ -311,6 +333,7 @@ def save_dataset_info(stats, output_dir, seed):
         "dataset_name": "LeafDisease",
         "classes": stats["classes_count"],
         "class_names": sorted(stats["train"]["classes"].keys()),
+        "degenerate_classes": stats.get("degenerate_classes", {}),
         "selection": {
             "max_per_class": stats["max_per_class"],
             "method": "deterministic class-specific shuffle, keep first max_per_class images",

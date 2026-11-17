@@ -9,6 +9,11 @@ os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
 import tensorflow as tf
 
+try:
+    from dataset.taxonomy import EXPECTED_CLASS_COUNT as DEFAULT_NUM_CLASSES
+except ImportError:  # Script execution outside the repo root.
+    from taxonomy import EXPECTED_CLASS_COUNT as DEFAULT_NUM_CLASSES
+
 
 def create_efficientnet_b0_model(
     input_shape,
@@ -57,7 +62,7 @@ def create_efficientnet_b0_model(
 
 
 def create_mobilenetv2_model(
-    input_shape=(224, 224, 3), num_classes=72, dropout_rate=0.5, weights="imagenet",
+    input_shape=(224, 224, 3), num_classes=DEFAULT_NUM_CLASSES, dropout_rate=0.5, weights="imagenet",
     head_units=(256, 128), l2_regularization=0.0,
 ):
     """
@@ -65,7 +70,7 @@ def create_mobilenetv2_model(
 
     Args:
         input_shape: Input image shape (height, width, channels)
-        num_classes: Number of disease classes (default 72 for multi-crop dataset)
+        num_classes: Number of disease classes (default from dataset taxonomy)
         dropout_rate: Dropout rate for regularization
         weights: Pre-trained weights ('imagenet' for ImageNet pretrained, None for random init)
 
@@ -152,7 +157,7 @@ def _attach_classifier_head(
 
 def create_mobilenetv3_small_model(
     input_shape=(224, 224, 3),
-    num_classes=72,
+    num_classes=DEFAULT_NUM_CLASSES,
     dropout_rate=0.35,
     weights="imagenet",
     classifier_units=256,
@@ -180,7 +185,7 @@ def create_mobilenetv3_small_model(
 def create_application_model(
     architecture,
     input_shape=(224, 224, 3),
-    num_classes=72,
+    num_classes=DEFAULT_NUM_CLASSES,
     dropout_rate=0.35,
     weights="imagenet",
     classifier_units=256,
@@ -314,7 +319,7 @@ def _shufflenet_v2_unit(x, output_channels, stride, name):
 
 def create_shufflenetv2_05_model(
     input_shape=(224, 224, 3),
-    num_classes=72,
+    num_classes=DEFAULT_NUM_CLASSES,
     dropout_rate=0.35,
     weights=None,
     classifier_units=256,
@@ -460,7 +465,7 @@ def get_model(architecture="mobilenetv2", **kwargs):
             - 'shufflenetv2_05': Native ShuffleNetV2 0.5x backbone
         **kwargs: Additional arguments passed to model creation functions:
             - input_shape: tuple (default (224, 224, 3))
-            - num_classes: int (default 72)
+            - num_classes: int (default from dataset taxonomy)
             - dropout_rate: float (default 0.5)
             - classifier_units: optional hidden units for lightweight heads
             - include_preprocessing: MobileNetV3 preprocessing flag
@@ -532,6 +537,6 @@ def get_model(architecture="mobilenetv2", **kwargs):
 if __name__ == "__main__":
     # Test model creation
     print("Creating MobileNetV2 model...")
-    model, base = create_mobilenetv2_model(num_classes=72)
+    model, base = create_mobilenetv2_model(num_classes=DEFAULT_NUM_CLASSES)
     print_model_summary(model)
 

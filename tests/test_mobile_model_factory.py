@@ -2,6 +2,7 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
+from dataset.taxonomy import EXPECTED_CLASS_COUNT
 from training.model import get_model
 from training.utils import get_preprocess_fn
 
@@ -18,18 +19,18 @@ from training.utils import get_preprocess_fn
         "efficientnet_v2_b0",
     ],
 )
-def test_keras_mobile_candidates_produce_72_logits_without_downloads(architecture):
+def test_keras_mobile_candidates_produce_expected_logits_without_downloads(architecture):
     model, backbone = get_model(
         architecture=architecture,
         input_shape=(64, 64, 3),
-        num_classes=72,
+        num_classes=EXPECTED_CLASS_COUNT,
         dropout_rate=0.2,
         classifier_units=32,
         include_preprocessing=True,
         weights=None,
     )
     output = model(tf.zeros((1, 64, 64, 3)), training=False)
-    assert tuple(output.shape) == (1, 72)
+    assert tuple(output.shape) == (1, EXPECTED_CLASS_COUNT)
     assert backbone is not None
     tf.keras.backend.clear_session()
 

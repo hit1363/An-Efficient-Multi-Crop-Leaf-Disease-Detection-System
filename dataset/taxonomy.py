@@ -19,11 +19,6 @@ _CANONICAL_LABELS = (
     "Grape___Esca_(Black_Measles)",
     "Grape___healthy",
     "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
-    "Guava___Anthracnose",
-    "Guava___healthy",
-    "Guava___Insect_bite",
-    "Guava___Scorch",
-    "Guava___Yellowing",
     "Invalid",
     "Jackfruit___Algal_Leaf_Spot",
     "Jackfruit___Black_Spot",
@@ -85,7 +80,6 @@ LABEL_ALIASES = {
     "Cherry_(including_sour)___Healthy": "Cherry_(including_sour)___healthy",
     "Corn_(maize)___Healthy": "Corn_(maize)___healthy",
     "Grape___Healthy": "Grape___healthy",
-    "Guava___Healthy": "Guava___healthy",
     "Jackfruit___Healthy": "Jackfruit___healthy",
     "Mango__Anthracnose": "Mango___Anthracnose",
     "Mango___Healthy": "Mango___healthy",
@@ -103,7 +97,7 @@ LABEL_ALIASES = {
     "Wheat___Healthy": "Wheat___healthy",
 }
 
-EXPECTED_CLASS_COUNT = 72
+EXPECTED_CLASS_COUNT = 67
 _CASEFOLD_LABELS = {}
 for _label in CANONICAL_CLASSES:
     _CASEFOLD_LABELS.setdefault(_label.casefold(), []).append(_label)

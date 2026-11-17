@@ -59,7 +59,7 @@ from training.utils import (
     setup_callbacks,
     validate_dataset_splits,
 )
-from dataset.taxonomy import CANONICAL_CLASSES, LABEL_ALIASES
+from dataset.taxonomy import CANONICAL_CLASSES, EXPECTED_CLASS_COUNT, LABEL_ALIASES
 
 
 def _config():
@@ -1332,15 +1332,15 @@ def test_training_counts_use_manifest_and_select_only_positive_minority_classes(
 def test_degenerate_cutoff_is_reported(caplog):
     """A cutoff above the largest class silently disables baseline augmentation."""
     # Shape of the cap-500 benchmark: most classes sit at/near the cap and a
-    # handful of Guava classes are the only real minorities.
-    counts = {f"class_{index}": 350 for index in range(67)}
-    counts.update({f"guava_{index}": value for index, value in enumerate([2, 2, 6, 3, 3])})
+    # few degenerate classes are the only real minorities.
+    counts = {f"class_{index}": 350 for index in range(62)}
+    counts.update({f"degenerate_{index}": value for index, value in enumerate([2, 2, 6, 3, 3])})
 
     with caplog.at_level(logging.WARNING, logger="training.utils"):
         degenerate = get_minority_class_indices(
             counts, max_train_samples=500, logger=logging.getLogger("training.utils")
         )
-    assert len(degenerate) == len(counts) == 72
+    assert len(degenerate) == len(counts) == EXPECTED_CLASS_COUNT
     assert "baseline augmentation is effectively disabled" in caplog.text
 
     caplog.clear()
@@ -1348,7 +1348,7 @@ def test_degenerate_cutoff_is_reported(caplog):
         selected = get_minority_class_indices(
             counts, max_train_samples=100, logger=logging.getLogger("training.utils")
         )
-    # Only the five Guava classes (2, 2, 6, 3, 3) fall below the cutoff.
+    # Only the five degenerate classes (2, 2, 6, 3, 3) fall below the cutoff.
     assert len(selected) == 5
     assert "baseline augmentation is effectively disabled" not in caplog.text
 

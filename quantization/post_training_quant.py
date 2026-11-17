@@ -365,7 +365,7 @@ def stratified_calibration_paths(data_dir, num_samples=1000, seed=42):
     """Round-robin, class-balanced sample of calibration image paths.
 
     The previous generator consumed the first ``num_samples`` images in
-    alphabetical folder order, which on the 72-class benchmark covered only
+    alphabetical folder order, which on the multi-class benchmark covered only
     the first ~5 class directories and biased every INT8 activation scale.
     Round-robin sampling guarantees every class contributes to calibration.
     """
