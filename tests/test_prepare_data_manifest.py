@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from dataset.prepare_data import prepare_dataset
-from dataset.prepare_benchmark import prepare_benchmark
 from dataset.taxonomy import CANONICAL_CLASSES, EXPECTED_CLASS_COUNT, canonicalize_label
 
 import pytest
@@ -75,29 +74,29 @@ def test_prepare_dataset_writes_benchmark_manifest_files(tmp_path):
         assert (output / row["output_path"]).is_file()
 
 
-def test_prepare_dataset_manifest_matches_prepare_benchmark_shape(tmp_path):
+def test_strict_and_tolerant_builds_share_the_manifest_shape(tmp_path):
+    """Both modes of the single builder must emit the same manifest contract."""
     raw = tmp_path / "raw"
     _make_raw_tree(raw)
 
-    pd_output = tmp_path / "pd_out"
-    prepare_dataset(raw, pd_output, write_manifest=True)
+    tolerant_output = tmp_path / "tolerant_out"
+    prepare_dataset(raw, tolerant_output, write_manifest=True)
 
-    benchmark_output = tmp_path / "bench_out"
-    prepare_benchmark(raw, benchmark_output, max_per_class=3)
+    strict_output = tmp_path / "strict_out"
+    prepare_dataset(raw, strict_output, write_manifest=True, strict=True)
 
-    pd_names = json.loads((pd_output / "class_names.json").read_text())
-    bench_names = json.loads((benchmark_output / "class_names.json").read_text())
-    assert pd_names == bench_names
+    tolerant_names = json.loads((tolerant_output / "class_names.json").read_text())
+    strict_names = json.loads((strict_output / "class_names.json").read_text())
+    assert tolerant_names == strict_names == list(CANONICAL_CLASSES)
 
-    pd_taxonomy = json.loads((pd_output / "taxonomy.json").read_text())
-    bench_taxonomy = json.loads((benchmark_output / "taxonomy.json").read_text())
-    assert pd_taxonomy == bench_taxonomy
+    tolerant_taxonomy = json.loads((tolerant_output / "taxonomy.json").read_text())
+    strict_taxonomy = json.loads((strict_output / "taxonomy.json").read_text())
+    assert tolerant_taxonomy == strict_taxonomy
 
-    pd_manifest = _read_manifest(pd_output)
-    bench_manifest_reader = csv.DictReader(
-        (benchmark_output / "split_manifest.csv").open(newline="", encoding="utf-8")
-    )
-    assert list(pd_manifest[0].keys()) == list(bench_manifest_reader.fieldnames)
+    stricter_fields = csv.DictReader(
+        (strict_output / "split_manifest.csv").open(newline="", encoding="utf-8")
+    ).fieldnames
+    assert list(_read_manifest(tolerant_output)[0].keys()) == list(stricter_fields)
 
 
 def test_prepare_dataset_write_manifest_false_skips_files(tmp_path):
@@ -137,7 +136,7 @@ def test_prepare_dataset_manifest_is_deterministic(tmp_path):
     )
 
 
-def test_cli_no_manifest_flag_exists():
+def test_cli_exposes_no_manifest_and_strict_flags():
     import subprocess
     import sys
 
@@ -148,6 +147,7 @@ def test_cli_no_manifest_flag_exists():
     )
     assert result.returncode == 0
     assert "--no-manifest" in result.stdout
+    assert "--strict" in result.stdout
 
 
 def test_duplicate_heavy_class_is_disclosed_and_validates(tmp_path):

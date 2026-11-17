@@ -869,7 +869,8 @@ def test_kaggle_notebooks_auto_select_dedup_benchmark_and_quantize_metrics():
         assert "'validate_dataset_splits'] = True" in code
         assert "'validate_dataset_splits'] = False" in code
         assert "allow_cross_split_duplicates'] = True" in code
-        assert "from dataset.prepare_benchmark import prepare_benchmark" in code
+        assert "from dataset.prepare_data import prepare_dataset" in code
+        assert "strict=True" in code
         assert "tflite_metrics_{variant}" in code
         assert "evaluate_tflite.py" in code
         assert "runtime_cfg_path = cfg_path" in code

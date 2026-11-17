@@ -1,3 +1,11 @@
+"""Strict-mode coverage for the single dataset builder in ``prepare_data``.
+
+``prepare_dataset(..., strict=True)`` is the former dedicated benchmark
+builder: it validates a flat or already-split source tree, keeps
+byte-identical copies (disclosing the classes whose copies cross splits), and
+writes the benchmark manifest files.
+"""
+
 import csv
 import json
 import shutil
@@ -5,7 +13,7 @@ import shutil
 import pytest
 from PIL import Image
 
-from dataset.prepare_benchmark import prepare_benchmark, _split_counts
+from dataset.prepare_data import _split_counts, prepare_dataset
 from dataset.taxonomy import (
     CANONICAL_CLASSES,
     EXPECTED_CLASS_COUNT,
@@ -42,17 +50,16 @@ def test_split_count_rounding_preserves_coverage_when_possible():
         assert all(count > 0 for count in counts.values())
 
 
-def test_prepare_benchmark_is_reproducible_rgb_224_and_disjoint(tmp_path):
+def test_strict_build_is_reproducible_rgb_224_and_disjoint(tmp_path):
     source = tmp_path / "source"
     output = tmp_path / "harmonized"
     _make_source_tree(source)
 
-    first = prepare_benchmark(source, output)
-    assert first["classes"] == EXPECTED_CLASS_COUNT
-    assert first["seed"] == 42
-    assert first["counts"]["train"]["total"] == EXPECTED_CLASS_COUNT
-    assert first["counts"]["val"]["total"] == EXPECTED_CLASS_COUNT
-    assert first["counts"]["test"]["total"] == EXPECTED_CLASS_COUNT
+    first = prepare_dataset(source, output, strict=True)
+    assert first["classes_count"] == EXPECTED_CLASS_COUNT
+    assert first["train"]["total"] == EXPECTED_CLASS_COUNT
+    assert first["val"]["total"] == EXPECTED_CLASS_COUNT
+    assert first["test"]["total"] == EXPECTED_CLASS_COUNT
 
     class_names = json.loads((output / "class_names.json").read_text())
     assert class_names == list(CANONICAL_CLASSES)
@@ -69,8 +76,8 @@ def test_prepare_benchmark_is_reproducible_rgb_224_and_disjoint(tmp_path):
                 assert image.size == (224, 224)
 
     second_output = tmp_path / "harmonized_second"
-    second = prepare_benchmark(source, second_output)
-    assert first["counts"] == second["counts"]
+    second = prepare_dataset(source, second_output, strict=True)
+    assert first["train"]["total"] == second["train"]["total"]
     first_rows = (output / "split_manifest.csv").read_text(encoding="utf-8")
     second_rows = (second_output / "split_manifest.csv").read_text(encoding="utf-8")
     assert first_rows == second_rows
@@ -84,13 +91,9 @@ def test_exact_duplicate_is_kept_and_cross_label_duplicate_is_rejected(tmp_path)
         (duplicate_class / "sample_0.png").read_bytes()
     )
     output = tmp_path / "deduplicated"
-    result = prepare_benchmark(source, output)
+    result = prepare_dataset(source, output, strict=True)
     assert result["exact_duplicates_kept"] == 1
-    assert (
-        sum(part["total"] for part in result["counts"].values())
-        == 3 * EXPECTED_CLASS_COUNT + 1
-    )
-    assert result["counts"]["train"]["classes"][CANONICAL_CLASSES[0]] == 2
+    assert result["processed_total"] == 3 * EXPECTED_CLASS_COUNT + 1
 
     conflict_source = tmp_path / "conflict_source"
     _make_source_tree(conflict_source)
@@ -98,7 +101,7 @@ def test_exact_duplicate_is_kept_and_cross_label_duplicate_is_rejected(tmp_path)
     conflict = conflict_source / CANONICAL_CLASSES[1] / "conflict.png"
     conflict.write_bytes(original.read_bytes())
     with pytest.raises(ValueError, match="Cross-label duplicate conflicts"):
-        prepare_benchmark(conflict_source, tmp_path / "conflict_output")
+        prepare_dataset(conflict_source, tmp_path / "conflict_output", strict=True)
     report = json.loads(
         (tmp_path / "conflict_output_validation_report.json").read_text()
     )
@@ -123,10 +126,11 @@ def test_split_tree_duplicates_are_kept_and_reuse_is_disclosed(tmp_path):
         duplicate_source.read_bytes()
     )
 
-    result = prepare_benchmark(source, tmp_path / "deduplicated")
+    output = tmp_path / "deduplicated"
+    result = prepare_dataset(source, output, strict=True)
 
     assert result["exact_duplicates_kept"] == 1
-    with (tmp_path / "deduplicated" / "split_manifest.csv").open(
+    with (output / "split_manifest.csv").open(
         newline="", encoding="utf-8"
     ) as handle:
         manifest = list(csv.DictReader(handle))
@@ -161,23 +165,23 @@ def test_duplicate_heavy_class_stays_balanced(tmp_path):
         )
 
     output = tmp_path / "balanced"
-    first = prepare_benchmark(source, output)
+    first = prepare_dataset(source, output, strict=True)
 
     # 63 files: prepare_data.split_selected -> 44 / 9 / 10, not 3 unique.
-    assert first["counts"]["train"]["classes"][CANONICAL_CLASSES[5]] == 44
-    assert first["counts"]["val"]["classes"][CANONICAL_CLASSES[5]] == 9
-    assert first["counts"]["test"]["classes"][CANONICAL_CLASSES[5]] == 10
+    assert first["train"]["classes"][CANONICAL_CLASSES[5]] == 44
+    assert first["val"]["classes"][CANONICAL_CLASSES[5]] == 9
+    assert first["test"]["classes"][CANONICAL_CLASSES[5]] == 10
     assert first["degenerate_classes"] == {CANONICAL_CLASSES[5]: 3}
     # All-unique classes keep the non-empty fallback split (1/1/1).
-    assert first["counts"]["train"]["classes"][CANONICAL_CLASSES[6]] == 1
+    assert first["train"]["classes"][CANONICAL_CLASSES[6]] == 1
 
     info = json.loads((output / "dataset_info.json").read_text())
     assert info["degenerate_classes"] == {CANONICAL_CLASSES[5]: 3}
     assert info["exact_duplicates_kept"] == 60
 
     second_output = tmp_path / "balanced_second"
-    second = prepare_benchmark(source, second_output)
-    assert first["counts"] == second["counts"]
+    second = prepare_dataset(source, second_output, strict=True)
+    assert first["train"]["classes"] == second["train"]["classes"]
     assert (
         (output / "split_manifest.csv").read_text(encoding="utf-8")
         == (second_output / "split_manifest.csv").read_text(encoding="utf-8")
@@ -190,11 +194,12 @@ def test_unknown_labels_write_a_validation_report(tmp_path):
     class_dir.mkdir(parents=True)
     Image.new("RGB", (4, 4), "red").save(class_dir / "sample.png")
     with pytest.raises(ValueError, match="taxonomy validation failed"):
-        prepare_benchmark(source, tmp_path / "unknown_output")
+        prepare_dataset(source, tmp_path / "unknown_output", strict=True)
     report = json.loads(
         (tmp_path / "unknown_output_validation_report.json").read_text()
     )
     assert report["unknown_source_labels"] == ["UnknownCrop___Disease"]
+    assert not (tmp_path / "unknown_output").exists()
 
 
 def test_degenerate_class_is_kept_with_disclosed_val_test_copies(tmp_path):
@@ -207,12 +212,12 @@ def test_degenerate_class_is_kept_with_disclosed_val_test_copies(tmp_path):
     Image.new("RGB", (9, 9), (4, 5, 6)).save(thin_class / "only_b.png")
 
     output = tmp_path / "dedup"
-    result = prepare_benchmark(source, output)
+    result = prepare_dataset(source, output, strict=True)
 
     assert result["degenerate_classes"] == {CANONICAL_CLASSES[3]: 2}
-    assert result["counts"]["train"]["classes"][CANONICAL_CLASSES[3]] == 2
-    assert result["counts"]["val"]["classes"][CANONICAL_CLASSES[3]] == 1
-    assert result["counts"]["test"]["classes"][CANONICAL_CLASSES[3]] == 1
+    assert result["train"]["classes"][CANONICAL_CLASSES[3]] == 2
+    assert result["val"]["classes"][CANONICAL_CLASSES[3]] == 1
+    assert result["test"]["classes"][CANONICAL_CLASSES[3]] == 1
 
     info = json.loads((output / "dataset_info.json").read_text())
     assert info["degenerate_classes"] == {CANONICAL_CLASSES[3]: 2}
@@ -226,3 +231,15 @@ def test_degenerate_class_is_kept_with_disclosed_val_test_copies(tmp_path):
 
     other_rows = [r for r in manifest if r["canonical_label"] != CANONICAL_CLASSES[3]]
     assert len({r["source_sha256"] for r in other_rows}) == len(other_rows)
+
+
+def test_strict_build_refuses_to_overwrite_and_requires_manifest(tmp_path):
+    source = tmp_path / "source"
+    _make_source_tree(source, images_per_class=3)
+    output = tmp_path / "existing"
+    output.mkdir()
+    with pytest.raises(FileExistsError):
+        prepare_dataset(source, output, strict=True)
+    with pytest.raises(ValueError, match="write_manifest"):
+        prepare_dataset(source, tmp_path / "fresh", strict=True, write_manifest=False)
+    assert not (tmp_path / "fresh").exists()

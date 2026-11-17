@@ -27,7 +27,7 @@ Lightweight, offline-capable multi-crop leaf disease classification optimized fo
 │   ├── raw/
 │   ├── processed/
 │   ├── taxonomy.py
-│   └── prepare_benchmark.py
+│   └── prepare_data.py
 ├── notebooks/
 │   ├── colab_training_notebook.ipynb
 │   ├── colab_<model>_training.ipynb
@@ -85,10 +85,10 @@ pip install -r requirements.txt
 Build the canonical 67-class benchmark from raw class folders. An existing `train/val/test` tree is also accepted, but its old boundaries are discarded and regenerated:
 
 ```bash
-python dataset/prepare_benchmark.py --data-dir dataset/raw --output-dir dataset/processed --seed 42
+python dataset/prepare_data.py --raw-dir dataset/raw --output-dir dataset/processed --seed 42 --strict
 ```
 
-The builder applies the explicit taxonomy, retains `Invalid` as the last class, keeps exact duplicate source files (selection, splitting, and preprocessing reuse `prepare_data.py`), converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. Classes whose copies cross splits are disclosed in `dataset_info.json` under `degenerate_classes` so split validation tolerates them. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. It never overwrites existing output. Unknown or conflicting labels stop the run and produce a validation report.
+The builder applies the explicit taxonomy, retains `Invalid` as the last class, keeps exact duplicate source files (selection, splitting, and preprocessing are shared by both modes), converts images to RGB, center-crops/resamples to 224×224 with Lanczos, and writes deterministic 70/15/15 splits. Classes whose copies cross splits are disclosed in `dataset_info.json` under `degenerate_classes` so split validation tolerates them. It records `class_names.json`, `taxonomy.json`, `split_manifest.csv`, `dataset_info.json`, and a near-duplicate audit. `--strict` adds the benchmark gates: every canonical class must be present, unknown labels and cross-class duplicates stop the run with a validation report, and existing output is never overwritten. Without `--strict` the builder is the tolerant bulk converter: it clears the output directory, processes whatever labels it finds, and still writes the same manifest files.
 
 **Per-class cap.** `--max-per-class` (default `500`) bounds every class before splitting so no crop dominates training. With seed 42 the cap-500 benchmark yields ≈24.8k train / ≈5.3k val / ≈5.3k test images (≈350 train images per class for classes with ≥500 raw images). The earlier cap-300 processed tree kept only ≈15k train images and under-trained every model, so recipe v2 (below) is tuned for the cap-500 rebuild. Upload the rebuilt directory (with its `split_manifest.csv`) to Kaggle as the training dataset; notebooks detect the manifest automatically and validate splits without re-hashing. Never rebuild from an already-capped tree — that only re-caps the survivors and cannot recover discarded images. Note that the new deterministic selection and split assignment differ from the cap-300 build, so older test-set numbers are not directly comparable; re-evaluate models on the same benchmark manifest when comparing.
 

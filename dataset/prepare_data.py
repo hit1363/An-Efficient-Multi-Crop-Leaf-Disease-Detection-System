@@ -1,8 +1,23 @@
 """
 Data Preparation Script - Split raw dataset, resize (center-crop), and save.
-Optionally writes the benchmark manifest files (class_names.json,
-split_manifest.csv, taxonomy.json, near_duplicate_audit.json) alongside the
+
+Writes the benchmark metadata files (class_names.json, split_manifest.csv,
+taxonomy.json, near_duplicate_audit.json, dataset_info.json) alongside the
 split tree so downstream validators and comparison runners work unchanged.
+
+Two modes share one split engine so there is a single builder in the project:
+
+* default (tolerant): every raw class folder is converted, an unknown folder
+  spelling falls back to its own name instead of aborting, and per-class
+  statistics are printed for thesis reporting.
+* ``strict=True`` (CLI ``--strict``): the benchmark gates are enforced - every
+  canonical class must be present, unknown source labels and cross-label
+  byte-identical duplicates are rejected (with a validation report), an
+  existing output directory is never overwritten, thin classes get a disclosed
+  non-empty fallback split, and a failed build removes its partial output tree.
+  Byte-identical copies inside the same class are kept, so a class is
+  represented by its real file count instead of collapsing to its handful of
+  unique photos; such reuse is disclosed under ``degenerate_classes``.
 """
 
 import argparse
@@ -16,9 +31,19 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 try:
-    from .taxonomy import CANONICAL_CLASSES, canonicalize_label, taxonomy_document
+    from .taxonomy import (
+        CANONICAL_CLASSES,
+        EXPECTED_CLASS_COUNT,
+        canonicalize_label,
+        taxonomy_document,
+    )
 except ImportError:
-    from taxonomy import CANONICAL_CLASSES, canonicalize_label, taxonomy_document
+    from taxonomy import (
+        CANONICAL_CLASSES,
+        EXPECTED_CLASS_COUNT,
+        canonicalize_label,
+        taxonomy_document,
+    )
 
 # Ensure compatibility with older and newer Pillow versions
 try:
@@ -28,6 +53,15 @@ except AttributeError:
 
 DEFAULT_MAX_PER_CLASS = 300
 MANIFEST_FIELDS = ["split", "canonical_label", "output_path", "source_sha256"]
+DEFAULT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+# Strict mode scans every extension Pillow can open, not just the common three.
+IMAGE_EXTENSIONS = {
+    ".avif", ".bmp", ".gif", ".ico", ".jfif", ".jpe", ".jpeg", ".jpg",
+    ".pbm", ".pgm", ".png", ".pnm", ".ppm", ".tga", ".tif", ".tiff", ".webp",
+}
+SPLITS = ("train", "val", "test")
+MIN_IMAGES_PER_CLASS = 3
+PROGRESS_INTERVAL = 2000
 
 
 def select_images(images, max_per_class, seed, class_name):
@@ -45,9 +79,37 @@ def split_selected(items, train_ratio, val_ratio):
     return items[:train_end], items[train_end:val_end], items[val_end:]
 
 
-def get_image_files(directory: Path):
-    """Get list of valid image files from directory using pathlib."""
-    valid_extensions = {".jpg", ".jpeg", ".png"}
+def _split_counts(total: int, ratios=(0.70, 0.15, 0.15)):
+    """Return deterministic split counts whose sum is ``total``.
+
+    Used by strict mode when the plain ratio cut would leave a split empty;
+    largest-remainder rounding plus a donor pass keeps every split non-empty.
+    """
+    if total < len(SPLITS):
+        raise ValueError("Each class needs at least one image per split")
+    raw = [total * ratio for ratio in ratios]
+    counts = [int(value) for value in raw]
+    for index in sorted(
+        range(len(counts)),
+        key=lambda item: raw[item] - counts[item],
+        reverse=True,
+    ):
+        if sum(counts) >= total:
+            break
+        counts[index] += 1
+    for index in range(len(counts)):
+        if counts[index] == 0:
+            donor = max(range(len(counts)), key=lambda item: counts[item])
+            counts[donor] -= 1
+            counts[index] = 1
+    if sum(counts) != total or any(count < 1 for count in counts):
+        raise ValueError(f"Unable to create non-empty splits for {total} images")
+    return dict(zip(SPLITS, counts))
+
+
+def get_image_files(directory: Path, extensions=None):
+    """Get list of valid image file names from directory using pathlib."""
+    valid_extensions = DEFAULT_IMAGE_EXTENSIONS if extensions is None else extensions
     if not directory.exists():
         return []
 
@@ -58,6 +120,27 @@ def get_image_files(directory: Path):
     )
 
 
+def _source_class_dirs(data_dir: Path):
+    """Yield ``(source_label, class_dir)`` from a flat or complete split tree."""
+    split_dirs = [data_dir / split for split in SPLITS]
+    if all(path.is_dir() for path in split_dirs):
+        for split_dir in split_dirs:
+            yield from (
+                (class_dir.name, class_dir)
+                for class_dir in sorted(
+                    path for path in split_dir.iterdir() if path.is_dir()
+                )
+            )
+        return
+    for class_dir in sorted(path for path in data_dir.iterdir() if path.is_dir()):
+        if class_dir.name in SPLITS:
+            raise ValueError(
+                f"Input has an incomplete split tree at {data_dir}; "
+                "expected train, val, and test"
+            )
+        yield class_dir.name, class_dir
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -66,12 +149,21 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _write_validation_report(output_dir: Path, report: dict):
+    """Write the strict-mode validation report next to the output tree."""
+    report_path = output_dir.parent / f"{output_dir.name}_validation_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return report_path
+
+
 def _write_manifest_files(output_dir, manifest_rows, class_names):
     """Write the benchmark manifest files next to the split tree.
 
-    Shapes mirror ``prepare_benchmark.prepare_benchmark`` so consumers
-    (training.utils.validate_dataset_splits, load_benchmark_class_names,
-    compare_models) treat both trees identically.
+    Shapes match what training/utils.py (validate_dataset_splits,
+    load_benchmark_class_names) and training/compare_models.py consume.
     """
     output_dir = Path(output_dir)
     with (output_dir / "split_manifest.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -123,49 +215,9 @@ def process_and_save_image(src_path: Path, dst_path: Path, target_size=224):
         return 0
 
 
-def prepare_dataset(
-    raw_data_dir: Path,
-    output_dir: Path,
-    train_ratio=0.70,
-    val_ratio=0.15,
-    seed=42,
-    target_size=224,
-    max_per_class=DEFAULT_MAX_PER_CLASS,
-    write_manifest=True,
-):
-    """Select up to max_per_class per class, split, and resize/crop images.
-
-    With ``write_manifest=True`` (default) the four benchmark manifest files
-    (class_names.json, split_manifest.csv, taxonomy.json,
-    near_duplicate_audit.json) are written alongside the split tree.
-    """
-    if not raw_data_dir.exists():
-        raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
-
-    test_ratio = 1.0 - train_ratio - val_ratio
-
-    # Strict split ratio and parameter validation
-    if not (0 < train_ratio < 1):
-        raise ValueError("train_ratio must be strictly between 0 and 1")
-    if not (0 <= val_ratio < 1):
-        raise ValueError("val_ratio must be between 0 and 1")
-    if not (0 <= test_ratio < 1):
-        raise ValueError("Calculated test_ratio must be between 0 and 1")
-    if target_size <= 0:
-        raise ValueError("target_size must be greater than 0")
-    if isinstance(max_per_class, bool) or not isinstance(max_per_class, int) or max_per_class < 1:
-        raise ValueError("max_per_class must be a positive integer")
-
-    # Clear old output directory to prevent stale files
-    if output_dir.exists():
-        print(f"Clearing old output directory: {output_dir}")
-        shutil.rmtree(output_dir)
-
-    splits = ["train", "val", "test"]
-    for split in splits:
-        (output_dir / split).mkdir(parents=True, exist_ok=True)
-
-    stats = {
+def _empty_stats(train_ratio, val_ratio, test_ratio, max_per_class, target_size):
+    """Return the shared statistics structure both modes fill in."""
+    return {
         "train": {"total": 0, "classes": {}},
         "val": {"total": 0, "classes": {}},
         "test": {"total": 0, "classes": {}},
@@ -181,6 +233,130 @@ def prepare_dataset(
         "degenerate_classes": {},
         "ratios": (train_ratio, val_ratio, test_ratio),
     }
+
+
+def _save_split_images(
+    output_dir,
+    split,
+    class_dir_name,
+    items,
+    target_size,
+    stats,
+    class_stats,
+    manifest_rows,
+    canonical_label,
+    indexed=False,
+):
+    """Resize/crop ``items`` into ``output_dir/split/class_dir_name``.
+
+    ``items`` is a sequence of ``(source_path, source_sha256)`` pairs. Only
+    successfully written images are counted and added to the manifest.
+    ``indexed=True`` prefixes a per-split index to the file name, which strict
+    mode needs because a reused source image can land in several splits.
+    """
+    class_dir = output_dir / split / class_dir_name
+    class_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for index, (source, digest) in enumerate(items):
+        if indexed:
+            destination = class_dir / f"{index:05d}_{source.stem}.jpg"
+        else:
+            destination = class_dir / source.name
+        if not process_and_save_image(
+            src_path=source, dst_path=destination, target_size=target_size
+        ):
+            continue
+        written += 1
+        stats[split]["total"] += 1
+        stats[split]["classes"][class_dir_name] += 1
+        class_stats[split] += 1
+        stats["processed_total"] += 1
+        manifest_rows.append(
+            {
+                "split": split,
+                "canonical_label": canonical_label,
+                "output_path": str(destination.relative_to(output_dir)),
+                "source_sha256": digest,
+            }
+        )
+    return written
+
+
+def prepare_dataset(
+    raw_data_dir: Path,
+    output_dir: Path,
+    train_ratio=0.70,
+    val_ratio=0.15,
+    seed=42,
+    target_size=224,
+    max_per_class=DEFAULT_MAX_PER_CLASS,
+    write_manifest=True,
+    strict=False,
+):
+    """Select up to max_per_class per class, split, and resize/crop images.
+
+    With ``write_manifest=True`` (default) the four benchmark manifest files
+    (class_names.json, split_manifest.csv, taxonomy.json,
+    near_duplicate_audit.json) are written alongside the split tree.
+
+    ``strict=True`` additionally enforces the benchmark gates: the output
+    directory must not exist yet, every canonical class must have at least one
+    image, unknown source labels and cross-label byte-identical duplicates
+    abort the build (leaving a ``*_validation_report.json`` next to the output
+    directory), thin classes receive a disclosed non-empty split, and a failure
+    removes the partially written tree. ``dataset_info.json`` is written by
+    strict mode itself so the degenerate-class registry travels with the tree.
+    """
+    raw_data_dir = Path(raw_data_dir)
+    output_dir = Path(output_dir)
+
+    if not raw_data_dir.is_dir():
+        raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
+
+    test_ratio = 1.0 - train_ratio - val_ratio
+
+    # Strict split ratio and parameter validation
+    if not (0 < train_ratio < 1):
+        raise ValueError("train_ratio must be strictly between 0 and 1")
+    if not (0 <= val_ratio < 1):
+        raise ValueError("val_ratio must be between 0 and 1")
+    if not (0 <= test_ratio < 1):
+        raise ValueError("Calculated test_ratio must be between 0 and 1")
+    if target_size <= 0:
+        raise ValueError("target_size must be greater than 0")
+    if (
+        isinstance(max_per_class, bool)
+        or not isinstance(max_per_class, int)
+        or max_per_class < 1
+    ):
+        raise ValueError("max_per_class must be a positive integer")
+
+    if strict:
+        if max_per_class < MIN_IMAGES_PER_CLASS:
+            raise ValueError(
+                f"max_per_class must be an integer of at least {MIN_IMAGES_PER_CLASS}"
+            )
+        return _prepare_dataset_strict(
+            raw_data_dir,
+            output_dir,
+            (train_ratio, val_ratio, test_ratio),
+            seed,
+            target_size,
+            max_per_class,
+            write_manifest=write_manifest,
+        )
+
+    # Clear old output directory to prevent stale files
+    if output_dir.exists():
+        print(f"Clearing old output directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
+    for split in SPLITS:
+        (output_dir / split).mkdir(parents=True, exist_ok=True)
+
+    stats = _empty_stats(
+        train_ratio, val_ratio, test_ratio, max_per_class, target_size
+    )
 
     disease_folders = sorted(
         [f for f in raw_data_dir.iterdir() if f.is_dir()]
@@ -212,7 +388,7 @@ def prepare_dataset(
 
         stats["original_total"] += len(images)
 
-        for split in splits:
+        for split in SPLITS:
             stats[split]["classes"][folder_name] = 0
 
         selected = select_images(images, max_per_class, seed, folder_name)
@@ -220,7 +396,7 @@ def prepare_dataset(
         if len(images) > max_per_class:
             stats["capped_classes"] += 1
         class_stats = {"raw": len(images), "selected": len(selected)}
-        for split in splits:
+        for split in SPLITS:
             class_stats[split] = 0
         stats["per_class"][folder_name] = class_stats
 
@@ -254,30 +430,17 @@ def prepare_dataset(
             ("val", val_imgs),
             ("test", test_imgs),
         ]:
-            class_dir = output_dir / split / folder_name
-            class_dir.mkdir(parents=True, exist_ok=True)
-
-            for img in img_list:
-                src = disease_folder / img
-                dst = class_dir / img
-
-                success = process_and_save_image(
-                    src_path=src, dst_path=dst, target_size=target_size
-                )
-
-                if success:
-                    stats[split]["total"] += 1
-                    stats[split]["classes"][folder_name] += 1
-                    class_stats[split] += 1
-                    stats["processed_total"] += 1
-                    manifest_rows.append(
-                        {
-                            "split": split,
-                            "canonical_label": canonical_label,
-                            "output_path": str(dst.relative_to(output_dir)),
-                            "source_sha256": digests[img],
-                        }
-                    )
+            _save_split_images(
+                output_dir,
+                split,
+                folder_name,
+                [(disease_folder / img, digests[img]) for img in img_list],
+                target_size,
+                stats,
+                class_stats,
+                manifest_rows,
+                canonical_label,
+            )
 
         print(
             f"{folder_name:30} | Raw: {len(images):5} | Selected: {len(selected):5} "
@@ -294,6 +457,201 @@ def prepare_dataset(
         _write_manifest_files(output_dir, manifest_rows, class_names)
 
     return stats
+
+
+def _prepare_dataset_strict(
+    raw_data_dir,
+    output_dir,
+    ratios,
+    seed,
+    target_size,
+    max_per_class,
+    write_manifest=True,
+):
+    """Strict benchmark build: validate a flat or split source tree, then write.
+
+    Every source image is hashed for taxonomy-conflict detection, but
+    byte-identical copies inside one class are kept (the tolerant behaviour) so
+    a class is represented by its real file count. Capping, splitting, and
+    resizing reuse :func:`select_images`, :func:`split_selected`, and
+    :func:`process_and_save_image`; a non-empty fallback split preserves the
+    guarantee that every class is scorable in all three splits.
+    """
+    if output_dir.exists():
+        raise FileExistsError(f"Output directory already exists: {output_dir}")
+    if not write_manifest:
+        raise ValueError("strict builds require write_manifest=True")
+
+    report = {
+        "unknown_source_labels": [],
+        "cross_label_duplicate_conflicts": [],
+        "exact_duplicates_kept": 0,
+        "degenerate_classes": {},
+    }
+    stats = _empty_stats(ratios[0], ratios[1], ratios[2], max_per_class, target_size)
+    by_class = {name: [] for name in CANONICAL_CLASSES}
+    digest_owner = {}
+    scanned = 0
+
+    try:
+        for source_label, class_dir in _source_class_dirs(raw_data_dir):
+            try:
+                canonical_label = canonicalize_label(source_label)
+            except ValueError:
+                report["unknown_source_labels"].append(source_label)
+                continue
+            for name in get_image_files(class_dir, extensions=IMAGE_EXTENSIONS):
+                path = class_dir / name
+                digest = _sha256(path)
+                scanned += 1
+                if scanned % PROGRESS_INTERVAL == 0:
+                    print(
+                        f"[prepare_data] hashed {scanned} source images",
+                        flush=True,
+                    )
+                previous = digest_owner.get(digest)
+                if previous is None:
+                    digest_owner[digest] = canonical_label
+                elif previous != canonical_label:
+                    report["cross_label_duplicate_conflicts"].append(
+                        {
+                            "sha256": digest,
+                            "first_label": previous,
+                            "conflicting_label": canonical_label,
+                            "path": str(path),
+                        }
+                    )
+                else:
+                    report["exact_duplicates_kept"] += 1
+                by_class[canonical_label].append((path, digest))
+
+        if report["unknown_source_labels"] or report["cross_label_duplicate_conflicts"]:
+            report["error"] = "taxonomy validation failed"
+            _write_validation_report(output_dir, report)
+            if report["cross_label_duplicate_conflicts"]:
+                raise ValueError(
+                    "Cross-label duplicate conflicts detected; see validation report"
+                )
+            raise ValueError("taxonomy validation failed; see validation report")
+
+        empty = [name for name, items in by_class.items() if not items]
+        if empty:
+            report["missing_classes"] = empty
+            report["error"] = "classes need at least one image"
+            _write_validation_report(output_dir, report)
+            raise ValueError(f"Classes have no source images: {empty}")
+
+        output_dir.mkdir(parents=True)
+        for split in SPLITS:
+            (output_dir / split).mkdir()
+
+        stats["classes_count"] = len(CANONICAL_CLASSES)
+        stats["original_total"] = scanned
+
+        print(f"Found {len(CANONICAL_CLASSES)} canonical classes (strict build).")
+        print(f"Maximum images per class: {max_per_class}")
+        print(f"Target size: {target_size}x{target_size} pixels.\n")
+
+        manifest_rows = []
+        degenerate = {}
+        written = 0
+
+        for class_name in CANONICAL_CLASSES:
+            items = by_class[class_name]
+            unique_count = len({digest for _, digest in items})
+            selected = select_images(items, max_per_class, seed, class_name)
+            stats["selected_total"] += len(selected)
+            if len(items) > max_per_class:
+                stats["capped_classes"] += 1
+            class_stats = {"raw": len(items), "selected": len(selected)}
+            for split in SPLITS:
+                class_stats[split] = 0
+                stats[split]["classes"][class_name] = 0
+            stats["per_class"][class_name] = class_stats
+
+            if len(selected) < MIN_IMAGES_PER_CLASS:
+                split_selection = {
+                    "train": selected,
+                    "val": selected[:1],
+                    "test": selected[-1:],
+                }
+                degenerate[class_name] = unique_count
+                print(
+                    f"[prepare_data] degenerate class {class_name}: "
+                    f"{unique_count} unique image(s); keeping all in train and "
+                    "placing one disclosed copy in val/test",
+                    flush=True,
+                )
+            else:
+                train_items, val_items, test_items = split_selected(
+                    selected, ratios[0], ratios[1]
+                )
+                if train_items and val_items and test_items:
+                    split_selection = {
+                        "train": train_items,
+                        "val": val_items,
+                        "test": test_items,
+                    }
+                else:
+                    split_counts = _split_counts(len(selected), ratios)
+                    split_selection = {}
+                    offset = 0
+                    for split in SPLITS:
+                        split_selection[split] = selected[
+                            offset : offset + split_counts[split]
+                        ]
+                        offset += split_counts[split]
+
+                digest_splits = {}
+                for split, part in split_selection.items():
+                    for _, digest in part:
+                        digest_splits.setdefault(digest, set()).add(split)
+                if any(len(splits) > 1 for splits in digest_splits.values()):
+                    degenerate[class_name] = unique_count
+                    print(
+                        f"[prepare_data] duplicate-heavy class {class_name}: "
+                        f"{unique_count} unique image(s) kept as {len(selected)} "
+                        "files; identical copies cross splits and are disclosed "
+                        "in dataset_info.json",
+                        flush=True,
+                    )
+
+            written_before = written
+            for split in SPLITS:
+                written += _save_split_images(
+                    output_dir,
+                    split,
+                    class_name,
+                    split_selection[split],
+                    target_size,
+                    stats,
+                    class_stats,
+                    manifest_rows,
+                    class_name,
+                    indexed=True,
+                )
+            if written // PROGRESS_INTERVAL > written_before // PROGRESS_INTERVAL:
+                print(f"[prepare_data] wrote {written} images", flush=True)
+
+        stats["failed_total"] = stats["selected_total"] - stats["processed_total"]
+        stats["degenerate_classes"] = degenerate
+        stats["exact_duplicates_kept"] = report["exact_duplicates_kept"]
+        stats["unique_source_images"] = len(digest_owner)
+        report["degenerate_classes"] = degenerate
+
+        if write_manifest:
+            _write_manifest_files(
+                output_dir, manifest_rows, list(CANONICAL_CLASSES)
+            )
+            save_dataset_info(stats, output_dir, seed)
+        else:
+            raise ValueError("strict builds require write_manifest=True")
+
+        return stats
+    except Exception:
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        raise
 
 
 def print_statistics(stats):
@@ -358,8 +716,12 @@ def save_dataset_info(stats, output_dir, seed):
             "centering": [0.5, 0.5],
         },
     }
+    if "exact_duplicates_kept" in stats:
+        info["exact_duplicates_kept"] = stats["exact_duplicates_kept"]
+        info["unique_source_images"] = stats["unique_source_images"]
+        info["expected_classes"] = EXPECTED_CLASS_COUNT
 
-    info_path = output_dir / "dataset_info.json"
+    info_path = Path(output_dir) / "dataset_info.json"
     with open(info_path, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=4)
     print(f"Dataset metadata saved to: {info_path}")
@@ -403,7 +765,16 @@ def main():
         help="Skip writing class_names.json, split_manifest.csv, taxonomy.json, "
         "and near_duplicate_audit.json next to the split tree",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce benchmark gates: reject unknown labels and cross-label "
+        "duplicates, require every canonical class, refuse to overwrite the "
+        "output directory, and disclose degenerate classes",
+    )
     args = parser.parse_args()
+    if args.strict and args.no_manifest:
+        parser.error("--strict requires the benchmark manifest files; drop --no-manifest")
 
     script_dir = Path(__file__).resolve().parent
     raw_dir = Path(args.raw_dir).resolve() if args.raw_dir else script_dir / "raw"
@@ -425,9 +796,13 @@ def main():
         target_size=args.target_size,
         max_per_class=args.max_per_class,
         write_manifest=not args.no_manifest,
+        strict=args.strict,
     )
     print_statistics(stats)
-    save_dataset_info(stats, output_dir, args.seed)
+    if not args.strict:
+        # Strict builds write dataset_info.json themselves, together with a
+        # degenerate-class registry that the split validator reads.
+        save_dataset_info(stats, output_dir, args.seed)
     print("Dataset preparation completed successfully!")
 
 
