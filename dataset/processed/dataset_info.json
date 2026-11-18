@@ -5,60 +5,58 @@
         "Apple___Apple_scab",
         "Apple___Black_rot",
         "Apple___Cedar_apple_rust",
-        "Apple___Healthy",
+        "Apple___healthy",
         "Banana___Cordana",
-        "Banana___Healthy",
         "Banana___Pestalotiopsis",
         "Banana___Sigatoka",
-        "Cherry_(including_sour)___Healthy",
+        "Banana___healthy",
         "Cherry_(including_sour)___Powdery_mildew",
+        "Cherry_(including_sour)___healthy",
         "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
         "Corn_(maize)___Common_rust_",
-        "Corn_(maize)___Healthy",
         "Corn_(maize)___Northern_Leaf_Blight",
+        "Corn_(maize)___healthy",
         "Grape___Black_rot",
         "Grape___Esca_(Black_Measles)",
-        "Grape___Healthy",
         "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
-        "Invalid",
+        "Grape___healthy",
         "Jackfruit___Algal_Leaf_Spot",
         "Jackfruit___Black_Spot",
-        "Jackfruit___Healthy",
-        "Mango__Anthracnose",
+        "Jackfruit___healthy",
+        "Mango___Anthracnose",
         "Mango___Bacterial_Canker",
         "Mango___Cutting_Weevil",
         "Mango___Die_Back",
         "Mango___Gall_Midge",
-        "Mango___Healthy",
         "Mango___Powdery_Mildew",
         "Mango___Sooty_Mould",
+        "Mango___healthy",
         "Peach___Bacterial_spot",
-        "Peach___Healthy",
-        "Pepper,_Bell___Healthy",
+        "Peach___healthy",
         "Pepper,_bell___Bacterial_spot",
+        "Pepper,_bell___healthy",
         "Potato___Early_Blight",
-        "Potato___Healthy",
         "Potato___Late_Blight",
+        "Potato___healthy",
         "Pumpkin___Bacterial_Leaf_Spot",
         "Pumpkin___Downy_Mildew",
-        "Pumpkin___Healthy",
         "Pumpkin___Mosaic",
         "Pumpkin___Powdery_Mildew",
+        "Pumpkin___healthy",
         "Rice___Brown_Spot",
-        "Rice___Healthy",
         "Rice___Hispa",
         "Rice___Leaf_Blast",
+        "Rice___healthy",
         "Strawberry___Leaf_Scorch",
         "Strawberry___healthy",
         "Sugarcane___Bacterial_Blights",
-        "Sugarcane___Healthy",
         "Sugarcane___Mosaic",
         "Sugarcane___Red_Rot",
         "Sugarcane___Rust",
         "Sugarcane___Yellowing",
+        "Sugarcane___healthy",
         "Tomato___Bacterial_Spot",
         "Tomato___Early_Blight",
-        "Tomato___Healthy",
         "Tomato___Late_Blight",
         "Tomato___Leaf_Mold",
         "Tomato___Septoria_leaf_spot",
@@ -66,18 +64,34 @@
         "Tomato___Target_Spot",
         "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
         "Tomato___Tomato_mosaic_virus",
+        "Tomato___healthy",
         "Wheat___Brown_Rust",
-        "Wheat___Healthy",
-        "Wheat___Yellow_Rust"
+        "Wheat___Yellow_Rust",
+        "Wheat___healthy",
+        "Invalid"
     ],
+    "degenerate_classes": {
+        "Banana___Cordana": 396,
+        "Banana___healthy": 392,
+        "Mango___Anthracnose": 486,
+        "Mango___Die_Back": 493,
+        "Potato___Early_Blight": 2149,
+        "Potato___Late_Blight": 2131,
+        "Potato___healthy": 1854,
+        "Pumpkin___Powdery_Mildew": 399,
+        "Rice___Leaf_Blast": 1100,
+        "Sugarcane___Mosaic": 2428,
+        "Sugarcane___Rust": 2816,
+        "Invalid": 1561
+    },
     "selection": {
-        "max_per_class": 300,
+        "max_per_class": 500,
         "method": "deterministic class-specific shuffle, keep first max_per_class images",
-        "classes_capped": 66
+        "classes_capped": 45
     },
     "original_images": 95006,
-    "selected_images": 20075,
-    "processed_images": 20075,
+    "selected_images": 31987,
+    "processed_images": 31987,
     "failed_images": 0,
     "target_size": 224,
     "color_mode": "RGB",
@@ -90,17 +104,17 @@
     "per_class": {
         "Apple___Apple_scab": {
             "raw": 630,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Apple___Black_rot": {
             "raw": 621,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Apple___Cedar_apple_rust": {
             "raw": 275,
@@ -109,453 +123,453 @@
             "val": 41,
             "test": 42
         },
-        "Apple___Healthy": {
+        "Apple___healthy": {
             "raw": 1645,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Banana___Cordana": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Banana___Healthy": {
-            "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Banana___Pestalotiopsis": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Banana___Sigatoka": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
-        "Cherry_(including_sour)___Healthy": {
-            "raw": 854,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+        "Banana___healthy": {
+            "raw": 400,
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Cherry_(including_sour)___Powdery_mildew": {
             "raw": 1052,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Cherry_(including_sour)___healthy": {
+            "raw": 854,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": {
             "raw": 513,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Corn_(maize)___Common_rust_": {
             "raw": 1192,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Corn_(maize)___Healthy": {
-            "raw": 1162,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Corn_(maize)___Northern_Leaf_Blight": {
             "raw": 985,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Corn_(maize)___healthy": {
+            "raw": 1162,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Grape___Black_rot": {
             "raw": 1180,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Grape___Esca_(Black_Measles)": {
             "raw": 1383,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Grape___Healthy": {
-            "raw": 423,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": {
             "raw": 1076,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Invalid": {
-            "raw": 1563,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+        "Grape___healthy": {
+            "raw": 423,
+            "selected": 423,
+            "train": 296,
+            "val": 63,
+            "test": 64
         },
         "Jackfruit___Algal_Leaf_Spot": {
             "raw": 6221,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Jackfruit___Black_Spot": {
             "raw": 4781,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Jackfruit___Healthy": {
+        "Jackfruit___healthy": {
             "raw": 2209,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Mango___Anthracnose": {
+            "raw": 500,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Bacterial_Canker": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Cutting_Weevil": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Die_Back": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Gall_Midge": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Mango___Healthy": {
-            "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Powdery_Mildew": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Mango___Sooty_Mould": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Mango__Anthracnose": {
+        "Mango___healthy": {
             "raw": 500,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Peach___Bacterial_spot": {
             "raw": 2297,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Peach___Healthy": {
+        "Peach___healthy": {
             "raw": 360,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 360,
+            "train": 251,
+            "val": 54,
+            "test": 55
         },
         "Pepper,_bell___Bacterial_spot": {
             "raw": 997,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Pepper,_Bell___Healthy": {
+        "Pepper,_bell___healthy": {
             "raw": 1478,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Potato___Early_Blight": {
             "raw": 3149,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Potato___Healthy": {
-            "raw": 2006,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Potato___Late_Blight": {
             "raw": 3131,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Potato___healthy": {
+            "raw": 2006,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Pumpkin___Bacterial_Leaf_Spot": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Pumpkin___Downy_Mildew": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Pumpkin___Healthy": {
-            "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Pumpkin___Mosaic": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Pumpkin___Powdery_Mildew": {
             "raw": 400,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
+        },
+        "Pumpkin___healthy": {
+            "raw": 400,
+            "selected": 400,
+            "train": 280,
+            "val": 60,
+            "test": 60
         },
         "Rice___Brown_Spot": {
             "raw": 563,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Rice___Healthy": {
-            "raw": 523,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Rice___Hispa": {
             "raw": 523,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Rice___Leaf_Blast": {
             "raw": 1182,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
-        "Strawberry___healthy": {
-            "raw": 456,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+        "Rice___healthy": {
+            "raw": 523,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Strawberry___Leaf_Scorch": {
             "raw": 1109,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Strawberry___healthy": {
+            "raw": 456,
+            "selected": 456,
+            "train": 319,
+            "val": 68,
+            "test": 69
         },
         "Sugarcane___Bacterial_Blights": {
             "raw": 4800,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Sugarcane___Healthy": {
-            "raw": 3132,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Sugarcane___Mosaic": {
             "raw": 2772,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Sugarcane___Red_Rot": {
             "raw": 3108,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Sugarcane___Rust": {
             "raw": 3084,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Sugarcane___Yellowing": {
             "raw": 3030,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Sugarcane___healthy": {
+            "raw": 3132,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Bacterial_Spot": {
             "raw": 2127,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Early_Blight": {
             "raw": 1000,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Tomato___Healthy": {
-            "raw": 1591,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Late_Blight": {
             "raw": 1909,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Leaf_Mold": {
             "raw": 952,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Septoria_leaf_spot": {
             "raw": 1771,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Spider_mites Two-spotted_spider_mite": {
             "raw": 1676,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Target_Spot": {
             "raw": 1404,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Tomato___Tomato_mosaic_virus": {
-            "raw": 373,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Tomato___Tomato_Yellow_Leaf_Curl_Virus": {
             "raw": 5357,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Tomato___Tomato_mosaic_virus": {
+            "raw": 373,
+            "selected": 373,
+            "train": 261,
+            "val": 55,
+            "test": 57
+        },
+        "Tomato___healthy": {
+            "raw": 1591,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Wheat___Brown_Rust": {
             "raw": 1128,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
-        },
-        "Wheat___Healthy": {
-            "raw": 1497,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         },
         "Wheat___Yellow_Rust": {
             "raw": 1156,
-            "selected": 300,
-            "train": 210,
-            "val": 45,
-            "test": 45
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Wheat___healthy": {
+            "raw": 1497,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
+        },
+        "Invalid": {
+            "raw": 1563,
+            "selected": 500,
+            "train": 350,
+            "val": 75,
+            "test": 75
         }
     },
     "preprocessing": {
@@ -566,16 +580,7 @@
             0.5
         ]
     },
-    "degenerate_classes": {
-        "Banana___Cordana": 1,
-        "Banana___healthy": 1,
-        "Mango___Anthracnose": 4,
-        "Mango___Die_Back": 2,
-        "Potato___Early_Blight": 3,
-        "Potato___Late_Blight": 10,
-        "Potato___healthy": 1,
-        "Rice___Leaf_Blast": 3,
-        "Sugarcane___Mosaic": 3,
-        "Sugarcane___healthy": 3
-    }
+    "exact_duplicates_kept": 3132,
+    "unique_source_images": 91874,
+    "expected_classes": 67
 }
