@@ -207,3 +207,45 @@ def test_duplicate_heavy_class_is_disclosed_and_validates(tmp_path):
         == stats["train"]["classes"][duplicate_class]
     )
 
+
+def test_dataset_info_class_names_use_canonical_order(tmp_path):
+    """dataset_info.json must agree with class_names.json on label order.
+
+    ``load_benchmark_class_names`` prefers class_names.json but falls back to
+    dataset_info.json, and evaluate.py rejects a test-set order mismatch. A
+    plain alphabetical sort puts ``Invalid`` mid-list and shifts 49 indices, so
+    both files have to come from the same canonical order.
+    """
+    raw = tmp_path / "raw"
+    output = tmp_path / "processed"
+    _make_raw_tree(raw)
+
+    prepare_dataset(raw, output, strict=True)
+
+    info = json.loads((output / "dataset_info.json").read_text())
+    manifest_names = json.loads((output / "class_names.json").read_text())
+    taxonomy_names = json.loads((output / "taxonomy.json").read_text())[
+        "canonical_classes"
+    ]
+
+    assert info["class_names"] == list(CANONICAL_CLASSES)
+    assert info["class_names"] == manifest_names
+    assert info["class_names"] == taxonomy_names
+    assert info["class_names"][-1] == "Invalid"
+    assert info["class_names"].index("Invalid") == EXPECTED_CLASS_COUNT - 1
+
+
+def test_canonical_class_order_handles_aliases_and_unknown_labels():
+    from dataset.prepare_data import canonical_class_order
+
+    ordered = canonical_class_order(
+        ["UnknownCrop___X", "Mango__Anthracnose", "Invalid", "Apple___Healthy"]
+    )
+    # Known labels first in taxonomy order (aliases resolve), unknowns last.
+    assert ordered == [
+        "Apple___Healthy",
+        "Mango__Anthracnose",
+        "Invalid",
+        "UnknownCrop___X",
+    ]
+

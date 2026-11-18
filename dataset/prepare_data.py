@@ -683,6 +683,32 @@ def print_statistics(stats):
     print("=" * 80 + "\n")
 
 
+def canonical_class_order(class_names):
+    """Return dataset labels in the canonical taxonomy order.
+
+    ``class_names.json`` and therefore the trained model's output layer use
+    ``dataset.taxonomy.CANONICAL_CLASSES`` order, which deliberately appends
+    ``Invalid`` last. A plain ``sorted()`` places ``Invalid`` mid-list and
+    shifts dozens of label indices, so ``dataset_info.json`` must not use it.
+
+    Labels that the taxonomy does not recognise (custom research datasets) keep
+    their relative alphabetical order after the canonical labels.
+    """
+    canonical_index = {name: index for index, name in enumerate(CANONICAL_CLASSES)}
+
+    def order_key(name):
+        try:
+            canonical_name = canonicalize_label(name)
+        except ValueError:
+            return (1, str(name))
+        index = canonical_index.get(canonical_name)
+        if index is None:
+            return (1, str(name))
+        return (0, index)
+
+    return sorted(class_names, key=order_key)
+
+
 def save_dataset_info(stats, output_dir, seed):
     """Save dataset metadata and parameters to a JSON file."""
     tr, vr, ts = stats["ratios"]
@@ -690,7 +716,7 @@ def save_dataset_info(stats, output_dir, seed):
     info = {
         "dataset_name": "LeafDisease",
         "classes": stats["classes_count"],
-        "class_names": sorted(stats["train"]["classes"].keys()),
+        "class_names": canonical_class_order(stats["train"]["classes"].keys()),
         "degenerate_classes": stats.get("degenerate_classes", {}),
         "selection": {
             "max_per_class": stats["max_per_class"],
