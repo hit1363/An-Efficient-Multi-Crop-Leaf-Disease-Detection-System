@@ -156,8 +156,12 @@ def test_pretrained_configs_share_the_recipe_v4_core():
             )
         )
         training = config["training"]
+        # EfficientNetB0 carries a 30-epoch fine-tune tail: its 16-epoch tail was
+        # still improving when the phase-2 cosine floored the LR. The other six
+        # keep 16 so their calibrated comparison numbers stay comparable.
+        tail_epochs = 30 if architecture == "efficientnet_b0" else 16
         assert training["freeze_base"] is True
-        assert training["epochs"] == 36
+        assert training["epochs"] == 20 + tail_epochs
         assert training["unfreeze_epoch"] == 20
         assert float(training["fine_tune_learning_rate"]) == 2e-5
         assert training["fine_tuning"]["enabled"] is True
@@ -439,6 +443,8 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
     # Recipe v4 (2026-11): every two-phase config freezes the head for 20
     # epochs and then fine-tunes for 16 (36 total), matching the EfficientNetB0
     # run whose accuracy kept climbing through the long fine-tune tail.
+    # Recipe v5 extends EfficientNetB0's tail to 30 (50 total) for the same
+    # reason: its tail was still improving when the 16-epoch cosine floored.
     expected_unfreeze_epochs = {
         "benchmark": 20,
         "mobilenetv2": 20,
@@ -449,18 +455,20 @@ def test_imbalance_aware_defaults_are_enabled_in_all_training_configs():
         "nasnet_mobile": 20,
         "efficientnet_v2_b0": 20,
     }
+    expected_tail_epochs = {"efficientnet_b0": 30}
     for architecture, unfreeze_epoch in expected_unfreeze_epochs.items():
         config = yaml.safe_load(
             (ROOT / "training" / f"config_{architecture}.yaml").read_text(
                 encoding="utf-8"
             )
         )
+        tail_epochs = expected_tail_epochs.get(architecture, 16)
         assert config["training"]["freeze_base"] is True
         assert config["training"]["unfreeze_epoch"] == unfreeze_epoch
-        assert config["training"]["epochs"] == 36
+        assert config["training"]["epochs"] == unfreeze_epoch + tail_epochs
         # The fine-tune phase must be at least as long as the frozen phase was
         # in v2 (10 epochs); v4 doubles the tail rather than shortening it.
-        assert config["training"]["epochs"] - unfreeze_epoch == 16
+        assert config["training"]["epochs"] - unfreeze_epoch == tail_epochs
 
 
 def test_all_model_configs_use_live_progress_logging():

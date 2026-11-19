@@ -41,13 +41,16 @@ augmentation:
     brightness_range: [0.85, 1.15]
 
 training:
-  # Recipe v3 (2026-11): 224x224 native input (Kaggle profile no longer caps
-  # b0 at 192), deeper fine-tune from layer 140 (1.26x the trainable backbone of
-  # the layer-180 baseline: 3.82M vs 3.02M params; BatchNorm stays frozen), and
-  # a longer phase 2 (16 epochs) — the 87.1% baseline concentrated its misses in
-  # fine-grained rice/sugarcane/tomato clusters that need both resolution and
-  # backbone adaptation.
-  epochs: 36
+  # Recipe v5 (2026-11): 20 frozen + 30 fine-tune epochs (50 total). The 16-epoch
+  # tail still improved every epoch (val_loss 1.2492 -> 1.2203 from e30 to e36)
+  # when the phase-2 cosine had already floored the LR at 9.5e-7, so the tail was
+  # cut short, not converged. 30 epochs keeps the LR above the floor for ~25 of
+  # them; phase 2 still restarts its own curve over the longer horizon.
+  # 224x224 native input (Kaggle profile no longer caps b0 at 192) and a deep
+  # fine-tune from layer 140 (BatchNorm stays frozen) are unchanged — the 87.1%
+  # baseline concentrated its misses in fine-grained rice/sugarcane/tomato
+  # clusters that need both resolution and backbone adaptation.
+  epochs: 50
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 140
