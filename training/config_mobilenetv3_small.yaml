@@ -44,10 +44,10 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  # Recipe v4 (2026-11): 20 frozen epochs complete the cosine anneal, and 16
-  # fine-tune epochs at a real 2e-5 replace the previous 10 (the cap-500
-  # benchmark was still improving when the shorter tail cut it off).
-  epochs: 36
+  # Recipe v6 (2026-11): 20 frozen epochs complete the cosine anneal, and 30
+  # fine-tune epochs at a real 2e-5 match the EfficientNetB0 v5 horizon (the
+  # 16-epoch tail was still improving when the phase-2 cosine floored it).
+  epochs: 50
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 100

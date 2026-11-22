@@ -3,8 +3,8 @@
 # Recipe v4 (2026-11) unifies this architecture onto the recipe that produced
 # the project's best run (EfficientNetB0, 87.1%): Adam at 3e-4 with clipnorm 1.0,
 # a full cosine anneal over the 20 frozen-head epochs, cross-entropy with label
-# smoothing 0.1, vertical-flip augmentation, an in-memory cache, and a 16-epoch
-# fine-tune phase (36 epochs total). The previous v2 recipe ran batch 32 with no
+# smoothing 0.1, vertical-flip augmentation, an in-memory cache, and a 30-epoch
+# fine-tune phase (50 epochs total). The previous v2 recipe ran batch 32 with no
 # cache, annealed with reduce_on_plateau, and fine-tuned for only 10 epochs.
 
 model:
@@ -53,7 +53,7 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  epochs: 36
+  epochs: 50
   log_mode: progress
   freeze_base: true
   # Parity with the proven EfficientNetB0 index (140/237 = 59% of the depth):

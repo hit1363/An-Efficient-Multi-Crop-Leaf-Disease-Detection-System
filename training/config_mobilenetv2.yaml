@@ -46,10 +46,10 @@ augmentation:
 
 # Training Settings
 training:
-  # Recipe v4 (2026-11): 20 frozen epochs + 16 fine-tune epochs at a real
-  # 2e-5. The extra six fine-tune epochs buy the same tail the EfficientNetB0
-  # baseline needed to clear 87%.
-  epochs: 36
+  # Recipe v6 (2026-11): 20 frozen epochs + 30 fine-tune epochs at a real
+  # 2e-5, matching the EfficientNetB0 v5 horizon (the 16-epoch tail was still
+  # improving when the phase-2 cosine floored it).
+  epochs: 50
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   unfreeze_from_layer: 130 # Keep early generic features frozen

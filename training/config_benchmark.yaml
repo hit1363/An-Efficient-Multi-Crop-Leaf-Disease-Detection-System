@@ -10,7 +10,7 @@
 #
 # What changed from v2: batch 64 -> 128, cache auto -> memory, plateau schedule
 # -> cosine, +label smoothing 0.1, +vertical flip, +AUC metric, +flip TTA, and
-# 20 frozen + 16 fine-tune epochs (36 total) instead of 20 + 10.
+# 20 frozen + 30 fine-tune epochs (50 total) instead of 20 + 10.
 model:
   architecture: "mobilenetv2"
   input_shape: [224, 224, 3]
@@ -57,10 +57,10 @@ augmentation:
 training:
   fine_tuning:
     enabled: true
-  # 20 frozen-head epochs complete the cosine anneal; 16 fine-tune epochs at a
+  # 20 frozen-head epochs complete the cosine anneal; 30 fine-tune epochs at a
   # real 2e-5 give the head time to recover the frozen-phase tail. Phase 2 is
   # skipped when --epochs is shortened below unfreeze_epoch (quick proxy runs).
-  epochs: 36
+  epochs: 50
   log_mode: progress # Options: summary (one line per epoch) or progress (live batches)
   freeze_base: true
   # Placeholder only: compare_models.py keeps the template value, and every
